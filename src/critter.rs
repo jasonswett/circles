@@ -10,6 +10,7 @@ pub struct Critter {
     ticks_per_instruction: u32,
     tick_counter: u32,
     step_size: i32,
+    energy: u32,
 }
 
 impl Critter {
@@ -20,6 +21,7 @@ impl Critter {
         instructions: Vec<Instruction>,
         ticks_per_instruction: u32,
         step_size: i32,
+        initial_energy: u32,
     ) -> Self {
         Self {
             x,
@@ -31,6 +33,7 @@ impl Critter {
             ticks_per_instruction,
             tick_counter: 0,
             step_size,
+            energy: initial_energy,
         }
     }
 
@@ -46,6 +49,10 @@ impl Critter {
         self.heading
     }
 
+    pub fn energy(&self) -> u32 {
+        self.energy
+    }
+
     pub fn tick(&mut self) {
         self.tick_counter += 1;
         if self.tick_counter < self.ticks_per_instruction {
@@ -57,10 +64,15 @@ impl Critter {
             return;
         }
 
+        if self.energy == 0 {
+            return;
+        }
+
         let instruction = self.instructions[self.next_instruction_index];
         self.next_instruction_index = (self.next_instruction_index + 1) % self.instructions.len();
 
         self.execute(instruction);
+        self.energy -= 1;
     }
 
     fn execute(&mut self, instruction: Instruction) {
@@ -110,14 +122,14 @@ mod tests {
 
         #[test]
         fn it_starts_at_the_given_position() {
-            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1);
+            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
 
         #[test]
         fn it_starts_with_the_given_heading() {
-            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1);
+            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX);
 
             assert_eq!(critter.heading(), Heading::North);
         }
@@ -135,6 +147,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 TICKS_PER_INSTRUCTION,
                 1,
+                u32::MAX,
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -153,6 +166,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 TICKS_PER_INSTRUCTION,
                 1,
+                u32::MAX,
             );
 
             for _ in 0..TICKS_PER_INSTRUCTION {
@@ -171,6 +185,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -188,6 +203,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
+                u32::MAX,
             );
 
             critter.tick();
@@ -205,6 +221,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
+                u32::MAX,
             );
 
             critter.tick();
@@ -224,6 +241,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
+                u32::MAX,
             );
 
             critter.tick();
@@ -245,6 +263,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
+                u32::MAX,
             );
 
             critter.tick();
@@ -264,6 +283,7 @@ mod tests {
                 vec![Instruction::TurnLeft],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -280,6 +300,7 @@ mod tests {
                 vec![Instruction::TurnLeft],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -296,6 +317,7 @@ mod tests {
                 vec![Instruction::TurnRight],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -312,6 +334,7 @@ mod tests {
                 vec![Instruction::TurnRight],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -328,6 +351,7 @@ mod tests {
                 vec![Instruction::DoNothing],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -344,6 +368,7 @@ mod tests {
                 vec![Instruction::DoNothing],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -360,6 +385,7 @@ mod tests {
                 vec![Instruction::MoveForward, Instruction::TurnRight],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -378,6 +404,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -400,6 +427,7 @@ mod tests {
                 vec![Instruction::MoveForward, Instruction::RepeatPreviousMove],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -417,6 +445,7 @@ mod tests {
                 vec![Instruction::RepeatPreviousMove],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -433,6 +462,7 @@ mod tests {
                 vec![Instruction::RepeatPreviousMove],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -458,6 +488,7 @@ mod tests {
                 ],
                 1,
                 1,
+                u32::MAX,
             );
 
             critter.tick();
@@ -465,6 +496,99 @@ mod tests {
             critter.tick();
 
             assert_eq!(critter.heading(), Heading::SouthWest);
+        }
+    }
+
+    mod energy {
+        use super::*;
+
+        const INITIAL_ENERGY: u32 = 42;
+
+        #[test]
+        fn a_new_critter_starts_with_the_given_initial_energy() {
+            let critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            assert_eq!(critter.energy(), INITIAL_ENERGY);
+        }
+
+        #[test]
+        fn executing_an_instruction_decrements_energy_by_one() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            critter.tick();
+
+            assert_eq!(critter.energy(), INITIAL_ENERGY - 1);
+        }
+
+        #[test]
+        fn ticks_before_the_threshold_do_not_decrement_energy() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                TICKS_PER_INSTRUCTION,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
+                critter.tick();
+            }
+
+            assert_eq!(critter.energy(), INITIAL_ENERGY);
+        }
+
+        #[test]
+        fn at_zero_energy_move_forward_does_not_move_the_critter() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                1,
+                1,
+                0,
+            );
+
+            critter.tick();
+
+            assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
+        }
+
+        #[test]
+        fn ticking_at_zero_energy_keeps_energy_at_zero() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                1,
+                1,
+                0,
+            );
+
+            for _ in 0..10 {
+                critter.tick();
+            }
+
+            assert_eq!(critter.energy(), 0);
         }
     }
 }

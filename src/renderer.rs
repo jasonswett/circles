@@ -344,7 +344,7 @@ mod tests {
         // Helpers below the tests, in keeping with hiding incidental detail.
 
         fn stationary_critter(x: i32, y: i32, heading: Heading) -> Critter {
-            Critter::new(x, y, heading, vec![], 1, 1)
+            Critter::new(x, y, heading, vec![], 1, 1, u32::MAX)
         }
 
         fn render(critter: &Critter) -> Vec<u32> {

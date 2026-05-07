@@ -9,6 +9,7 @@ const INSTRUCTION_LIST_LENGTH: usize = 4;
 const CRITTER_RADIUS: i32 = 20;
 const STEP_SIZE: i32 = 25;
 const NUM_CRITTERS: usize = 8;
+const INITIAL_ENERGY: u32 = 60;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 
 #[repr(C)]
@@ -41,6 +42,7 @@ fn make_critter<R: Rng>(rng: &mut R, width: usize, height: usize) -> Critter {
         instructions,
         TICKS_PER_INSTRUCTION,
         STEP_SIZE,
+        INITIAL_ENERGY,
     )
 }
 
