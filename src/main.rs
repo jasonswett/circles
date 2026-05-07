@@ -4,7 +4,7 @@ use rand::thread_rng;
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
 const TICKS_PER_INSTRUCTION: u32 = 15;
-const INSTRUCTION_LIST_LENGTH: usize = 32;
+const INSTRUCTION_LIST_LENGTH: usize = 4;
 const CRITTER_RADIUS: i32 = 20;
 const STEP_SIZE: i32 = 25;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
