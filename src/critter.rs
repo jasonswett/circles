@@ -11,6 +11,7 @@ pub struct Critter {
     tick_counter: u32,
     step_size: i32,
     energy: u32,
+    initial_energy: u32,
 }
 
 impl Critter {
@@ -34,6 +35,7 @@ impl Critter {
             tick_counter: 0,
             step_size,
             energy: initial_energy,
+            initial_energy,
         }
     }
 
@@ -51,6 +53,10 @@ impl Critter {
 
     pub fn energy(&self) -> u32 {
         self.energy
+    }
+
+    pub fn initial_energy(&self) -> u32 {
+        self.initial_energy
     }
 
     pub fn tick(&mut self) {
@@ -517,6 +523,38 @@ mod tests {
             );
 
             assert_eq!(critter.energy(), INITIAL_ENERGY);
+        }
+
+        #[test]
+        fn initial_energy_reports_the_value_passed_at_construction() {
+            let critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            assert_eq!(critter.initial_energy(), INITIAL_ENERGY);
+        }
+
+        #[test]
+        fn initial_energy_does_not_decrease_when_energy_is_consumed() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            critter.tick();
+
+            assert_eq!(critter.initial_energy(), INITIAL_ENERGY);
         }
 
         #[test]

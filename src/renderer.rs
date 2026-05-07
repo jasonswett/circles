@@ -1,6 +1,7 @@
 use crate::Critter;
 
 pub const OUTLINE_COLOR: u32 = 0x00_00_FF;
+pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const OUTLINE_THICKNESS: i32 = 2;
 pub const FRONT_DOT_RADIUS: i32 = 4;
 
@@ -29,6 +30,7 @@ impl Renderer {
             width,
             height,
         };
+        let color = energy_color(critter.energy(), critter.initial_energy());
 
         let body = Ring {
             cx,
@@ -36,7 +38,7 @@ impl Renderer {
             radius,
             inner_squared: inner_radius * inner_radius,
         };
-        Self::fill_ring(&body, &mut canvas);
+        Self::fill_ring(&body, &mut canvas, color);
 
         let heading = critter.heading();
         let (offset_x, offset_y) = heading.offset();
@@ -52,10 +54,10 @@ impl Renderer {
             radius: FRONT_DOT_RADIUS,
             inner_squared: -1,
         };
-        Self::fill_ring(&dot, &mut canvas);
+        Self::fill_ring(&dot, &mut canvas, color);
     }
 
-    fn fill_ring(ring: &Ring, canvas: &mut Canvas) {
+    fn fill_ring(ring: &Ring, canvas: &mut Canvas, color: u32) {
         let outer_squared = ring.radius * ring.radius;
         for y in (ring.cy - ring.radius)..=(ring.cy + ring.radius) {
             if y < 0 || y >= canvas.height as i32 {
@@ -69,17 +71,64 @@ impl Renderer {
                 let dy = y - ring.cy;
                 let distance_squared = dx * dx + dy * dy;
                 if distance_squared <= outer_squared && distance_squared > ring.inner_squared {
-                    canvas.buffer[y as usize * canvas.width + x as usize] = OUTLINE_COLOR;
+                    canvas.buffer[y as usize * canvas.width + x as usize] = color;
                 }
             }
         }
     }
 }
 
+fn energy_color(energy: u32, initial_energy: u32) -> u32 {
+    let ratio = if initial_energy == 0 {
+        0.0
+    } else {
+        energy as f32 / initial_energy as f32
+    };
+    interpolate_color(ZERO_ENERGY_COLOR, OUTLINE_COLOR, ratio)
+}
+
+fn interpolate_color(from: u32, to: u32, ratio: f32) -> u32 {
+    let [_, from_r, from_g, from_b] = from.to_be_bytes();
+    let [_, to_r, to_g, to_b] = to.to_be_bytes();
+    let r = lerp(from_r, to_r, ratio);
+    let g = lerp(from_g, to_g, ratio);
+    let b = lerp(from_b, to_b, ratio);
+    u32::from_be_bytes([0, r, g, b])
+}
+
+fn lerp(from: u8, to: u8, ratio: f32) -> u8 {
+    let from = from as f32;
+    let to = to as f32;
+    (from + (to - from) * ratio).round() as u8
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Critter, Heading};
+
+    mod interpolate_color_tests {
+        use crate::renderer::interpolate_color;
+
+        #[test]
+        fn at_ratio_zero_it_returns_the_from_color() {
+            assert_eq!(interpolate_color(0xAB_CD_EF, 0x12_34_56, 0.0), 0xAB_CD_EF);
+        }
+
+        #[test]
+        fn at_ratio_one_it_returns_the_to_color() {
+            assert_eq!(interpolate_color(0xAB_CD_EF, 0x12_34_56, 1.0), 0x12_34_56);
+        }
+
+        #[test]
+        fn each_channel_is_interpolated_independently() {
+            // from = (0, 100, 200), to = (200, 100, 0), ratio = 0.5.
+            // r: 0 + (200 - 0) * 0.5 = 100
+            // g: 100 + (100 - 100) * 0.5 = 100
+            // b: 200 + (0 - 200) * 0.5 = 100
+            assert_eq!(interpolate_color(0x0064C8, 0xC86400, 0.5), 0x646464);
+        }
+    }
 
     const RADIUS: i32 = 20;
     const CANVAS: usize = 200;
@@ -339,6 +388,67 @@ mod tests {
                 pixel_at(&buffer, CENTER, CANVAS as i32 - 1 - RADIUS),
                 OUTLINE_COLOR
             );
+        }
+
+        mod color {
+            use super::*;
+            use crate::Instruction;
+
+            const INITIAL_ENERGY: u32 = 100;
+            const ON_RING_X_OFFSET: i32 = RADIUS - 1;
+
+            #[test]
+            fn a_critter_at_full_energy_renders_in_pure_blue() {
+                let critter = critter_with_energy(INITIAL_ENERGY);
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0x00_00_FF
+                );
+            }
+
+            #[test]
+            fn a_critter_at_zero_energy_renders_in_ghostly_gray() {
+                let critter = critter_with_energy(0);
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0x40_40_40
+                );
+            }
+
+            #[test]
+            fn a_critter_at_half_energy_renders_halfway_between_gray_and_blue() {
+                // Halfway between (64, 64, 64) and (0, 0, 255) is (32, 32, 160) when rounded.
+                let critter = critter_with_energy(INITIAL_ENERGY / 2);
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0x20_20_A0
+                );
+            }
+
+            fn critter_with_energy(current_energy: u32) -> Critter {
+                let mut critter = Critter::new(
+                    CENTER,
+                    CENTER,
+                    Heading::North,
+                    vec![Instruction::DoNothing; (INITIAL_ENERGY - current_energy) as usize],
+                    1,
+                    1,
+                    INITIAL_ENERGY,
+                );
+                for _ in 0..(INITIAL_ENERGY - current_energy) {
+                    critter.tick();
+                }
+                critter
+            }
         }
 
         // Helpers below the tests, in keeping with hiding incidental detail.
