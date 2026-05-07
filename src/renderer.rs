@@ -14,37 +14,38 @@ impl Renderer {
         let inner_radius = radius - OUTLINE_THICKNESS;
         let inner_squared = inner_radius * inner_radius;
 
-        let x_min = (cx - radius).max(0);
-        let y_min = (cy - radius).max(0);
-        let x_max = (cx + radius).min(width as i32 - 1);
-        let y_max = (cy + radius).min(height as i32 - 1);
-
-        for y in y_min..=y_max {
-            for x in x_min..=x_max {
-                let dx = x - cx;
-                let dy = y - cy;
-                let distance_squared = dx * dx + dy * dy;
-                if distance_squared <= outer_squared && distance_squared > inner_squared {
-                    buffer[y as usize * width + x as usize] = OUTLINE_COLOR;
-                }
-            }
-        }
+        Self::fill_disc(cx, cy, radius, outer_squared, inner_squared, buffer, width, height);
 
         let (offset_x, offset_y) = critter.heading().offset();
         let front_x = cx + offset_x * (radius - FRONT_DOT_RADIUS);
         let front_y = cy + offset_y * (radius - FRONT_DOT_RADIUS);
         let dot_radius_squared = FRONT_DOT_RADIUS * FRONT_DOT_RADIUS;
 
-        let dot_x_min = (front_x - FRONT_DOT_RADIUS).max(0);
-        let dot_y_min = (front_y - FRONT_DOT_RADIUS).max(0);
-        let dot_x_max = (front_x + FRONT_DOT_RADIUS).min(width as i32 - 1);
-        let dot_y_max = (front_y + FRONT_DOT_RADIUS).min(height as i32 - 1);
+        Self::fill_disc(front_x, front_y, FRONT_DOT_RADIUS, dot_radius_squared, -1, buffer, width, height);
+    }
 
-        for y in dot_y_min..=dot_y_max {
-            for x in dot_x_min..=dot_x_max {
-                let dx = x - front_x;
-                let dy = y - front_y;
-                if dx * dx + dy * dy <= dot_radius_squared {
+    fn fill_disc(
+        cx: i32,
+        cy: i32,
+        radius: i32,
+        outer_squared: i32,
+        inner_squared: i32,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+    ) {
+        for y in (cy - radius)..=(cy + radius) {
+            if y < 0 || y >= height as i32 {
+                continue;
+            }
+            for x in (cx - radius)..=(cx + radius) {
+                if x < 0 || x >= width as i32 {
+                    continue;
+                }
+                let dx = x - cx;
+                let dy = y - cy;
+                let distance_squared = dx * dx + dy * dy;
+                if distance_squared <= outer_squared && distance_squared > inner_squared {
                     buffer[y as usize * width + x as usize] = OUTLINE_COLOR;
                 }
             }
@@ -55,77 +56,216 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Critter, Heading, Instruction};
+    use crate::{Critter, Heading};
 
     const RADIUS: i32 = 20;
-
-    fn render(critter: &Critter, width: usize, height: usize) -> Vec<u32> {
-        let mut buffer = vec![0u32; width * height];
-        Renderer::draw(critter, RADIUS, &mut buffer, width, height);
-        buffer
-    }
+    const CANVAS: usize = 200;
+    const CENTER: i32 = 50;
+    const NEAR_TOP: i32 = RADIUS;
+    const NEAR_LEFT: i32 = RADIUS;
+    const NEAR_BOTTOM: i32 = CANVAS as i32 - 1 - RADIUS;
+    const NEAR_RIGHT: i32 = CANVAS as i32 - 1 - RADIUS;
 
     mod draw {
         use super::*;
 
         #[test]
         fn the_center_of_the_critter_is_not_filled() {
-            let critter = Critter::new(50, 50, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            assert_eq!(buffer[50 * 200 + 50], 0);
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER, CENTER), 0);
         }
 
         #[test]
         fn a_point_well_inside_the_outline_is_not_filled() {
-            let critter = Critter::new(50, 50, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            assert_eq!(buffer[55 * 200 + 55], 0);
+            // 5 pixels in from center is well inside the inner_radius of 18.
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER + 5, CENTER + 5), 0);
         }
 
         #[test]
-        fn a_point_on_the_outline_is_drawn_in_outline_color() {
-            let critter = Critter::new(50, 50, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            let on_ring_x = (50 + RADIUS - 1) as usize;
-            assert_eq!(buffer[50 * 200 + on_ring_x], OUTLINE_COLOR);
+        fn the_pixel_just_inside_the_outer_radius_is_drawn_in_outline_color() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            // The outer edge: at distance radius - 1, distance² = (radius-1)² ≤ radius².
+            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - 1, CENTER), OUTLINE_COLOR);
         }
 
         #[test]
-        fn a_point_just_inside_the_outline_thickness_is_drawn_in_outline_color() {
-            let critter = Critter::new(50, 50, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            let just_inside_x = (50 + RADIUS - OUTLINE_THICKNESS + 1) as usize;
-            assert_eq!(buffer[50 * 200 + just_inside_x], OUTLINE_COLOR);
+        fn the_pixel_at_the_inner_radius_is_not_filled() {
+            // The inner_radius is `radius - thickness`. A pixel exactly at distance
+            // `inner_radius` has distance² == inner_squared, which fails the strict
+            // `distance_squared > inner_squared` check, so it's outside the ring.
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS, CENTER), 0);
         }
 
         #[test]
-        fn a_point_outside_the_radius_is_not_drawn() {
-            let critter = Critter::new(50, 50, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            assert_eq!(buffer[10 * 200 + 10], 0);
+        fn the_pixel_one_step_outside_the_inner_radius_is_drawn_in_outline_color() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            // One pixel further out than the inner_radius is the innermost lit pixel.
+            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS + 1, CENTER), OUTLINE_COLOR);
         }
 
         #[test]
-        fn the_front_dot_is_drawn_in_the_same_color_as_the_outline() {
-            let critter = Critter::new(50, 50, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            let front_y = (50 - RADIUS + FRONT_DOT_RADIUS) as usize;
-            assert_eq!(buffer[front_y * 200 + 50], OUTLINE_COLOR);
+        fn a_point_outside_the_outer_radius_is_not_drawn() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER + RADIUS + 1, CENTER), 0);
         }
 
         #[test]
-        fn the_front_dot_is_drawn_east_when_heading_is_east() {
-            let critter = Critter::new(50, 50, Heading::East, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 200, 200);
-            let front_x = (50 + RADIUS - FRONT_DOT_RADIUS) as usize;
-            assert_eq!(buffer[50 * 200 + front_x], OUTLINE_COLOR);
+        fn the_front_dot_is_drawn_north_of_center_when_facing_north() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER, CENTER - RADIUS + FRONT_DOT_RADIUS), OUTLINE_COLOR);
         }
 
         #[test]
-        fn out_of_bounds_pixels_are_not_drawn() {
-            let critter = Critter::new(2, 2, Heading::North, vec![Instruction::DoNothing], 1, 1);
-            let buffer = render(&critter, 50, 50);
-            assert_eq!(buffer.len(), 50 * 50);
+        fn the_front_dot_extends_to_its_full_radius_inside_the_ring() {
+            // The pixel at the dot's bottom edge sits inside the ring's hollow center,
+            // so it's only lit if the dot itself is at full radius.
+            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            let dot_center_y = CENTER - RADIUS + FRONT_DOT_RADIUS;
+            assert_eq!(pixel_at(&buffer, CENTER, dot_center_y + FRONT_DOT_RADIUS), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_east_of_center_when_facing_east() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::East);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - FRONT_DOT_RADIUS, CENTER), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_south_of_center_when_facing_south() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::South);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER, CENTER + RADIUS - FRONT_DOT_RADIUS), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_west_of_center_when_facing_west() {
+            let critter = stationary_critter(CENTER, CENTER, Heading::West);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER - RADIUS + FRONT_DOT_RADIUS, CENTER), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_extends_all_the_way_to_the_top_edge_when_the_critter_is_against_it() {
+            let critter = stationary_critter(CENTER, NEAR_TOP, Heading::East);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER, 0), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_extends_all_the_way_to_the_left_edge_when_the_critter_is_against_it() {
+            let critter = stationary_critter(NEAR_LEFT, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, 0, CENTER), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_extends_all_the_way_to_the_right_edge_when_the_critter_is_against_it() {
+            let critter = stationary_critter(NEAR_RIGHT, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CANVAS as i32 - 1, CENTER), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_extends_all_the_way_to_the_bottom_edge_when_the_critter_is_against_it() {
+            let critter = stationary_critter(CENTER, NEAR_BOTTOM, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER, CANVAS as i32 - 1), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_is_still_drawn_when_part_of_the_critter_is_above_the_top_edge() {
+            // Critter centered at y=0: top half of the ring is off-canvas, bottom half visible.
+            let critter = stationary_critter(CENTER, 0, Heading::East);
+
+            let buffer = render(&critter);
+
+            // The bottom of the ring (at distance RADIUS below center) is on-canvas.
+            assert_eq!(pixel_at(&buffer, CENTER, RADIUS), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_is_still_drawn_when_part_of_the_critter_is_left_of_the_left_edge() {
+            let critter = stationary_critter(0, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, RADIUS, CENTER), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_is_still_drawn_when_part_of_the_critter_is_right_of_the_right_edge() {
+            let critter = stationary_critter(CANVAS as i32 - 1, CENTER, Heading::North);
+
+            let buffer = render(&critter);
+
+            // The left side of the ring (at distance RADIUS to the left) is on-canvas.
+            assert_eq!(pixel_at(&buffer, CANVAS as i32 - 1 - RADIUS, CENTER), OUTLINE_COLOR);
+        }
+
+        #[test]
+        fn the_ring_is_still_drawn_when_part_of_the_critter_is_below_the_bottom_edge() {
+            let critter = stationary_critter(CENTER, CANVAS as i32 - 1, Heading::North);
+
+            let buffer = render(&critter);
+
+            assert_eq!(pixel_at(&buffer, CENTER, CANVAS as i32 - 1 - RADIUS), OUTLINE_COLOR);
+        }
+
+        // Helpers below the tests, in keeping with hiding incidental detail.
+
+        fn stationary_critter(x: i32, y: i32, heading: Heading) -> Critter {
+            Critter::new(x, y, heading, vec![], 1, 1)
+        }
+
+        fn render(critter: &Critter) -> Vec<u32> {
+            let mut buffer = vec![0u32; CANVAS * CANVAS];
+            Renderer::draw(critter, RADIUS, &mut buffer, CANVAS, CANVAS);
+            buffer
+        }
+
+        fn pixel_at(buffer: &[u32], x: i32, y: i32) -> u32 {
+            buffer[y as usize * CANVAS + x as usize]
         }
     }
 }

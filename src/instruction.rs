@@ -35,20 +35,6 @@ mod tests {
         use super::*;
 
         #[test]
-        fn it_returns_one_of_the_five_variants() {
-            let mut rng = StdRng::seed_from_u64(0);
-            let instruction = Instruction::random(&mut rng);
-            let valid = [
-                Instruction::MoveForward,
-                Instruction::RepeatPreviousMove,
-                Instruction::DoNothing,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
-            ];
-            assert!(valid.contains(&instruction));
-        }
-
-        #[test]
         fn over_many_draws_every_variant_appears() {
             let mut rng = StdRng::seed_from_u64(42);
             let mut seen = std::collections::HashSet::new();

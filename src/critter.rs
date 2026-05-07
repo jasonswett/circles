@@ -97,23 +97,24 @@ mod tests {
     use super::*;
     use crate::{Heading, Instruction};
 
-    fn make_critter(instructions: Vec<Instruction>) -> Critter {
-        Critter::new(10, 10, Heading::North, instructions, 30, 1)
-    }
+    const START_X: i32 = 10;
+    const START_Y: i32 = 10;
+    const TICKS_PER_INSTRUCTION: u32 = 30;
 
     mod new {
         use super::*;
 
         #[test]
         fn it_starts_at_the_given_position() {
-            let critter = make_critter(vec![Instruction::DoNothing]);
-            assert_eq!(critter.x(), 10);
-            assert_eq!(critter.y(), 10);
+            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1);
+
+            assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
 
         #[test]
         fn it_starts_with_the_given_heading() {
-            let critter = make_critter(vec![Instruction::DoNothing]);
+            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1);
+
             assert_eq!(critter.heading(), Heading::North);
         }
     }
@@ -123,90 +124,157 @@ mod tests {
 
         #[test]
         fn it_does_not_execute_an_instruction_before_n_ticks_have_passed() {
-            let mut critter = make_critter(vec![Instruction::MoveForward]);
-            for _ in 0..29 {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::MoveForward],
+                TICKS_PER_INSTRUCTION,
+                1,
+            );
+
+            for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
                 critter.tick();
             }
-            assert_eq!(critter.y(), 10);
+
+            assert_eq!(critter.y(), START_Y);
         }
 
         #[test]
         fn it_executes_an_instruction_on_the_nth_tick() {
-            let mut critter = make_critter(vec![Instruction::MoveForward]);
-            for _ in 0..30 {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::MoveForward],
+                TICKS_PER_INSTRUCTION,
+                1,
+            );
+
+            for _ in 0..TICKS_PER_INSTRUCTION {
                 critter.tick();
             }
-            assert_eq!(critter.y(), 9);
+
+            assert_eq!(critter.y(), START_Y - 1);
         }
 
         #[test]
-        fn move_forward_moves_in_the_heading_direction() {
-            let mut critter = Critter::new(10, 10, Heading::East, vec![Instruction::MoveForward], 1, 1);
+        fn move_forward_moves_one_pixel_in_the_heading_direction_with_unit_step_size() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::East, vec![Instruction::MoveForward], 1, 1);
+
             critter.tick();
-            assert_eq!((critter.x(), critter.y()), (11, 10));
+
+            assert_eq!((critter.x(), critter.y()), (START_X + 1, START_Y));
         }
 
         #[test]
-        fn move_forward_advances_by_the_configured_step_size() {
-            let mut critter = Critter::new(10, 10, Heading::East, vec![Instruction::MoveForward], 1, 25);
+        fn move_forward_advances_x_by_the_configured_step_size() {
+            const STEP_SIZE: i32 = 25;
+            let mut critter = Critter::new(START_X, START_Y, Heading::East, vec![Instruction::MoveForward], 1, STEP_SIZE);
+
             critter.tick();
-            assert_eq!((critter.x(), critter.y()), (35, 10));
+
+            assert_eq!(critter.x(), START_X + STEP_SIZE);
         }
 
         #[test]
-        fn turn_left_changes_the_heading_without_moving() {
-            let mut critter = Critter::new(10, 10, Heading::North, vec![Instruction::TurnLeft], 1, 1);
+        fn move_forward_advances_y_by_the_configured_step_size() {
+            const STEP_SIZE: i32 = 25;
+            let mut critter = Critter::new(START_X, START_Y, Heading::South, vec![Instruction::MoveForward], 1, STEP_SIZE);
+
             critter.tick();
+
+            assert_eq!(critter.y(), START_Y + STEP_SIZE);
+        }
+
+        #[test]
+        fn turn_left_changes_the_heading() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnLeft], 1, 1);
+
+            critter.tick();
+
             assert_eq!(critter.heading(), Heading::West);
-            assert_eq!((critter.x(), critter.y()), (10, 10));
         }
 
         #[test]
-        fn turn_right_changes_the_heading_without_moving() {
-            let mut critter = Critter::new(10, 10, Heading::North, vec![Instruction::TurnRight], 1, 1);
+        fn turn_left_does_not_change_the_position() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnLeft], 1, 1);
+
             critter.tick();
+
+            assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
+        }
+
+        #[test]
+        fn turn_right_changes_the_heading() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnRight], 1, 1);
+
+            critter.tick();
+
             assert_eq!(critter.heading(), Heading::East);
-            assert_eq!((critter.x(), critter.y()), (10, 10));
         }
 
         #[test]
-        fn do_nothing_leaves_position_and_heading_unchanged() {
-            let mut critter = Critter::new(10, 10, Heading::North, vec![Instruction::DoNothing], 1, 1);
+        fn turn_right_does_not_change_the_position() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnRight], 1, 1);
+
             critter.tick();
-            assert_eq!((critter.x(), critter.y()), (10, 10));
+
+            assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
+        }
+
+        #[test]
+        fn do_nothing_leaves_position_unchanged() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::DoNothing], 1, 1);
+
+            critter.tick();
+
+            assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
+        }
+
+        #[test]
+        fn do_nothing_leaves_heading_unchanged() {
+            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::DoNothing], 1, 1);
+
+            critter.tick();
+
             assert_eq!(critter.heading(), Heading::North);
         }
 
         #[test]
-        fn it_advances_to_the_next_instruction_each_execution() {
+        fn each_tick_consumes_the_next_instruction_in_the_list() {
             let mut critter = Critter::new(
-                10,
-                10,
+                START_X,
+                START_Y,
                 Heading::East,
                 vec![Instruction::MoveForward, Instruction::TurnRight],
                 1,
                 1,
             );
+
             critter.tick();
             critter.tick();
-            assert_eq!(critter.x(), 11);
+
+            assert_eq!(critter.x(), START_X + 1);
             assert_eq!(critter.heading(), Heading::South);
         }
 
         #[test]
         fn the_instruction_list_loops_when_exhausted() {
             let mut critter = Critter::new(
-                10,
-                10,
+                START_X,
+                START_Y,
                 Heading::East,
                 vec![Instruction::MoveForward],
                 1,
                 1,
             );
+
             critter.tick();
             critter.tick();
             critter.tick();
-            assert_eq!(critter.x(), 13);
+
+            assert_eq!(critter.x(), START_X + 3);
         }
     }
 
@@ -216,38 +284,62 @@ mod tests {
         #[test]
         fn it_re_executes_the_previously_executed_instruction() {
             let mut critter = Critter::new(
-                10,
-                10,
+                START_X,
+                START_Y,
                 Heading::East,
                 vec![Instruction::MoveForward, Instruction::RepeatPreviousMove],
                 1,
                 1,
             );
+
             critter.tick();
             critter.tick();
-            assert_eq!(critter.x(), 12);
+
+            assert_eq!(critter.x(), START_X + 2);
         }
 
         #[test]
-        fn at_start_with_no_previous_move_it_does_nothing() {
+        fn at_start_with_no_previous_move_it_does_not_change_position() {
             let mut critter = Critter::new(
-                10,
-                10,
+                START_X,
+                START_Y,
                 Heading::East,
                 vec![Instruction::RepeatPreviousMove],
                 1,
                 1,
             );
+
             critter.tick();
-            assert_eq!((critter.x(), critter.y()), (10, 10));
+
+            assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
+        }
+
+        #[test]
+        fn at_start_with_no_previous_move_it_does_not_change_heading() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::RepeatPreviousMove],
+                1,
+                1,
+            );
+
+            critter.tick();
+
             assert_eq!(critter.heading(), Heading::East);
         }
 
         #[test]
-        fn repeating_a_repeat_re_executes_the_underlying_move() {
+        fn repeating_a_repeat_re_executes_the_underlying_move_a_third_time() {
+            // After three ticks with [TurnRight, Repeat, Repeat]:
+            //   tick 1: TurnRight        — East -> South
+            //   tick 2: Repeat -> Right  — South -> West
+            //   tick 3: Repeat -> Right  — West -> North
+            // The third tick must reach back through two repeats to find TurnRight.
             let mut critter = Critter::new(
-                10,
-                10,
+                START_X,
+                START_Y,
                 Heading::East,
                 vec![
                     Instruction::TurnRight,
@@ -257,9 +349,11 @@ mod tests {
                 1,
                 1,
             );
+
             critter.tick();
             critter.tick();
             critter.tick();
+
             assert_eq!(critter.heading(), Heading::North);
         }
     }

@@ -75,28 +75,38 @@ mod tests {
         fn east_becomes_south() {
             assert_eq!(Heading::East.turn_right(), Heading::South);
         }
+
+        #[test]
+        fn south_becomes_west() {
+            assert_eq!(Heading::South.turn_right(), Heading::West);
+        }
+
+        #[test]
+        fn west_becomes_north() {
+            assert_eq!(Heading::West.turn_right(), Heading::North);
+        }
     }
 
     mod offset {
         use super::*;
 
         #[test]
-        fn north_is_zero_negative_one() {
+        fn north_points_up() {
             assert_eq!(Heading::North.offset(), (0, -1));
         }
 
         #[test]
-        fn east_is_one_zero() {
+        fn east_points_right() {
             assert_eq!(Heading::East.offset(), (1, 0));
         }
 
         #[test]
-        fn south_is_zero_one() {
+        fn south_points_down() {
             assert_eq!(Heading::South.offset(), (0, 1));
         }
 
         #[test]
-        fn west_is_negative_one_zero() {
+        fn west_points_left() {
             assert_eq!(Heading::West.offset(), (-1, 0));
         }
     }

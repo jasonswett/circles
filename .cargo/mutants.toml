@@ -1,0 +1,3 @@
+# NEVER add files to this list without explicit user permission.
+# Do not lazily exclude files just to avoid writing tests.
+exclude_globs = ["src/main.rs"]
