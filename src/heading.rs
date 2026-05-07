@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use rand::Rng;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Heading {
     North,
     NorthEast,
@@ -11,6 +13,19 @@ pub enum Heading {
 }
 
 impl Heading {
+    pub fn random<R: Rng>(rng: &mut R) -> Self {
+        match rng.gen_range(0..8) {
+            0 => Heading::North,
+            1 => Heading::NorthEast,
+            2 => Heading::East,
+            3 => Heading::SouthEast,
+            4 => Heading::South,
+            5 => Heading::SouthWest,
+            6 => Heading::West,
+            _ => Heading::NorthWest,
+        }
+    }
+
     pub fn turn_left(self) -> Self {
         match self {
             Heading::North => Heading::NorthWest,
@@ -209,6 +224,24 @@ mod tests {
             assert!(Heading::SouthEast.is_diagonal());
             assert!(Heading::SouthWest.is_diagonal());
             assert!(Heading::NorthWest.is_diagonal());
+        }
+    }
+
+    mod random {
+        use super::*;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        #[test]
+        fn over_many_draws_every_heading_appears() {
+            let mut rng = StdRng::seed_from_u64(42);
+            let mut seen = std::collections::HashSet::new();
+
+            for _ in 0..1000 {
+                seen.insert(Heading::random(&mut rng));
+            }
+
+            assert_eq!(seen.len(), 8);
         }
     }
 }
