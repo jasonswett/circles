@@ -1,5 +1,5 @@
 use circles::{Critter, Heading, Instruction, Renderer};
-use minifb::{Key, Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
 use rand::Rng;
 
@@ -78,7 +78,7 @@ fn main() {
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        if window.is_key_down(Key::Space) {
+        if window.is_key_pressed(Key::Space, KeyRepeat::No) {
             critters = make_critters(width, height);
         }
 
