@@ -4,49 +4,65 @@ pub const OUTLINE_COLOR: u32 = 0x00_00_FF;
 pub const OUTLINE_THICKNESS: i32 = 2;
 pub const FRONT_DOT_RADIUS: i32 = 4;
 
+struct Ring {
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    inner_squared: i32,
+}
+
+struct Canvas<'a> {
+    buffer: &'a mut [u32],
+    width: usize,
+    height: usize,
+}
+
 pub struct Renderer;
 
 impl Renderer {
     pub fn draw(critter: &Critter, radius: i32, buffer: &mut [u32], width: usize, height: usize) {
         let cx = critter.x();
         let cy = critter.y();
-        let outer_squared = radius * radius;
         let inner_radius = radius - OUTLINE_THICKNESS;
-        let inner_squared = inner_radius * inner_radius;
+        let mut canvas = Canvas {
+            buffer,
+            width,
+            height,
+        };
 
-        Self::fill_disc(cx, cy, radius, outer_squared, inner_squared, buffer, width, height);
+        let body = Ring {
+            cx,
+            cy,
+            radius,
+            inner_squared: inner_radius * inner_radius,
+        };
+        Self::fill_ring(&body, &mut canvas);
 
         let (offset_x, offset_y) = critter.heading().offset();
-        let front_x = cx + offset_x * (radius - FRONT_DOT_RADIUS);
-        let front_y = cy + offset_y * (radius - FRONT_DOT_RADIUS);
-        let dot_radius_squared = FRONT_DOT_RADIUS * FRONT_DOT_RADIUS;
-
-        Self::fill_disc(front_x, front_y, FRONT_DOT_RADIUS, dot_radius_squared, -1, buffer, width, height);
+        let dot = Ring {
+            cx: cx + offset_x * (radius - FRONT_DOT_RADIUS),
+            cy: cy + offset_y * (radius - FRONT_DOT_RADIUS),
+            radius: FRONT_DOT_RADIUS,
+            inner_squared: -1,
+        };
+        Self::fill_ring(&dot, &mut canvas);
     }
 
-    fn fill_disc(
-        cx: i32,
-        cy: i32,
-        radius: i32,
-        outer_squared: i32,
-        inner_squared: i32,
-        buffer: &mut [u32],
-        width: usize,
-        height: usize,
-    ) {
-        for y in (cy - radius)..=(cy + radius) {
-            if y < 0 || y >= height as i32 {
+    fn fill_ring(ring: &Ring, canvas: &mut Canvas) {
+        let outer_squared = ring.radius * ring.radius;
+        for y in (ring.cy - ring.radius)..=(ring.cy + ring.radius) {
+            if y < 0 || y >= canvas.height as i32 {
                 continue;
             }
-            for x in (cx - radius)..=(cx + radius) {
-                if x < 0 || x >= width as i32 {
+            for x in (ring.cx - ring.radius)..=(ring.cx + ring.radius) {
+                if x < 0 || x >= canvas.width as i32 {
                     continue;
                 }
-                let dx = x - cx;
-                let dy = y - cy;
+                let dx = x - ring.cx;
+                let dy = y - ring.cy;
                 let distance_squared = dx * dx + dy * dy;
-                if distance_squared <= outer_squared && distance_squared > inner_squared {
-                    buffer[y as usize * width + x as usize] = OUTLINE_COLOR;
+                if distance_squared <= outer_squared && distance_squared > ring.inner_squared {
+                    canvas.buffer[y as usize * canvas.width + x as usize] = OUTLINE_COLOR;
                 }
             }
         }
@@ -95,7 +111,10 @@ mod tests {
             let buffer = render(&critter);
 
             // The outer edge: at distance radius - 1, distance² = (radius-1)² ≤ radius².
-            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - 1, CENTER), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER + RADIUS - 1, CENTER),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -107,7 +126,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS, CENTER), 0);
+            assert_eq!(
+                pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS, CENTER),
+                0
+            );
         }
 
         #[test]
@@ -117,7 +139,10 @@ mod tests {
             let buffer = render(&critter);
 
             // One pixel further out than the inner_radius is the innermost lit pixel.
-            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS + 1, CENTER), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS + 1, CENTER),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -135,7 +160,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER, CENTER - RADIUS + FRONT_DOT_RADIUS), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER, CENTER - RADIUS + FRONT_DOT_RADIUS),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -147,7 +175,10 @@ mod tests {
             let buffer = render(&critter);
 
             let dot_center_y = CENTER - RADIUS + FRONT_DOT_RADIUS;
-            assert_eq!(pixel_at(&buffer, CENTER, dot_center_y + FRONT_DOT_RADIUS), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER, dot_center_y + FRONT_DOT_RADIUS),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -156,7 +187,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER + RADIUS - FRONT_DOT_RADIUS, CENTER), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER + RADIUS - FRONT_DOT_RADIUS, CENTER),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -165,7 +199,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER, CENTER + RADIUS - FRONT_DOT_RADIUS), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER, CENTER + RADIUS - FRONT_DOT_RADIUS),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -174,7 +211,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER - RADIUS + FRONT_DOT_RADIUS, CENTER), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER - RADIUS + FRONT_DOT_RADIUS, CENTER),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -240,7 +280,10 @@ mod tests {
             let buffer = render(&critter);
 
             // The left side of the ring (at distance RADIUS to the left) is on-canvas.
-            assert_eq!(pixel_at(&buffer, CANVAS as i32 - 1 - RADIUS, CENTER), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CANVAS as i32 - 1 - RADIUS, CENTER),
+                OUTLINE_COLOR
+            );
         }
 
         #[test]
@@ -249,7 +292,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER, CANVAS as i32 - 1 - RADIUS), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER, CANVAS as i32 - 1 - RADIUS),
+                OUTLINE_COLOR
+            );
         }
 
         // Helpers below the tests, in keeping with hiding incidental detail.

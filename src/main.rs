@@ -60,7 +60,9 @@ fn main() {
     )
     .expect("Unable to create window");
 
-    window.limit_update_rate(Some(std::time::Duration::from_micros(FRAME_DURATION_MICROSECONDS)));
+    window.limit_update_rate(Some(std::time::Duration::from_micros(
+        FRAME_DURATION_MICROSECONDS,
+    )));
 
     let mut critter = make_critter(width, height);
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];

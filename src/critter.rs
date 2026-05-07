@@ -58,8 +58,7 @@ impl Critter {
         }
 
         let instruction = self.instructions[self.next_instruction_index];
-        self.next_instruction_index =
-            (self.next_instruction_index + 1) % self.instructions.len();
+        self.next_instruction_index = (self.next_instruction_index + 1) % self.instructions.len();
 
         self.execute(instruction);
     }
@@ -160,7 +159,14 @@ mod tests {
 
         #[test]
         fn move_forward_moves_one_pixel_in_the_heading_direction_with_unit_step_size() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::East, vec![Instruction::MoveForward], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                1,
+                1,
+            );
 
             critter.tick();
 
@@ -170,7 +176,14 @@ mod tests {
         #[test]
         fn move_forward_advances_x_by_the_configured_step_size() {
             const STEP_SIZE: i32 = 25;
-            let mut critter = Critter::new(START_X, START_Y, Heading::East, vec![Instruction::MoveForward], 1, STEP_SIZE);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                1,
+                STEP_SIZE,
+            );
 
             critter.tick();
 
@@ -180,7 +193,14 @@ mod tests {
         #[test]
         fn move_forward_advances_y_by_the_configured_step_size() {
             const STEP_SIZE: i32 = 25;
-            let mut critter = Critter::new(START_X, START_Y, Heading::South, vec![Instruction::MoveForward], 1, STEP_SIZE);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::South,
+                vec![Instruction::MoveForward],
+                1,
+                STEP_SIZE,
+            );
 
             critter.tick();
 
@@ -189,7 +209,14 @@ mod tests {
 
         #[test]
         fn turn_left_changes_the_heading() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnLeft], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::TurnLeft],
+                1,
+                1,
+            );
 
             critter.tick();
 
@@ -198,7 +225,14 @@ mod tests {
 
         #[test]
         fn turn_left_does_not_change_the_position() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnLeft], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::TurnLeft],
+                1,
+                1,
+            );
 
             critter.tick();
 
@@ -207,7 +241,14 @@ mod tests {
 
         #[test]
         fn turn_right_changes_the_heading() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnRight], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::TurnRight],
+                1,
+                1,
+            );
 
             critter.tick();
 
@@ -216,7 +257,14 @@ mod tests {
 
         #[test]
         fn turn_right_does_not_change_the_position() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::TurnRight], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::TurnRight],
+                1,
+                1,
+            );
 
             critter.tick();
 
@@ -225,7 +273,14 @@ mod tests {
 
         #[test]
         fn do_nothing_leaves_position_unchanged() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::DoNothing], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+            );
 
             critter.tick();
 
@@ -234,7 +289,14 @@ mod tests {
 
         #[test]
         fn do_nothing_leaves_heading_unchanged() {
-            let mut critter = Critter::new(START_X, START_Y, Heading::North, vec![Instruction::DoNothing], 1, 1);
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+            );
 
             critter.tick();
 
