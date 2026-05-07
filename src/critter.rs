@@ -67,8 +67,13 @@ impl Critter {
         match instruction {
             Instruction::MoveForward => {
                 let (dx, dy) = self.heading.offset();
-                self.x += dx * self.step_size;
-                self.y += dy * self.step_size;
+                let step = if self.heading.is_diagonal() {
+                    ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
+                } else {
+                    self.step_size
+                };
+                self.x += dx * step;
+                self.y += dy * step;
                 self.last_executed = Some(Instruction::MoveForward);
             }
             Instruction::TurnLeft => {
@@ -208,6 +213,49 @@ mod tests {
         }
 
         #[test]
+        fn move_forward_on_a_diagonal_scales_the_step_by_root_two_over_two() {
+            // step_size 10, scaled by √2/2 ≈ 0.707 and rounded → 7.
+            const STEP_SIZE: i32 = 10;
+            const DIAGONAL_STEP: i32 = 7;
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::SouthEast,
+                vec![Instruction::MoveForward],
+                1,
+                STEP_SIZE,
+            );
+
+            critter.tick();
+
+            assert_eq!(
+                (critter.x(), critter.y()),
+                (START_X + DIAGONAL_STEP, START_Y + DIAGONAL_STEP)
+            );
+        }
+
+        #[test]
+        fn move_forward_on_a_northwest_diagonal_subtracts_the_scaled_step_from_each_axis() {
+            const STEP_SIZE: i32 = 10;
+            const DIAGONAL_STEP: i32 = 7;
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::NorthWest,
+                vec![Instruction::MoveForward],
+                1,
+                STEP_SIZE,
+            );
+
+            critter.tick();
+
+            assert_eq!(
+                (critter.x(), critter.y()),
+                (START_X - DIAGONAL_STEP, START_Y - DIAGONAL_STEP)
+            );
+        }
+
+        #[test]
         fn turn_left_changes_the_heading() {
             let mut critter = Critter::new(
                 START_X,
@@ -220,7 +268,7 @@ mod tests {
 
             critter.tick();
 
-            assert_eq!(critter.heading(), Heading::West);
+            assert_eq!(critter.heading(), Heading::NorthWest);
         }
 
         #[test]
@@ -252,7 +300,7 @@ mod tests {
 
             critter.tick();
 
-            assert_eq!(critter.heading(), Heading::East);
+            assert_eq!(critter.heading(), Heading::NorthEast);
         }
 
         #[test]
@@ -318,7 +366,7 @@ mod tests {
             critter.tick();
 
             assert_eq!(critter.x(), START_X + 1);
-            assert_eq!(critter.heading(), Heading::South);
+            assert_eq!(critter.heading(), Heading::SouthEast);
         }
 
         #[test]
@@ -394,10 +442,10 @@ mod tests {
 
         #[test]
         fn repeating_a_repeat_re_executes_the_underlying_move_a_third_time() {
-            // After three ticks with [TurnRight, Repeat, Repeat]:
-            //   tick 1: TurnRight        — East -> South
-            //   tick 2: Repeat -> Right  — South -> West
-            //   tick 3: Repeat -> Right  — West -> North
+            // After three ticks with [TurnRight, Repeat, Repeat] (each TurnRight = 45°):
+            //   tick 1: TurnRight        — East -> SouthEast
+            //   tick 2: Repeat -> Right  — SouthEast -> South
+            //   tick 3: Repeat -> Right  — South -> SouthWest
             // The third tick must reach back through two repeats to find TurnRight.
             let mut critter = Critter::new(
                 START_X,
@@ -416,7 +464,7 @@ mod tests {
             critter.tick();
             critter.tick();
 
-            assert_eq!(critter.heading(), Heading::North);
+            assert_eq!(critter.heading(), Heading::SouthWest);
         }
     }
 }

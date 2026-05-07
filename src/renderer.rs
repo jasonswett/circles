@@ -38,10 +38,17 @@ impl Renderer {
         };
         Self::fill_ring(&body, &mut canvas);
 
-        let (offset_x, offset_y) = critter.heading().offset();
+        let heading = critter.heading();
+        let (offset_x, offset_y) = heading.offset();
+        let raw_dot_offset = radius - FRONT_DOT_RADIUS;
+        let dot_offset = if heading.is_diagonal() {
+            ((raw_dot_offset as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
+        } else {
+            raw_dot_offset
+        };
         let dot = Ring {
-            cx: cx + offset_x * (radius - FRONT_DOT_RADIUS),
-            cy: cy + offset_y * (radius - FRONT_DOT_RADIUS),
+            cx: cx + offset_x * dot_offset,
+            cy: cy + offset_y * dot_offset,
             radius: FRONT_DOT_RADIUS,
             inner_squared: -1,
         };
@@ -213,6 +220,42 @@ mod tests {
 
             assert_eq!(
                 pixel_at(&buffer, CENTER - RADIUS + FRONT_DOT_RADIUS, CENTER),
+                OUTLINE_COLOR
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_northeast() {
+            // For a diagonal heading, the dot's offset from center is scaled by √2/2
+            // along each axis. With (RADIUS - FRONT_DOT_RADIUS) = 16, scaled = round(11.31) = 11.
+            const DIAGONAL_DOT_OFFSET: i32 = 11;
+            let critter = stationary_critter(CENTER, CENTER, Heading::NorthEast);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(
+                    &buffer,
+                    CENTER + DIAGONAL_DOT_OFFSET,
+                    CENTER - DIAGONAL_DOT_OFFSET
+                ),
+                OUTLINE_COLOR
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_southwest() {
+            const DIAGONAL_DOT_OFFSET: i32 = 11;
+            let critter = stationary_critter(CENTER, CENTER, Heading::SouthWest);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(
+                    &buffer,
+                    CENTER - DIAGONAL_DOT_OFFSET,
+                    CENTER + DIAGONAL_DOT_OFFSET
+                ),
                 OUTLINE_COLOR
             );
         }
