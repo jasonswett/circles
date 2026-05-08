@@ -6,7 +6,7 @@ pub const CRITTER_RADIUS: i32 = 20;
 const NUM_CRITTERS: usize = 8;
 const NUM_PELLETS: usize = 120;
 const INITIAL_ENERGY: u32 = 60;
-const TICKS_PER_INSTRUCTION: u32 = 15;
+const TICKS_PER_INSTRUCTION: u32 = 5;
 const INSTRUCTION_LIST_LENGTH: usize = 4;
 const STEP_SIZE: i32 = 25;
 
