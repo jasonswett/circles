@@ -2,9 +2,9 @@ use crate::Instruction;
 use rand::Rng;
 
 const INSTRUCTION_COUNT: usize = 6;
-const PARAM_BITS_PER_INSTRUCTION: usize = 16;
-const THRESHOLD_BITS: usize = 9; // 0..512, room for energy up to MAX_CRITTER_ENERGY=500
+const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
+const PARAM_BITS_PER_INSTRUCTION: usize = THRESHOLD_BITS + SOFTNESS_BITS;
 const MIN_SOFTNESS: f32 = 1.0;
 
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
@@ -186,12 +186,13 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 96 header bits + 256 opcode bits = 352 bits = 44 bytes. Pinning
-            // down the literal byte count catches mutations to the constants
-            // that derive from HEADER_BITS + OPCODE_BITS.
+            // 6 instructions × 14 param bits + 64 opcodes × 4 bits = 84 + 256
+            // = 340 bits = 43 bytes (rounding up). Pinning down the literal
+            // byte count catches mutations to the constants that derive from
+            // HEADER_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 44);
+            assert_eq!(genome.bytes.len(), 43);
         }
 
         #[test]
