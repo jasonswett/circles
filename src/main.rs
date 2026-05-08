@@ -1,4 +1,6 @@
-use circles::{text_pixels, FpsCounter, Renderer, StagnationDetector, World, CRITTER_RADIUS};
+use circles::{
+    format_elapsed, text_pixels, FpsCounter, Renderer, StagnationDetector, World, CRITTER_RADIUS,
+};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
 use std::time::{Duration, Instant};
@@ -68,12 +70,14 @@ fn main() {
     let mut displayed_total_energy = world.total_energy();
     let mut stagnation = StagnationDetector::new(STAGNATION_THRESHOLD_FRAMES);
     let mut fps_counter = FpsCounter::new(FPS_REFRESH_INTERVAL);
+    let mut world_started_at = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         fps_counter.observe_frame(Instant::now());
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
             world.reset(&mut rng);
             stagnation.reset();
+            world_started_at = Instant::now();
         }
 
         let allow_growth = fps_counter.current_fps() >= MIN_FPS_FOR_GROWTH;
@@ -84,6 +88,7 @@ fn main() {
         if stagnation.is_stagnant() {
             world.reset(&mut rng);
             stagnation.reset();
+            world_started_at = Instant::now();
         }
 
         if frame_counter.is_multiple_of(ENERGY_REFRESH_FRAMES) {
@@ -95,6 +100,7 @@ fn main() {
         if world.population_too_low() {
             world.reset(&mut rng);
             stagnation.reset();
+            world_started_at = Instant::now();
         }
         if frame_counter > 0
             && frame_counter.is_multiple_of(REPLENISH_INTERVAL_FRAMES)
@@ -115,10 +121,12 @@ fn main() {
         let fps_text = format!("FPS: {}", fps_counter.current_fps());
         let population_text = format!("Population: {}", world.critters().len());
         let world_text = format!("World: {}", world.generation());
+        let time_text = format!("Time: {}", format_elapsed(world_started_at.elapsed()));
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
         draw_text_top_right(&population_text, 2, &mut frame_pixels, width, height);
         draw_text_top_right(&world_text, 3, &mut frame_pixels, width, height);
+        draw_text_top_right(&time_text, 4, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)

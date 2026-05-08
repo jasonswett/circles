@@ -1,4 +1,5 @@
 mod critter;
+mod elapsed_format;
 mod fps_counter;
 mod genome;
 mod heading;
@@ -10,6 +11,7 @@ mod text;
 mod world;
 
 pub use critter::{Critter, MAX_CRITTER_ENERGY};
+pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;
 pub use genome::Genome;
 pub use heading::Heading;
