@@ -104,7 +104,13 @@ impl World {
         let width = self.width as i32;
         let height = self.height as i32;
         for critter in &mut self.critters {
+            if critter.energy() >= crate::MAX_CRITTER_ENERGY {
+                continue;
+            }
             self.pellets.retain(|pellet| {
+                if critter.energy() >= crate::MAX_CRITTER_ENERGY {
+                    return true;
+                }
                 let dx = toroidal_delta(critter.x(), pellet.x, width);
                 let dy = toroidal_delta(critter.y(), pellet.y, height);
                 if dx * dx + dy * dy < eat_distance_squared {
@@ -412,7 +418,7 @@ mod tests {
         use super::*;
         use crate::{Critter, Heading, Instruction, Pellet, PELLET_ENERGY};
 
-        const HUNGRY_INITIAL: u32 = 1_000;
+        const HUNGRY_INITIAL: u32 = 200;
         const STARTING_ENERGY: u32 = 10;
 
         fn hungry_critter(x: i32, y: i32) -> Critter {
@@ -542,6 +548,34 @@ mod tests {
             world.tick();
 
             assert_eq!(world.pellets().len(), 1);
+        }
+
+        #[test]
+        fn a_critter_at_the_energy_cap_does_not_eat_an_overlapping_pellet() {
+            let mut critter = Critter::new(
+                100,
+                100,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                u32::MAX,
+                1,
+                100,
+                0,
+            );
+            critter.gain_energy(crate::MAX_CRITTER_ENERGY); // saturates at MAX
+            assert_eq!(critter.energy(), crate::MAX_CRITTER_ENERGY);
+            let pellet = Pellet { x: 100, y: 100 };
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
+
+            world.tick();
+
+            assert_eq!(world.pellets().len(), 1);
+            assert_eq!(world.critters()[0].energy(), crate::MAX_CRITTER_ENERGY);
         }
 
         #[test]

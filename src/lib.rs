@@ -8,7 +8,7 @@ mod stagnation_detector;
 mod text;
 mod world;
 
-pub use critter::Critter;
+pub use critter::{Critter, MAX_CRITTER_ENERGY};
 pub use fps_counter::FpsCounter;
 pub use heading::Heading;
 pub use instruction::Instruction;

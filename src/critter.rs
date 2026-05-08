@@ -2,6 +2,8 @@ use crate::{Heading, Instruction};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
+pub const MAX_CRITTER_ENERGY: u32 = 500;
+
 #[derive(Clone)]
 pub struct Critter {
     x: i32,
@@ -74,7 +76,7 @@ impl Critter {
     }
 
     pub fn gain_energy(&mut self, amount: u32) {
-        self.energy = self.energy.saturating_add(amount);
+        self.energy = self.energy.saturating_add(amount).min(MAX_CRITTER_ENERGY);
     }
 
     pub fn lose_energy(&mut self, amount: u32) {
@@ -1255,6 +1257,42 @@ mod tests {
             let child = critter.tick();
 
             assert!(child.is_some());
+        }
+    }
+
+    mod energy_cap {
+        use super::*;
+
+        #[test]
+        fn the_max_energy_constant_is_five_hundred() {
+            assert_eq!(MAX_CRITTER_ENERGY, 500);
+        }
+
+        #[test]
+        fn gain_energy_caps_the_total_at_max_critter_energy() {
+            let mut critter = Critter::new(
+                0,
+                0,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                MAX_CRITTER_ENERGY - 10,
+                0,
+            );
+
+            critter.gain_energy(1_000);
+
+            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY);
+        }
+
+        #[test]
+        fn gain_energy_below_the_cap_increases_normally() {
+            let mut critter = Critter::new(0, 0, Heading::North, vec![], 1, 1, 100, 0);
+
+            critter.gain_energy(50);
+
+            assert_eq!(critter.energy(), 150);
         }
     }
 }
