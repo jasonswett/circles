@@ -1,4 +1,4 @@
-use crate::Critter;
+use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
 
 pub const OUTLINE_COLOR: u32 = 0x00_00_FF;
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
@@ -55,6 +55,21 @@ impl Renderer {
             inner_squared: -1,
         };
         Self::fill_ring(&dot, &mut canvas, color);
+    }
+
+    pub fn draw_pellet(pellet: &Pellet, buffer: &mut [u32], width: usize, height: usize) {
+        let mut canvas = Canvas {
+            buffer,
+            width,
+            height,
+        };
+        let disc = Ring {
+            cx: pellet.x,
+            cy: pellet.y,
+            radius: PELLET_RADIUS,
+            inner_squared: -1,
+        };
+        Self::fill_ring(&disc, &mut canvas, PELLET_COLOR);
     }
 
     fn fill_ring(ring: &Ring, canvas: &mut Canvas, color: u32) {
@@ -448,6 +463,51 @@ mod tests {
                     critter.tick();
                 }
                 critter
+            }
+        }
+
+        mod pellet {
+            use super::*;
+            use crate::{Pellet, PELLET_COLOR, PELLET_RADIUS};
+
+            #[test]
+            fn the_center_of_a_pellet_is_drawn_in_pellet_color() {
+                let pellet = Pellet {
+                    x: CENTER,
+                    y: CENTER,
+                };
+                let buffer = render_pellet(&pellet);
+
+                assert_eq!(pixel_at(&buffer, CENTER, CENTER), PELLET_COLOR);
+            }
+
+            #[test]
+            fn the_pellet_is_drawn_as_a_filled_disc_of_pellet_radius() {
+                let pellet = Pellet {
+                    x: CENTER,
+                    y: CENTER,
+                };
+                let buffer = render_pellet(&pellet);
+
+                // Edge of the disc — at distance PELLET_RADIUS from center, on-axis.
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + PELLET_RADIUS, CENTER),
+                    PELLET_COLOR
+                );
+                // One past the edge — should not be drawn.
+                assert_eq!(pixel_at(&buffer, CENTER + PELLET_RADIUS + 1, CENTER), 0);
+            }
+
+            #[test]
+            fn drawing_a_pellet_does_not_panic_when_partly_off_canvas() {
+                let pellet = Pellet { x: 0, y: 0 };
+                let _ = render_pellet(&pellet);
+            }
+
+            fn render_pellet(pellet: &Pellet) -> Vec<u32> {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                Renderer::draw_pellet(pellet, &mut buffer, CANVAS, CANVAS);
+                buffer
             }
         }
 

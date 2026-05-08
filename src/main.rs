@@ -59,6 +59,9 @@ fn main() {
         world.tick();
 
         frame_pixels.fill(BACKGROUND_COLOR);
+        for pellet in world.pellets() {
+            Renderer::draw_pellet(pellet, &mut frame_pixels, width, height);
+        }
         for critter in world.critters() {
             Renderer::draw(critter, CRITTER_RADIUS, &mut frame_pixels, width, height);
         }

@@ -1,5 +1,6 @@
 use crate::{Heading, Instruction};
 
+#[derive(Clone)]
 pub struct Critter {
     x: i32,
     y: i32,
@@ -57,6 +58,14 @@ impl Critter {
 
     pub fn initial_energy(&self) -> u32 {
         self.initial_energy
+    }
+
+    pub fn gain_energy(&mut self, amount: u32) {
+        self.energy = self.energy.saturating_add(amount).min(self.initial_energy);
+    }
+
+    pub fn lose_energy(&mut self, amount: u32) {
+        self.energy = self.energy.saturating_sub(amount);
     }
 
     pub fn tick(&mut self) {
