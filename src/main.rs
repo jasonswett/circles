@@ -1,4 +1,4 @@
-use circles::{text_pixels, Renderer, World, CRITTER_RADIUS};
+use circles::{text_pixels, Renderer, StagnationDetector, World, CRITTER_RADIUS};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
 
@@ -8,6 +8,7 @@ const TEXT_COLOR: u32 = 0xFF_FF_FF;
 const TEXT_SCALE: usize = 4;
 const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
+const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 
 #[repr(C)]
 struct CGSize {
@@ -56,16 +57,25 @@ fn main() {
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
     let mut frame_counter: u32 = 0;
     let mut displayed_total_energy = world.total_energy();
+    let mut stagnation = StagnationDetector::new(STAGNATION_THRESHOLD_FRAMES);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
             world.reset(&mut rng);
+            stagnation.reset();
         }
 
         world.tick();
 
+        let total_energy = world.total_energy();
+        stagnation.observe(total_energy);
+        if stagnation.is_stagnant() {
+            world.reset(&mut rng);
+            stagnation.reset();
+        }
+
         if frame_counter.is_multiple_of(ENERGY_REFRESH_FRAMES) {
-            displayed_total_energy = world.total_energy();
+            displayed_total_energy = total_energy;
         }
         frame_counter = frame_counter.wrapping_add(1);
 
