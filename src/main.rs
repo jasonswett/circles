@@ -1,11 +1,13 @@
 use circles::{
-    format_elapsed, text_pixels, FpsCounter, Renderer, StagnationDetector, World, CRITTER_RADIUS,
+    format_elapsed, format_minutes_seconds, frames_until_next_replenish, text_pixels, FpsCounter,
+    Renderer, StagnationDetector, World, CRITTER_RADIUS,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
 use std::time::{Duration, Instant};
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
+const TARGET_FPS: u32 = 60;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 const TEXT_COLOR: u32 = 0xFF_FF_FF;
 const TEXT_SIZE: f32 = 28.0;
@@ -122,11 +124,19 @@ fn main() {
         let population_text = format!("Population: {}", world.critters().len());
         let world_text = format!("World: {}", world.generation());
         let time_text = format!("Time: {}", format_elapsed(world_started_at.elapsed()));
+        let frames_remaining =
+            frames_until_next_replenish(frame_counter, REPLENISH_INTERVAL_FRAMES);
+        let seconds_remaining = Duration::from_secs((frames_remaining / TARGET_FPS) as u64);
+        let next_pellets_text = format!(
+            "Next pellets: {}",
+            format_minutes_seconds(seconds_remaining)
+        );
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
         draw_text_top_right(&population_text, 2, &mut frame_pixels, width, height);
         draw_text_top_right(&world_text, 3, &mut frame_pixels, width, height);
         draw_text_top_right(&time_text, 4, &mut frame_pixels, width, height);
+        draw_text_top_right(&next_pellets_text, 5, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
