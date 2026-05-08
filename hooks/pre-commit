@@ -1,0 +1,16 @@
+#!/bin/sh
+set -e
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --quiet
+cargo audit
+
+# Mutation testing: only mutants in code touched by this commit, run in parallel.
+DIFF_FILE=$(mktemp)
+trap 'rm -f "$DIFF_FILE"' EXIT
+git diff --cached --no-ext-diff > "$DIFF_FILE"
+if [ -s "$DIFF_FILE" ]; then
+    cargo mutants --in-diff "$DIFF_FILE" --jobs 8
+else
+    echo "No staged diff; skipping mutation testing."
+fi
