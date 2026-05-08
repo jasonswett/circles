@@ -105,8 +105,10 @@ fn main() {
         }
         let energy_text = format!("Energy: {displayed_total_energy}");
         let fps_text = format!("FPS: {}", fps_counter.current_fps());
+        let population_text = format!("Population: {}", world.critters().len());
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
+        draw_text_top_right(&population_text, 2, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
