@@ -5,6 +5,7 @@ pub const CRITTER_RADIUS: i32 = 10;
 
 const NUM_CRITTERS: usize = 100;
 const NUM_PELLETS: usize = 1000;
+pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
 const INSTRUCTION_LIST_LENGTH: usize = 16;
@@ -125,6 +126,10 @@ impl World {
 
     pub fn reap_dead_critters(&mut self) {
         self.critters.retain(|c| c.energy() > 0);
+    }
+
+    pub fn population_too_low(&self) -> bool {
+        self.critters.len() < MIN_POPULATION
     }
 
     pub fn reset<R: Rng>(&mut self, rng: &mut R) {
@@ -994,6 +999,50 @@ mod tests {
             world.replenish_pellets(&mut rng);
 
             assert!(world.total_energy() >= world.original_total_energy);
+        }
+    }
+
+    mod population_too_low {
+        use super::*;
+        use crate::{Critter, Heading, Instruction};
+
+        fn world_with_critter_count(count: usize) -> World {
+            let critters = (0..count)
+                .map(|i| {
+                    Critter::new(
+                        i as i32,
+                        0,
+                        Heading::North,
+                        vec![Instruction::DoNothing],
+                        1,
+                        1,
+                        100,
+                        i as u64,
+                    )
+                })
+                .collect();
+            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, critters, vec![])
+        }
+
+        #[test]
+        fn it_returns_false_when_population_equals_the_minimum() {
+            let world = world_with_critter_count(MIN_POPULATION);
+
+            assert!(!world.population_too_low());
+        }
+
+        #[test]
+        fn it_returns_true_when_population_is_just_below_the_minimum() {
+            let world = world_with_critter_count(MIN_POPULATION - 1);
+
+            assert!(world.population_too_low());
+        }
+
+        #[test]
+        fn it_returns_false_when_population_is_well_above_the_minimum() {
+            let world = world_with_critter_count(MIN_POPULATION + 30);
+
+            assert!(!world.population_too_low());
         }
     }
 }

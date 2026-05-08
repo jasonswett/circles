@@ -88,6 +88,10 @@ fn main() {
         if frame_counter > 0 && frame_counter.is_multiple_of(REAPER_INTERVAL_FRAMES) {
             world.reap_dead_critters();
         }
+        if world.population_too_low() {
+            world.reset(&mut rng);
+            stagnation.reset();
+        }
         if frame_counter > 0
             && frame_counter.is_multiple_of(REPLENISH_INTERVAL_FRAMES)
             && fps_counter.current_fps() >= REPLENISH_MIN_FPS
