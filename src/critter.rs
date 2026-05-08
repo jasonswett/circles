@@ -147,9 +147,28 @@ impl Critter {
         // an explicit modulo. usize will not overflow within any realistic run.
         self.genome_cursor += 1;
 
-        let child = self.execute(instruction);
+        // Each instruction is gated by the genome's sigmoid: the probability of
+        // acting is sigmoid((energy - threshold) / softness) for that
+        // instruction's per-critter parameters. A "no" still consumes one
+        // energy and `last_executed` is left untouched so RepeatPreviousMove
+        // keeps referring to whatever did execute last.
+        let probability = self.genome.probability_of_acting(instruction, self.energy);
+        let child = if self.roll_against(probability) {
+            self.execute(instruction)
+        } else {
+            None
+        };
         self.energy = self.energy.saturating_sub(1);
         child
+    }
+
+    // The `<` vs `<=` mutation is an equivalent mutant for our continuous f32
+    // rolls: `rng.gen::<f32>()` produces values in [0, 1), so the boundary case
+    // `roll == probability` happens with probability 0 and is unobservable.
+    #[mutants::skip]
+    fn roll_against(&mut self, probability: f32) -> bool {
+        let roll: f32 = self.rng.gen();
+        roll < probability
     }
 
     fn execute(&mut self, instruction: Instruction) -> Option<Critter> {
