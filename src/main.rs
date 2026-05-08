@@ -14,7 +14,7 @@ const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
-const REPLENISH_INTERVAL_FRAMES: u32 = 300;
+const REPLENISH_INTERVAL_FRAMES: u32 = 1800;
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
