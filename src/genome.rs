@@ -18,7 +18,7 @@ const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 /// sigmoid decision parameters in one packed bitstring. The first 96 bits hold
 /// six (threshold, softness) pairs (one per instruction); the remaining 256
 /// bits hold 64 four-bit opcodes that the critter walks one per tick.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Genome {
     bytes: [u8; TOTAL_BYTES],
 }
@@ -62,6 +62,21 @@ impl Genome {
         let position = cursor % OPCODE_COUNT;
         let bit_offset = HEADER_BITS + position * OPCODE_BITS_PER_OPCODE;
         decode(read_bits(&self.bytes, bit_offset, OPCODE_BITS_PER_OPCODE) as u8)
+    }
+
+    /// Flips each bit independently with probability `bit_flip_rate`. A rate of
+    /// 0 leaves the genome unchanged; a rate of 1 inverts every bit.
+    // The `<` vs `<=` mutation on the rate comparison is equivalent for the
+    // continuous f32 distribution rng.gen::<f32>() draws from.
+    #[mutants::skip]
+    pub fn mutate<R: Rng>(&mut self, rng: &mut R, bit_flip_rate: f32) {
+        for byte in &mut self.bytes {
+            for bit in 0..8 {
+                if rng.gen::<f32>() < bit_flip_rate {
+                    *byte ^= 1 << bit;
+                }
+            }
+        }
     }
 
     pub fn probability_of_acting(&self, instruction: Instruction, energy: u32) -> f32 {
@@ -359,6 +374,52 @@ mod tests {
                 }
             }
             panic!("no seed produced six distinct per-instruction probabilities");
+        }
+    }
+
+    mod mutate {
+        use super::*;
+
+        #[test]
+        fn at_rate_zero_no_bits_change() {
+            let mut rng = SmallRng::seed_from_u64(0);
+            let original = random_genome(7);
+            let mut mutated = original.clone();
+
+            mutated.mutate(&mut rng, 0.0);
+
+            assert_eq!(original.bytes, mutated.bytes);
+        }
+
+        #[test]
+        fn at_rate_one_every_bit_flips() {
+            let mut rng = SmallRng::seed_from_u64(0);
+            let original = random_genome(7);
+            let mut mutated = original.clone();
+
+            mutated.mutate(&mut rng, 1.0);
+
+            for (a, b) in original.bytes.iter().zip(mutated.bytes.iter()) {
+                assert_eq!(*a, !*b);
+            }
+        }
+
+        #[test]
+        fn at_a_partial_rate_some_but_not_all_bits_change() {
+            let mut rng = SmallRng::seed_from_u64(0);
+            let original = random_genome(7);
+            let mut mutated = original.clone();
+
+            mutated.mutate(&mut rng, 0.5);
+
+            let differing_bits: u32 = original
+                .bytes
+                .iter()
+                .zip(mutated.bytes.iter())
+                .map(|(a, b)| (a ^ b).count_ones())
+                .sum();
+            assert!(differing_bits > 0);
+            assert!(differing_bits < 8 * TOTAL_BYTES as u32);
         }
     }
 

@@ -3,6 +3,8 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
+const MUTATION_CHANCE: f32 = 0.1;
+const BIT_FLIP_RATE: f32 = 0.01;
 
 #[derive(Clone)]
 pub struct Critter {
@@ -117,6 +119,11 @@ impl Critter {
         self.initial_energy
     }
 
+    #[cfg(test)]
+    pub fn genome(&self) -> &Genome {
+        &self.genome
+    }
+
     pub fn gain_energy(&mut self, amount: u32) {
         self.energy = self.energy.saturating_add(amount).min(MAX_CRITTER_ENERGY);
     }
@@ -227,11 +234,17 @@ impl Critter {
         // Children's first firing is jittered, so they desynchronize from the
         // parent immediately.
         let child_threshold = jitter_threshold(&mut child_rng, self.ticks_per_instruction);
+        let mut child_genome = self.genome.clone();
+        // Each split has a small chance of mutating the child's genome; when
+        // it does, each bit independently flips with a smaller probability.
+        if self.roll_against(MUTATION_CHANCE) {
+            child_genome.mutate(&mut child_rng, BIT_FLIP_RATE);
+        }
         Critter {
             x: self.x - dx * offset,
             y: self.y - dy * offset,
             heading: self.heading,
-            genome: self.genome.clone(),
+            genome: child_genome,
             genome_cursor: self.genome_cursor,
             last_executed: None,
             ticks_per_instruction: self.ticks_per_instruction,
@@ -1123,6 +1136,69 @@ mod tests {
             let second_child = parent.tick(); // repeat → split again
 
             assert!(second_child.is_some());
+        }
+    }
+
+    mod mutation_on_split {
+        use super::*;
+        use crate::Genome;
+
+        // Build a parent that splits every tick, with a known starting genome
+        // and high enough energy to keep splitting. Returns the parent's genome
+        // and the genome of one resulting child.
+        fn split_once(seed: u64) -> (Genome, Genome) {
+            let mut parent = Critter::with_genome(
+                10,
+                10,
+                Heading::North,
+                1,
+                1,
+                10,
+                seed,
+                Genome::all(Instruction::Split),
+            );
+            parent.gain_energy(MAX_CRITTER_ENERGY - 10);
+            let parent_genome = parent.genome().clone();
+            let child = parent.tick().expect("parent should split");
+            (parent_genome, child.genome().clone())
+        }
+
+        #[test]
+        fn most_children_inherit_the_parents_genome_unchanged() {
+            // With MUTATION_CHANCE = 0.1, ~90% of children should be identical
+            // to the parent. Asserting that at least 70% match leaves wide
+            // statistical headroom while still failing if mutation_chance was
+            // accidentally raised to 1.0 or the inheritance broke.
+            let mut identical = 0;
+            for seed in 0..200 {
+                let (parent, child) = split_once(seed);
+                if parent == child {
+                    identical += 1;
+                }
+            }
+            assert!(
+                identical > 140,
+                "expected >140/200 children to inherit unchanged, got {identical}"
+            );
+        }
+
+        #[test]
+        fn some_children_have_a_mutated_genome() {
+            // With MUTATION_CHANCE = 0.1 and BIT_FLIP_RATE = 0.01, over 200
+            // splits we expect roughly 20 children to be mutated. Asserting at
+            // least one child differs catches a "mutation never fires" bug.
+            let mut any_differ = false;
+            for seed in 0..200 {
+                let (parent, child) = split_once(seed);
+                if parent != child {
+                    any_differ = true;
+                    break;
+                }
+            }
+            assert!(
+                any_differ,
+                "expected at least one mutated child in 200 splits"
+            );
         }
     }
 
