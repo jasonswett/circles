@@ -140,7 +140,7 @@ fn lerp(from: u8, to: u8, ratio: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Critter, Heading};
+    use crate::{Critter, Genome, Heading, Instruction};
 
     mod interpolate_color_tests {
         use crate::renderer::interpolate_color;
@@ -485,15 +485,15 @@ mod tests {
             }
 
             fn critter_with_energy(current_energy: u32) -> Critter {
-                let mut critter = Critter::new(
+                let mut critter = Critter::with_genome(
                     CENTER,
                     CENTER,
                     Heading::North,
-                    vec![Instruction::DoNothing; (INITIAL_ENERGY - current_energy) as usize],
                     1,
                     1,
                     INITIAL_ENERGY,
                     0,
+                    Genome::all(Instruction::DoNothing),
                 );
                 for _ in 0..(INITIAL_ENERGY - current_energy) {
                     critter.tick();
@@ -576,7 +576,16 @@ mod tests {
         // Helpers below the tests, in keeping with hiding incidental detail.
 
         fn stationary_critter(x: i32, y: i32, heading: Heading) -> Critter {
-            Critter::new(x, y, heading, vec![], 1, 1, u32::MAX, 0)
+            Critter::with_genome(
+                x,
+                y,
+                heading,
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
         }
 
         fn render(critter: &Critter) -> Vec<u32> {

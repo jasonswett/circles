@@ -9,8 +9,8 @@ pub struct Critter {
     x: i32,
     y: i32,
     heading: Heading,
-    instructions: Vec<Instruction>,
-    next_instruction_index: usize,
+    genome: Genome,
+    genome_cursor: usize,
     last_executed: Option<Instruction>,
     ticks_per_instruction: u32,
     tick_counter: u32,
@@ -19,7 +19,6 @@ pub struct Critter {
     energy: u32,
     initial_energy: u32,
     rng: SmallRng,
-    genome: Genome,
 }
 
 impl Critter {
@@ -27,32 +26,23 @@ impl Critter {
         x: i32,
         y: i32,
         heading: Heading,
-        instructions: Vec<Instruction>,
         ticks_per_instruction: u32,
         step_size: i32,
         initial_energy: u32,
         seed: u64,
     ) -> Self {
         let mut rng = SmallRng::seed_from_u64(seed);
-        let genome = Genome::random(&mut rng, MAX_CRITTER_ENERGY);
-        Self {
+        let genome = Genome::random(&mut rng);
+        Self::new_with(
             x,
             y,
             heading,
-            instructions,
-            next_instruction_index: 0,
-            last_executed: None,
+            genome,
             ticks_per_instruction,
-            tick_counter: 0,
-            // Initial firing is deterministic at ticks_per_instruction; only
-            // subsequent rerolls are jittered.
-            next_fire_threshold: ticks_per_instruction,
             step_size,
-            energy: initial_energy,
             initial_energy,
             rng,
-            genome,
-        }
+        )
     }
 
     /// Test-only: build a critter with a specific genome.
@@ -61,7 +51,6 @@ impl Critter {
         x: i32,
         y: i32,
         heading: Heading,
-        instructions: Vec<Instruction>,
         ticks_per_instruction: u32,
         step_size: i32,
         initial_energy: u32,
@@ -69,12 +58,34 @@ impl Critter {
         genome: Genome,
     ) -> Self {
         let rng = SmallRng::seed_from_u64(seed);
+        Self::new_with(
+            x,
+            y,
+            heading,
+            genome,
+            ticks_per_instruction,
+            step_size,
+            initial_energy,
+            rng,
+        )
+    }
+
+    fn new_with(
+        x: i32,
+        y: i32,
+        heading: Heading,
+        genome: Genome,
+        ticks_per_instruction: u32,
+        step_size: i32,
+        initial_energy: u32,
+        rng: SmallRng,
+    ) -> Self {
         Self {
             x,
             y,
             heading,
-            instructions,
-            next_instruction_index: 0,
+            genome,
+            genome_cursor: 0,
             last_executed: None,
             ticks_per_instruction,
             tick_counter: 0,
@@ -83,7 +94,6 @@ impl Critter {
             energy: initial_energy,
             initial_energy,
             rng,
-            genome,
         }
     }
 
@@ -128,39 +138,18 @@ impl Critter {
         self.tick_counter = 0;
         self.next_fire_threshold = jitter_threshold(&mut self.rng, self.ticks_per_instruction);
 
-        if self.instructions.is_empty() {
-            return None;
-        }
-
         if self.energy == 0 {
             return None;
         }
 
-        let instruction = self.instructions[self.next_instruction_index];
-        self.next_instruction_index = (self.next_instruction_index + 1) % self.instructions.len();
+        let instruction = self.genome.decode_at(self.genome_cursor);
+        // decode_at handles wrap-around itself, so the cursor can grow without
+        // an explicit modulo. usize will not overflow within any realistic run.
+        self.genome_cursor += 1;
 
-        // Each instruction is gated by the critter's genome. The probability of
-        // acting is a sigmoid of energy around a per-critter threshold; a "no"
-        // roll still consumes the instruction slot and the usual one energy,
-        // but the action does not occur and `last_executed` is left untouched
-        // so RepeatPreviousMove keeps referring to whatever did execute last.
-        let probability = self.genome.probability_of_acting(instruction, self.energy);
-        let child = if self.roll_against(probability) {
-            self.execute(instruction)
-        } else {
-            None
-        };
+        let child = self.execute(instruction);
         self.energy = self.energy.saturating_sub(1);
         child
-    }
-
-    // The `<` vs `<=` mutation is an equivalent mutant for our continuous f32
-    // rolls: `rng.gen::<f32>()` produces values in [0, 1), so the boundary case
-    // `roll == probability` happens with probability 0 and is unobservable.
-    #[mutants::skip]
-    fn roll_against(&mut self, probability: f32) -> bool {
-        let roll: f32 = self.rng.gen();
-        roll < probability
     }
 
     fn execute(&mut self, instruction: Instruction) -> Option<Critter> {
@@ -223,8 +212,8 @@ impl Critter {
             x: self.x - dx * offset,
             y: self.y - dy * offset,
             heading: self.heading,
-            instructions: self.instructions.clone(),
-            next_instruction_index: self.next_instruction_index,
+            genome: self.genome.clone(),
+            genome_cursor: self.genome_cursor,
             last_executed: None,
             ticks_per_instruction: self.ticks_per_instruction,
             tick_counter: 0,
@@ -233,7 +222,6 @@ impl Critter {
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
             rng: child_rng,
-            genome: self.genome.clone(),
         }
     }
 }
@@ -263,12 +251,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
@@ -280,12 +267,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             assert_eq!(critter.heading(), Heading::North);
@@ -301,12 +287,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::MoveForward],
                 TICKS_PER_INSTRUCTION,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -322,12 +307,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::MoveForward],
                 TICKS_PER_INSTRUCTION,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             for _ in 0..TICKS_PER_INSTRUCTION {
@@ -343,12 +327,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -363,12 +346,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -383,12 +365,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::South,
-                vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -405,12 +386,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::SouthEast,
-                vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -429,12 +409,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::NorthWest,
-                vec![Instruction::MoveForward],
                 1,
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -451,12 +430,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::TurnLeft],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::TurnLeft),
             );
 
             critter.tick();
@@ -470,12 +448,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::TurnLeft],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::TurnLeft),
             );
 
             critter.tick();
@@ -489,12 +466,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::TurnRight],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::TurnRight),
             );
 
             critter.tick();
@@ -508,12 +484,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::TurnRight],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::TurnRight),
             );
 
             critter.tick();
@@ -527,12 +502,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             critter.tick();
@@ -546,12 +520,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             critter.tick();
@@ -565,12 +538,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward, Instruction::TurnRight],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::from_instructions(&[Instruction::MoveForward, Instruction::TurnRight]),
             );
 
             critter.tick();
@@ -586,12 +558,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -611,12 +582,14 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward, Instruction::RepeatPreviousMove],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::from_instructions(&[
+                    Instruction::MoveForward,
+                    Instruction::RepeatPreviousMove,
+                ]),
             );
 
             critter.tick();
@@ -631,12 +604,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::RepeatPreviousMove],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::RepeatPreviousMove),
             );
 
             critter.tick();
@@ -650,12 +622,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::RepeatPreviousMove],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::RepeatPreviousMove),
             );
 
             critter.tick();
@@ -674,16 +645,15 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![
-                    Instruction::TurnRight,
-                    Instruction::RepeatPreviousMove,
-                    Instruction::RepeatPreviousMove,
-                ],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::from_instructions(&[
+                    Instruction::TurnRight,
+                    Instruction::RepeatPreviousMove,
+                    Instruction::RepeatPreviousMove,
+                ]),
             );
 
             critter.tick();
@@ -705,12 +675,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             assert_eq!(critter.energy(), INITIAL_ENERGY);
@@ -722,12 +691,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             assert_eq!(critter.initial_energy(), INITIAL_ENERGY);
@@ -739,12 +707,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             critter.tick();
@@ -758,12 +725,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             critter.tick();
@@ -777,12 +743,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 TICKS_PER_INSTRUCTION,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -798,12 +763,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 0,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             critter.tick();
@@ -817,12 +781,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 0,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             for _ in 0..10 {
@@ -844,12 +807,11 @@ mod tests {
                 x,
                 y,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 u32::MAX,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             )
         }
 
@@ -922,12 +884,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::Split],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::Split),
             );
             critter.gain_energy(SPLITTER_ENERGY - INITIAL_ENERGY);
             critter
@@ -996,12 +957,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::Split],
                 1,
                 STEP_SIZE,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::Split),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
@@ -1020,12 +980,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::SouthEast,
-                vec![Instruction::Split],
                 1,
                 STEP_SIZE,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::Split),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
@@ -1045,12 +1004,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::Split, Instruction::MoveForward],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::from_instructions(&[Instruction::Split, Instruction::MoveForward]),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
@@ -1067,12 +1025,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             );
 
             assert!(critter.tick().is_none());
@@ -1084,12 +1041,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::TurnLeft],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::TurnLeft),
             );
 
             assert!(critter.tick().is_none());
@@ -1101,12 +1057,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             assert!(critter.tick().is_none());
@@ -1118,12 +1073,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::Split],
                 10,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::Split),
             );
 
             assert!(critter.tick().is_none());
@@ -1135,12 +1089,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::North,
-                vec![Instruction::Split, Instruction::RepeatPreviousMove],
                 1,
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::always_act(),
+                Genome::from_instructions(&[Instruction::Split, Instruction::RepeatPreviousMove]),
             );
             // Need enough energy for two splits: pre-split must be ≥ 2 × initial.
             // After the first split, parent will have ~half — so we start with
@@ -1202,12 +1155,11 @@ mod tests {
                 START_X,
                 START_Y,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 BASE_TICKS,
                 1,
                 u32::MAX,
                 seed,
-                Genome::always_act(),
+                Genome::all(Instruction::MoveForward),
             )
         }
 
@@ -1263,12 +1215,11 @@ mod tests {
                 0,
                 0,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 MAX_CRITTER_ENERGY - 10,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             critter.gain_energy(1_000);
@@ -1282,12 +1233,11 @@ mod tests {
                 0,
                 0,
                 Heading::North,
-                vec![],
                 1,
                 1,
                 100,
                 0,
-                Genome::always_act(),
+                Genome::all(Instruction::DoNothing),
             );
 
             critter.gain_energy(50);

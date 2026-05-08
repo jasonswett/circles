@@ -1,55 +1,86 @@
-use crate::instruction::INSTRUCTION_COUNT;
 use crate::Instruction;
 use rand::Rng;
 
-const MIN_SOFTNESS: f32 = 10.0;
-const MAX_SOFTNESS: f32 = 100.0;
+const GENOME_LENGTH: usize = 64;
 
+/// A binary genome of instruction opcodes. Each entry is a 4-bit code
+/// (interpretable as a nibble of a longer bitstring). Decoding a code yields
+/// either a known `Instruction` or `DoNothing` for unknown codes.
 #[derive(Clone, Debug)]
 pub struct Genome {
-    rules: [Rule; INSTRUCTION_COUNT],
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Rule {
-    threshold: f32,
-    softness: f32,
+    codes: Vec<u8>,
 }
 
 impl Genome {
-    /// A genome whose `probability_of_acting` is 1.0 for any instruction at any
-    /// non-zero energy. Useful for tests that need deterministic execution.
-    pub fn always_act() -> Self {
+    pub fn random<R: Rng>(rng: &mut R) -> Self {
+        let codes = (0..GENOME_LENGTH).map(|_| rng.gen_range(0..16)).collect();
+        Self { codes }
+    }
+
+    /// A genome where every code decodes to the given instruction. Useful for
+    /// tests that need a deterministic instruction stream.
+    #[cfg(test)]
+    pub fn all(instruction: Instruction) -> Self {
         Self {
-            rules: [Rule {
-                threshold: f32::NEG_INFINITY,
-                softness: MIN_SOFTNESS,
-            }; INSTRUCTION_COUNT],
+            codes: vec![encode(instruction); GENOME_LENGTH],
         }
     }
 
-    pub fn random<R: Rng>(rng: &mut R, max_energy: u32) -> Self {
-        let max = max_energy as f32;
-        let mut rules = [Rule {
-            threshold: 0.0,
-            softness: MIN_SOFTNESS,
-        }; INSTRUCTION_COUNT];
-        for rule in &mut rules {
-            rule.threshold = rng.gen_range(0.0..=max);
-            rule.softness = rng.gen_range(MIN_SOFTNESS..=MAX_SOFTNESS);
-        }
-        Self { rules }
+    /// A genome whose decoded sequence matches the given instruction list,
+    /// repeated to fill the genome length. Cursor-walking it produces the
+    /// instructions in order, then loops.
+    #[cfg(test)]
+    pub fn from_instructions(instructions: &[Instruction]) -> Self {
+        assert!(!instructions.is_empty());
+        let codes = instructions
+            .iter()
+            .copied()
+            .cycle()
+            .take(GENOME_LENGTH)
+            .map(encode)
+            .collect();
+        Self { codes }
     }
 
-    pub fn probability_of_acting(&self, instruction: Instruction, energy: u32) -> f32 {
-        let rule = &self.rules[instruction.index()];
-        let z = (energy as f32 - rule.threshold) / rule.softness;
-        sigmoid(z)
+    pub fn len(&self) -> usize {
+        self.codes.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+
+    pub fn decode_at(&self, cursor: usize) -> Instruction {
+        decode(self.codes[cursor % self.codes.len()])
     }
 }
 
-fn sigmoid(z: f32) -> f32 {
-    1.0 / (1.0 + (-z).exp())
+#[cfg(test)]
+fn encode(instruction: Instruction) -> u8 {
+    match instruction {
+        Instruction::TurnRight => 0b0001,
+        Instruction::TurnLeft => 0b0010,
+        Instruction::MoveForward => 0b0011,
+        Instruction::DoNothing => 0b0100,
+        Instruction::RepeatPreviousMove => 0b0101,
+        Instruction::Split => 0b0110,
+    }
+}
+
+// The 0b0100 → DoNothing arm is equivalent to the catch-all `_ => DoNothing`.
+// Deleting it produces identical behavior, so cargo-mutants can't kill that
+// mutation. The arm is kept for symmetry with the other instruction codes.
+#[mutants::skip]
+fn decode(code: u8) -> Instruction {
+    match code {
+        0b0001 => Instruction::TurnRight,
+        0b0010 => Instruction::TurnLeft,
+        0b0011 => Instruction::MoveForward,
+        0b0100 => Instruction::DoNothing,
+        0b0101 => Instruction::RepeatPreviousMove,
+        0b0110 => Instruction::Split,
+        _ => Instruction::DoNothing,
+    }
 }
 
 #[cfg(test)]
@@ -58,134 +89,92 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::SeedableRng;
 
-    const TEST_MAX_ENERGY: u32 = 500;
-
-    fn random_genome(seed: u64) -> Genome {
-        let mut rng = SmallRng::seed_from_u64(seed);
-        Genome::random(&mut rng, TEST_MAX_ENERGY)
+    #[test]
+    fn an_empty_codes_genome_reports_is_empty_true() {
+        let genome = Genome { codes: vec![] };
+        assert!(genome.is_empty());
     }
 
     #[test]
-    fn near_the_threshold_the_probability_of_acting_is_close_to_one_half() {
-        // Probing at the integer-truncated threshold leaves at most one unit of
-        // input error; with softness >= 10 that's at most ~0.025 of probability.
+    fn a_random_genome_is_not_empty() {
         let mut rng = SmallRng::seed_from_u64(0);
-        let genome = Genome::random(&mut rng, TEST_MAX_ENERGY);
-
-        let threshold = genome.rules[Instruction::Split.index()].threshold;
-        let probability = genome.probability_of_acting(Instruction::Split, threshold as u32);
-
-        assert!((probability - 0.5).abs() < 0.05);
+        let genome = Genome::random(&mut rng);
+        assert!(!genome.is_empty());
     }
 
     #[test]
-    fn far_above_the_threshold_the_probability_approaches_one() {
-        let genome = random_genome(0);
-        let threshold = genome.rules[Instruction::Split.index()].threshold;
-        let softness = genome.rules[Instruction::Split.index()].softness;
-        // 10 softness widths above the threshold makes sigmoid effectively 1.
-        let energy = (threshold + 10.0 * softness) as u32;
+    fn random_genome_has_the_configured_length() {
+        let mut rng = SmallRng::seed_from_u64(0);
 
-        let probability = genome.probability_of_acting(Instruction::Split, energy);
+        let genome = Genome::random(&mut rng);
 
-        assert!(probability > 0.99);
+        assert_eq!(genome.len(), GENOME_LENGTH);
     }
 
     #[test]
-    fn far_below_the_threshold_the_probability_approaches_zero() {
-        // Pick a seed whose Split threshold is well above zero so we have room.
-        let genome = random_genome(7);
-        let threshold = genome.rules[Instruction::Split.index()].threshold;
-        let softness = genome.rules[Instruction::Split.index()].softness;
-        // Energy 10 softness widths below the threshold (clamped at 0).
-        let target = threshold - 10.0 * softness;
-        let energy = if target < 0.0 { 0 } else { target as u32 };
-        // Only meaningful if we're well below the threshold.
-        if (threshold - energy as f32) / softness < 5.0 {
-            return;
-        }
+    fn every_code_in_a_random_genome_is_a_four_bit_value() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let genome = Genome::random(&mut rng);
 
-        let probability = genome.probability_of_acting(Instruction::Split, energy);
-
-        assert!(probability < 0.01);
-    }
-
-    #[test]
-    fn random_thresholds_lie_within_the_zero_to_max_energy_range() {
-        // Sample many seeds — every drawn threshold should be in [0, max].
-        for seed in 0..20 {
-            let genome = random_genome(seed);
-            for rule in &genome.rules {
-                assert!(rule.threshold >= 0.0);
-                assert!(rule.threshold <= TEST_MAX_ENERGY as f32);
-            }
+        for code in &genome.codes {
+            assert!(*code < 16);
         }
     }
 
     #[test]
-    fn random_softness_values_are_at_least_the_minimum_softness() {
-        for seed in 0..20 {
-            let genome = random_genome(seed);
-            for rule in &genome.rules {
-                assert!(rule.softness >= MIN_SOFTNESS);
-                assert!(rule.softness <= MAX_SOFTNESS);
-            }
-        }
+    fn decoding_a_turn_right_code_returns_turn_right() {
+        let genome = Genome::all(Instruction::TurnRight);
+
+        assert_eq!(genome.decode_at(0), Instruction::TurnRight);
     }
 
     #[test]
-    fn different_instructions_have_independent_thresholds() {
-        // The genome must look up a different rule for each instruction. With a
-        // 6-rule genome drawn from a uniform distribution, different
-        // instructions should very rarely collide on a probability — if every
-        // instruction shared one rule (an indexing bug), they'd all match.
-        let genome = random_genome(0);
-        let energy = 250;
-        let probabilities = [
-            genome.probability_of_acting(Instruction::MoveForward, energy),
-            genome.probability_of_acting(Instruction::RepeatPreviousMove, energy),
-            genome.probability_of_acting(Instruction::DoNothing, energy),
-            genome.probability_of_acting(Instruction::TurnLeft, energy),
-            genome.probability_of_acting(Instruction::TurnRight, energy),
-            genome.probability_of_acting(Instruction::Split, energy),
-        ];
-        // At least three distinct probabilities must be observed.
-        let mut sorted = probabilities.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        sorted.dedup();
-        assert!(sorted.len() >= 3);
+    fn decoding_a_split_code_returns_split() {
+        let genome = Genome::all(Instruction::Split);
+
+        assert_eq!(genome.decode_at(0), Instruction::Split);
+    }
+
+    #[test]
+    fn unknown_codes_decode_to_do_nothing() {
+        let genome = Genome {
+            codes: vec![0b1111],
+        };
+
+        assert_eq!(genome.decode_at(0), Instruction::DoNothing);
+    }
+
+    #[test]
+    fn decoding_at_a_cursor_beyond_the_genome_wraps_around() {
+        let genome = Genome {
+            codes: vec![encode(Instruction::TurnLeft), encode(Instruction::Split)],
+        };
+
+        assert_eq!(genome.decode_at(0), Instruction::TurnLeft);
+        assert_eq!(genome.decode_at(1), Instruction::Split);
+        assert_eq!(genome.decode_at(2), Instruction::TurnLeft);
+        assert_eq!(genome.decode_at(3), Instruction::Split);
     }
 
     #[test]
     fn the_same_seed_produces_the_same_genome() {
-        let a = random_genome(42);
-        let b = random_genome(42);
+        let mut rng_a = SmallRng::seed_from_u64(42);
+        let mut rng_b = SmallRng::seed_from_u64(42);
 
-        for i in 0..INSTRUCTION_COUNT {
-            assert_eq!(a.rules[i].threshold, b.rules[i].threshold);
-            assert_eq!(a.rules[i].softness, b.rules[i].softness);
-        }
+        let a = Genome::random(&mut rng_a);
+        let b = Genome::random(&mut rng_b);
+
+        assert_eq!(a.codes, b.codes);
     }
 
     #[test]
-    fn a_cloned_genome_returns_the_same_probability_as_the_original() {
-        let original = random_genome(0);
+    fn a_cloned_genome_decodes_identically_to_the_original() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        let original = Genome::random(&mut rng);
         let cloned = original.clone();
 
-        for instruction in [
-            Instruction::MoveForward,
-            Instruction::RepeatPreviousMove,
-            Instruction::DoNothing,
-            Instruction::TurnLeft,
-            Instruction::TurnRight,
-            Instruction::Split,
-        ] {
-            for energy in [0, 100, 250, 400, 500] {
-                assert_eq!(
-                    original.probability_of_acting(instruction, energy),
-                    cloned.probability_of_acting(instruction, energy),
-                );
-            }
+        for cursor in 0..GENOME_LENGTH {
+            assert_eq!(original.decode_at(cursor), cloned.decode_at(cursor));
         }
     }
 }

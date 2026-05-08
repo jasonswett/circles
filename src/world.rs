@@ -1,4 +1,4 @@
-use crate::{Critter, Heading, Instruction, Pellet, PELLET_RADIUS};
+use crate::{Critter, Heading, Pellet, PELLET_RADIUS};
 use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 10;
@@ -8,7 +8,6 @@ const NUM_PELLETS: usize = 1000;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
-const INSTRUCTION_LIST_LENGTH: usize = 16;
 const STEP_SIZE: i32 = 12;
 
 pub struct World {
@@ -160,14 +159,12 @@ fn toroidal_delta(a: i32, b: i32, size: i32) -> i32 {
 }
 
 fn spawn_critter<R: Rng>(width: usize, height: usize, rng: &mut R) -> Critter {
-    let instructions = Instruction::random_list(rng, INSTRUCTION_LIST_LENGTH);
     let x = rng.gen_range(CRITTER_RADIUS..(width as i32 - CRITTER_RADIUS));
     let y = rng.gen_range(CRITTER_RADIUS..(height as i32 - CRITTER_RADIUS));
     Critter::new(
         x,
         y,
         Heading::random(rng),
-        instructions,
         TICKS_PER_INSTRUCTION,
         STEP_SIZE,
         INITIAL_ENERGY,
@@ -349,7 +346,7 @@ mod tests {
 
     mod splitting {
         use super::*;
-        use crate::{Critter, Heading, Instruction};
+        use crate::{Critter, Genome, Heading, Instruction};
 
         #[test]
         fn a_critter_that_splits_appears_twice_in_the_critter_list_after_a_tick() {
@@ -357,12 +354,11 @@ mod tests {
                 100,
                 100,
                 Heading::North,
-                vec![Instruction::Split],
                 1,
                 1,
                 60,
                 0,
-                crate::Genome::always_act(),
+                Genome::all(Instruction::Split),
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
@@ -375,19 +371,19 @@ mod tests {
 
     mod wrapping {
         use super::*;
-        use crate::{Critter, Heading, Instruction};
+        use crate::{Critter, Genome, Heading, Instruction};
 
         #[test]
         fn a_critter_that_walks_past_the_right_edge_wraps_to_the_left() {
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 TEST_WIDTH as i32 - 1,
                 50,
                 Heading::East,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 u32::MAX,
                 0,
+                Genome::all(Instruction::MoveForward),
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
@@ -399,15 +395,15 @@ mod tests {
 
         #[test]
         fn a_critter_that_walks_past_the_top_edge_wraps_to_the_bottom() {
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 50,
                 0,
                 Heading::North,
-                vec![Instruction::MoveForward],
                 1,
                 1,
                 u32::MAX,
                 0,
+                Genome::all(Instruction::MoveForward),
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
@@ -420,21 +416,21 @@ mod tests {
 
     mod eating {
         use super::*;
-        use crate::{Critter, Heading, Instruction, Pellet, PELLET_ENERGY};
+        use crate::{Critter, Genome, Heading, Instruction, Pellet, PELLET_ENERGY};
 
         const HUNGRY_INITIAL: u32 = 200;
         const STARTING_ENERGY: u32 = 10;
 
         fn hungry_critter(x: i32, y: i32) -> Critter {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 x,
                 y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 u32::MAX, // never executes
                 1,
                 HUNGRY_INITIAL,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             critter.lose_energy(HUNGRY_INITIAL - STARTING_ENERGY);
             critter
@@ -556,15 +552,15 @@ mod tests {
 
         #[test]
         fn a_critter_at_the_energy_cap_does_not_eat_an_overlapping_pellet() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 100,
                 100,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 u32::MAX,
                 1,
                 100,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             critter.gain_energy(crate::MAX_CRITTER_ENERGY); // saturates at MAX
             assert_eq!(critter.energy(), crate::MAX_CRITTER_ENERGY);
@@ -585,15 +581,15 @@ mod tests {
         #[test]
         fn eating_can_push_energy_past_initial_energy() {
             // Eating no longer caps at initial_energy: a critter can stockpile.
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 100,
                 100,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 u32::MAX,
                 1,
                 HUNGRY_INITIAL,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             let pellet = Pellet { x: 100, y: 100 };
             let mut world = World::with_critters_and_pellets(
@@ -718,7 +714,7 @@ mod tests {
 
     mod total_energy {
         use super::*;
-        use crate::{Critter, Heading, Instruction, Pellet, PELLET_ENERGY};
+        use crate::{Critter, Genome, Heading, Instruction, Pellet, PELLET_ENERGY};
 
         #[test]
         fn an_empty_world_has_zero_total_energy() {
@@ -729,25 +725,25 @@ mod tests {
 
         #[test]
         fn total_energy_sums_each_critters_current_energy() {
-            let critter_a = Critter::new(
+            let critter_a = Critter::with_genome(
                 50,
                 50,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 30,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
-            let critter_b = Critter::new(
+            let critter_b = Critter::with_genome(
                 70,
                 70,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 25,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             let world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -773,15 +769,15 @@ mod tests {
 
         #[test]
         fn total_energy_combines_critters_and_pellets() {
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 50,
                 50,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 1,
                 1,
                 40,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             let pellet = Pellet { x: 20, y: 20 };
             let world = World::with_critters_and_pellets(
@@ -797,18 +793,18 @@ mod tests {
 
     mod reap_dead_critters {
         use super::*;
-        use crate::{Critter, Heading, Instruction};
+        use crate::{Critter, Genome, Heading, Instruction};
 
         fn critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 x,
                 y,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 u32::MAX,
                 1,
                 100,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             critter.lose_energy(100 - energy);
             critter
@@ -896,7 +892,7 @@ mod tests {
 
     mod replenish_pellets {
         use super::*;
-        use crate::{Critter, Heading, Instruction, PELLET_ENERGY};
+        use crate::{Critter, Genome, Heading, Instruction, PELLET_ENERGY};
 
         fn empty_world() -> World {
             World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
@@ -980,15 +976,15 @@ mod tests {
             // The original target = critter_energy + pellet_energy. If a critter
             // exists with substantial energy, fewer pellets are needed to top up.
             let mut world = empty_world();
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 50,
                 50,
                 Heading::North,
-                vec![Instruction::DoNothing],
                 u32::MAX,
                 1,
                 100,
                 0,
+                Genome::all(Instruction::DoNothing),
             );
             world.critters.push(critter);
             // Target = 100 (critter) + 5 pellets * 100 (pellet energy hypothetical) — let's be concrete:
@@ -1003,20 +999,20 @@ mod tests {
 
     mod population_too_low {
         use super::*;
-        use crate::{Critter, Heading, Instruction};
+        use crate::{Critter, Genome, Heading, Instruction};
 
         fn world_with_critter_count(count: usize) -> World {
             let critters = (0..count)
                 .map(|i| {
-                    Critter::new(
+                    Critter::with_genome(
                         i as i32,
                         0,
                         Heading::North,
-                        vec![Instruction::DoNothing],
                         1,
                         1,
                         100,
                         i as u64,
+                        Genome::all(Instruction::DoNothing),
                     )
                 })
                 .collect();
