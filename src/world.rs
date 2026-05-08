@@ -1,14 +1,14 @@
 use crate::{Critter, Heading, Instruction, Pellet, PELLET_RADIUS};
 use rand::Rng;
 
-pub const CRITTER_RADIUS: i32 = 20;
+pub const CRITTER_RADIUS: i32 = 10;
 
-const NUM_CRITTERS: usize = 8;
+const NUM_CRITTERS: usize = 16;
 const NUM_PELLETS: usize = 120;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
 const INSTRUCTION_LIST_LENGTH: usize = 8;
-const STEP_SIZE: i32 = 25;
+const STEP_SIZE: i32 = 12;
 
 pub struct World {
     width: usize,
@@ -170,16 +170,43 @@ mod tests {
 
         #[test]
         fn every_critter_spawns_fully_inside_the_world_bounds() {
-            let mut rng = StdRng::seed_from_u64(0);
-
-            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-
-            for critter in world.critters() {
-                assert!(critter.x() >= CRITTER_RADIUS);
-                assert!(critter.x() < TEST_WIDTH as i32 - CRITTER_RADIUS);
-                assert!(critter.y() >= CRITTER_RADIUS);
-                assert!(critter.y() < TEST_HEIGHT as i32 - CRITTER_RADIUS);
+            // Use multiple seeds so we exhaust the rng range and reliably catch
+            // boundary-mutation bugs in the spawn rectangle.
+            for seed in 0..50 {
+                let mut rng = StdRng::seed_from_u64(seed);
+                let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+                for critter in world.critters() {
+                    assert!(critter.x() >= CRITTER_RADIUS);
+                    assert!(critter.x() < TEST_WIDTH as i32 - CRITTER_RADIUS);
+                    assert!(critter.y() >= CRITTER_RADIUS);
+                    assert!(critter.y() < TEST_HEIGHT as i32 - CRITTER_RADIUS);
+                }
             }
+        }
+
+        #[test]
+        fn critters_spread_across_the_full_world_width_and_height() {
+            // Across many spawn batches, at least one critter must land in the
+            // right half and at least one in the bottom half — proving the spawn
+            // range is the full canvas, not a clipped corner.
+            let mut any_right = false;
+            let mut any_bottom = false;
+            let half_width = (TEST_WIDTH as i32) / 2;
+            let half_height = (TEST_HEIGHT as i32) / 2;
+            for seed in 0..50 {
+                let mut rng = StdRng::seed_from_u64(seed);
+                let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+                for critter in world.critters() {
+                    if critter.x() >= half_width {
+                        any_right = true;
+                    }
+                    if critter.y() >= half_height {
+                        any_bottom = true;
+                    }
+                }
+            }
+            assert!(any_right);
+            assert!(any_bottom);
         }
     }
 
@@ -408,7 +435,7 @@ mod tests {
 
         #[test]
         fn a_pellet_just_inside_the_eating_distance_is_consumed() {
-            // Eating distance is CRITTER_RADIUS + PELLET_RADIUS = 24.
+            // Eating distance is CRITTER_RADIUS + PELLET_RADIUS.
             // Place pellet at distance 23 — strictly less than 24, eaten.
             let critter = hungry_critter(100, 100);
             let pellet = Pellet {
@@ -428,12 +455,13 @@ mod tests {
         }
 
         #[test]
-        fn a_pellet_diagonally_just_outside_the_eating_distance_is_not_consumed() {
-            // dx = dy = 20: euclidean distance ≈ 28.3, beyond the 24-pixel eating
-            // distance. Diagonal placement ensures both axes contribute, so the
-            // distance formula is exercised on both coordinates.
+        fn a_pellet_outside_the_eating_distance_along_a_dominant_axis_is_not_consumed() {
+            // Asymmetric placement (small dx, large dy) so both axes' squared
+            // contributions are distinguishable: the distance formula must square
+            // each component, not just sum them or treat them as identical.
+            // With dx=2, dy=15: dx² + dy² = 4 + 225 = 229 > eat_distance_squared.
             let critter = hungry_critter(100, 100);
-            let pellet = Pellet { x: 120, y: 120 };
+            let pellet = Pellet { x: 102, y: 115 };
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
