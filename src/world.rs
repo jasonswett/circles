@@ -4,10 +4,10 @@ use rand::Rng;
 pub const CRITTER_RADIUS: i32 = 10;
 
 const NUM_CRITTERS: usize = 16;
-const NUM_PELLETS: usize = 120;
+const NUM_PELLETS: usize = 1000;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
-const INSTRUCTION_LIST_LENGTH: usize = 8;
+const INSTRUCTION_LIST_LENGTH: usize = 16;
 const STEP_SIZE: i32 = 12;
 
 pub struct World {
@@ -370,7 +370,7 @@ mod tests {
         use crate::{Critter, Heading, Instruction, Pellet, PELLET_ENERGY};
 
         const HUNGRY_INITIAL: u32 = 60;
-        const STARTING_ENERGY: u32 = 30;
+        const STARTING_ENERGY: u32 = 10;
 
         fn hungry_critter(x: i32, y: i32) -> Critter {
             let mut critter = Critter::new(
