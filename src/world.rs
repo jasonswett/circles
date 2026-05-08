@@ -56,6 +56,12 @@ impl World {
         &self.pellets
     }
 
+    pub fn total_energy(&self) -> u32 {
+        let critter_energy: u32 = self.critters.iter().map(|c| c.energy()).sum();
+        let pellet_energy = self.pellets.len() as u32 * crate::PELLET_ENERGY;
+        critter_energy + pellet_energy
+    }
+
     pub fn tick(&mut self) {
         let mut children = Vec::new();
         for critter in &mut self.critters {
@@ -646,6 +652,82 @@ mod tests {
 
             assert_eq!(world.pellets().len(), NUM_PELLETS);
             assert_ne!(world.pellets(), original.as_slice());
+        }
+    }
+
+    mod total_energy {
+        use super::*;
+        use crate::{Critter, Heading, Instruction, Pellet, PELLET_ENERGY};
+
+        #[test]
+        fn an_empty_world_has_zero_total_energy() {
+            let world = World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
+
+            assert_eq!(world.total_energy(), 0);
+        }
+
+        #[test]
+        fn total_energy_sums_each_critters_current_energy() {
+            let critter_a = Critter::new(
+                50,
+                50,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+                30,
+            );
+            let critter_b = Critter::new(
+                70,
+                70,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+                25,
+            );
+            let world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_a, critter_b],
+                vec![],
+            );
+
+            assert_eq!(world.total_energy(), 55);
+        }
+
+        #[test]
+        fn total_energy_counts_each_pellet_at_pellet_energy_value() {
+            let pellets = vec![
+                Pellet { x: 10, y: 10 },
+                Pellet { x: 20, y: 20 },
+                Pellet { x: 30, y: 30 },
+            ];
+            let world = World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], pellets);
+
+            assert_eq!(world.total_energy(), 3 * PELLET_ENERGY);
+        }
+
+        #[test]
+        fn total_energy_combines_critters_and_pellets() {
+            let critter = Critter::new(
+                50,
+                50,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+                40,
+            );
+            let pellet = Pellet { x: 20, y: 20 };
+            let world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
+
+            assert_eq!(world.total_energy(), 40 + PELLET_ENERGY);
         }
     }
 }

@@ -1,9 +1,13 @@
-use circles::{Renderer, World, CRITTER_RADIUS};
+use circles::{text_pixels, Renderer, World, CRITTER_RADIUS};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
+const TEXT_COLOR: u32 = 0xFF_FF_FF;
+const TEXT_SCALE: usize = 4;
+const TEXT_MARGIN: usize = 16;
+const ENERGY_REFRESH_FRAMES: u32 = 30;
 
 #[repr(C)]
 struct CGSize {
@@ -50,6 +54,8 @@ fn main() {
     let mut rng = thread_rng();
     let mut world = World::new(width, height, &mut rng);
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
+    let mut frame_counter: u32 = 0;
+    let mut displayed_total_energy = world.total_energy();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
@@ -58,6 +64,11 @@ fn main() {
 
         world.tick();
 
+        if frame_counter.is_multiple_of(ENERGY_REFRESH_FRAMES) {
+            displayed_total_energy = world.total_energy();
+        }
+        frame_counter = frame_counter.wrapping_add(1);
+
         frame_pixels.fill(BACKGROUND_COLOR);
         for pellet in world.pellets() {
             Renderer::draw_pellet(pellet, &mut frame_pixels, width, height);
@@ -65,9 +76,25 @@ fn main() {
         for critter in world.critters() {
             Renderer::draw(critter, CRITTER_RADIUS, &mut frame_pixels, width, height);
         }
+        draw_total_energy(displayed_total_energy, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
             .expect("Unable to update window");
+    }
+}
+
+fn draw_total_energy(value: u32, buffer: &mut [u32], width: usize, height: usize) {
+    let text = value.to_string();
+    let pixels = text_pixels(&text, TEXT_SCALE);
+    let text_width = pixels.iter().map(|&(x, _)| x + 1).max().unwrap_or(0);
+    let origin_x = width.saturating_sub(text_width + TEXT_MARGIN);
+    let origin_y = TEXT_MARGIN;
+    for (x, y) in pixels {
+        let px = origin_x + x;
+        let py = origin_y + y;
+        if px < width && py < height {
+            buffer[py * width + px] = TEXT_COLOR;
+        }
     }
 }
