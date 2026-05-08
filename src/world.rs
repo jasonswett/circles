@@ -57,10 +57,15 @@ impl World {
     }
 
     pub fn tick(&mut self) {
+        let mut children = Vec::new();
         for critter in &mut self.critters {
-            critter.tick();
+            if let Some(mut child) = critter.tick() {
+                child.wrap_position(self.width as i32, self.height as i32);
+                children.push(child);
+            }
             critter.wrap_position(self.width as i32, self.height as i32);
         }
+        self.critters.extend(children);
         self.consume_pellets();
     }
 
@@ -264,6 +269,23 @@ mod tests {
         fn delta_just_above_half_size_wraps_to_negative() {
             // (5 - 100).rem_euclid(200) = 105. > 100 → returns 105 - 200 = -95.
             assert_eq!(toroidal_delta(5, 100, 200), -95);
+        }
+    }
+
+    mod splitting {
+        use super::*;
+        use crate::{Critter, Heading, Instruction};
+
+        #[test]
+        fn a_critter_that_splits_appears_twice_in_the_critter_list_after_a_tick() {
+            let splitter =
+                Critter::new(100, 100, Heading::North, vec![Instruction::Split], 1, 1, 60);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
+
+            world.tick();
+
+            assert_eq!(world.critters().len(), 2);
         }
     }
 

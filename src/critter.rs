@@ -73,29 +73,30 @@ impl Critter {
         self.y = self.y.rem_euclid(height);
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> Option<Critter> {
         self.tick_counter += 1;
         if self.tick_counter < self.ticks_per_instruction {
-            return;
+            return None;
         }
         self.tick_counter = 0;
 
         if self.instructions.is_empty() {
-            return;
+            return None;
         }
 
         if self.energy == 0 {
-            return;
+            return None;
         }
 
         let instruction = self.instructions[self.next_instruction_index];
         self.next_instruction_index = (self.next_instruction_index + 1) % self.instructions.len();
 
-        self.execute(instruction);
-        self.energy -= 1;
+        let child = self.execute(instruction);
+        self.energy = self.energy.saturating_sub(1);
+        child
     }
 
-    fn execute(&mut self, instruction: Instruction) {
+    fn execute(&mut self, instruction: Instruction) -> Option<Critter> {
         match instruction {
             Instruction::MoveForward => {
                 let (dx, dy) = self.heading.offset();
@@ -107,23 +108,57 @@ impl Critter {
                 self.x += dx * step;
                 self.y += dy * step;
                 self.last_executed = Some(Instruction::MoveForward);
+                None
             }
             Instruction::TurnLeft => {
                 self.heading = self.heading.turn_left();
                 self.last_executed = Some(Instruction::TurnLeft);
+                None
             }
             Instruction::TurnRight => {
                 self.heading = self.heading.turn_right();
                 self.last_executed = Some(Instruction::TurnRight);
+                None
             }
             Instruction::DoNothing => {
                 self.last_executed = Some(Instruction::DoNothing);
+                None
             }
             Instruction::RepeatPreviousMove => {
                 if let Some(previous) = self.last_executed {
-                    self.execute(previous);
+                    self.execute(previous)
+                } else {
+                    None
                 }
             }
+            Instruction::Split => {
+                let child = self.spawn_child();
+                self.energy /= 2;
+                self.last_executed = Some(Instruction::Split);
+                Some(child)
+            }
+        }
+    }
+
+    fn spawn_child(&self) -> Critter {
+        let (dx, dy) = self.heading.offset();
+        let offset = if self.heading.is_diagonal() {
+            ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
+        } else {
+            self.step_size
+        };
+        Critter {
+            x: self.x - dx * offset,
+            y: self.y - dy * offset,
+            heading: self.heading,
+            instructions: self.instructions.clone(),
+            next_instruction_index: self.next_instruction_index,
+            last_executed: None,
+            ticks_per_instruction: self.ticks_per_instruction,
+            tick_counter: 0,
+            step_size: self.step_size,
+            energy: self.energy / 2,
+            initial_energy: self.initial_energy,
         }
     }
 }
@@ -706,6 +741,240 @@ mod tests {
             critter.wrap_position(WIDTH, HEIGHT);
 
             assert_eq!(critter.x(), 7);
+        }
+    }
+
+    mod split {
+        use super::*;
+
+        const INITIAL_ENERGY: u32 = 60;
+
+        fn splitter() -> Critter {
+            Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::Split],
+                1,
+                1,
+                INITIAL_ENERGY,
+            )
+        }
+
+        #[test]
+        fn ticking_a_split_instruction_returns_a_child_critter() {
+            let mut critter = splitter();
+
+            let child = critter.tick();
+
+            assert!(child.is_some());
+        }
+
+        #[test]
+        fn the_child_receives_half_of_the_parents_pre_split_energy() {
+            let mut parent = splitter();
+
+            let child = parent.tick().unwrap();
+
+            assert_eq!(child.energy(), INITIAL_ENERGY / 2);
+        }
+
+        #[test]
+        fn the_parent_keeps_half_of_its_pre_split_energy_minus_the_instruction_cost() {
+            let mut parent = splitter();
+
+            parent.tick();
+
+            assert_eq!(parent.energy(), INITIAL_ENERGY / 2 - 1);
+        }
+
+        #[test]
+        fn the_child_inherits_the_parents_heading() {
+            let mut parent = splitter();
+
+            let child = parent.tick().unwrap();
+
+            assert_eq!(child.heading(), Heading::North);
+        }
+
+        #[test]
+        fn the_child_inherits_the_parents_initial_energy() {
+            let mut parent = splitter();
+
+            let child = parent.tick().unwrap();
+
+            assert_eq!(child.initial_energy(), INITIAL_ENERGY);
+        }
+
+        #[test]
+        fn the_child_spawns_one_step_behind_the_parent() {
+            // Parent facing North at (10, 10) with step_size 1: child should appear
+            // one pixel south, at (10, 11) — directly behind.
+            let mut parent = splitter();
+
+            let child = parent.tick().unwrap();
+
+            assert_eq!((child.x(), child.y()), (START_X, START_Y + 1));
+        }
+
+        #[test]
+        fn a_child_spawned_facing_east_appears_one_step_west_of_the_parent() {
+            const STEP_SIZE: i32 = 5;
+            let mut parent = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::Split],
+                1,
+                STEP_SIZE,
+                INITIAL_ENERGY,
+            );
+
+            let child = parent.tick().unwrap();
+
+            assert_eq!((child.x(), child.y()), (START_X - STEP_SIZE, START_Y));
+        }
+
+        #[test]
+        fn a_child_spawned_facing_southeast_uses_the_diagonal_scaled_offset() {
+            // step_size 10, scaled by √2/2 ≈ 0.707 and rounded → 7. Child appears
+            // northwest of parent (opposite of SouthEast), so at (parent - 7, parent - 7).
+            const STEP_SIZE: i32 = 10;
+            const DIAGONAL_OFFSET: i32 = 7;
+            let mut parent = Critter::new(
+                START_X,
+                START_Y,
+                Heading::SouthEast,
+                vec![Instruction::Split],
+                1,
+                STEP_SIZE,
+                INITIAL_ENERGY,
+            );
+
+            let child = parent.tick().unwrap();
+
+            assert_eq!(
+                (child.x(), child.y()),
+                (START_X - DIAGONAL_OFFSET, START_Y - DIAGONAL_OFFSET)
+            );
+        }
+
+        #[test]
+        fn the_child_can_tick_independently_after_being_spawned() {
+            // The child should have its own tick_counter starting fresh, and inherit
+            // the parent's instruction list — so it can move on its own.
+            let mut parent = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::Split, Instruction::MoveForward],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            let mut child = parent.tick().unwrap();
+            let initial_child_x = child.x();
+            child.tick(); // executes the second instruction (MoveForward)
+
+            assert_eq!(child.x(), initial_child_x + 1);
+        }
+
+        #[test]
+        fn move_forward_does_not_produce_a_child() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            assert!(critter.tick().is_none());
+        }
+
+        #[test]
+        fn turn_left_does_not_produce_a_child() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::TurnLeft],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            assert!(critter.tick().is_none());
+        }
+
+        #[test]
+        fn do_nothing_does_not_produce_a_child() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            assert!(critter.tick().is_none());
+        }
+
+        #[test]
+        fn a_tick_before_the_threshold_does_not_produce_a_child() {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::Split],
+                10,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            assert!(critter.tick().is_none());
+        }
+
+        #[test]
+        fn a_split_at_one_energy_does_not_underflow() {
+            // Pre-tick energy = 1: passes the energy>0 guard, Split halves to 0,
+            // then the instruction-cost decrement must not underflow.
+            let mut parent = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::Split],
+                1,
+                1,
+                1,
+            );
+
+            parent.tick();
+
+            assert_eq!(parent.energy(), 0);
+        }
+
+        #[test]
+        fn a_split_when_repeating_a_previous_split_still_returns_a_child() {
+            let mut parent = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![Instruction::Split, Instruction::RepeatPreviousMove],
+                1,
+                1,
+                INITIAL_ENERGY,
+            );
+
+            parent.tick(); // first split
+            let second_child = parent.tick(); // repeat → split again
+
+            assert!(second_child.is_some());
         }
     }
 }

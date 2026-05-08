@@ -7,16 +7,18 @@ pub enum Instruction {
     DoNothing,
     TurnLeft,
     TurnRight,
+    Split,
 }
 
 impl Instruction {
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        match rng.gen_range(0..5) {
+        match rng.gen_range(0..6) {
             0 => Instruction::MoveForward,
             1 => Instruction::RepeatPreviousMove,
             2 => Instruction::DoNothing,
             3 => Instruction::TurnLeft,
-            _ => Instruction::TurnRight,
+            4 => Instruction::TurnRight,
+            _ => Instruction::Split,
         }
     }
 
@@ -41,7 +43,7 @@ mod tests {
             for _ in 0..1000 {
                 seen.insert(Instruction::random(&mut rng));
             }
-            assert_eq!(seen.len(), 5);
+            assert_eq!(seen.len(), 6);
         }
     }
 
