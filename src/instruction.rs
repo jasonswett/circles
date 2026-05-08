@@ -10,6 +10,21 @@ pub enum Instruction {
     Split,
 }
 
+pub const INSTRUCTION_COUNT: usize = 6;
+
+impl Instruction {
+    pub fn index(self) -> usize {
+        match self {
+            Instruction::MoveForward => 0,
+            Instruction::RepeatPreviousMove => 1,
+            Instruction::DoNothing => 2,
+            Instruction::TurnLeft => 3,
+            Instruction::TurnRight => 4,
+            Instruction::Split => 5,
+        }
+    }
+}
+
 impl Instruction {
     pub fn random<R: Rng>(rng: &mut R) -> Self {
         // Each common instruction has weight 10; Split has weight 1. Total 51.

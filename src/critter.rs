@@ -1,4 +1,4 @@
-use crate::{Heading, Instruction};
+use crate::{Genome, Heading, Instruction};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
@@ -19,6 +19,7 @@ pub struct Critter {
     energy: u32,
     initial_energy: u32,
     rng: SmallRng,
+    genome: Genome,
 }
 
 impl Critter {
@@ -32,6 +33,8 @@ impl Critter {
         initial_energy: u32,
         seed: u64,
     ) -> Self {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let genome = Genome::random(&mut rng, MAX_CRITTER_ENERGY);
         Self {
             x,
             y,
@@ -47,7 +50,40 @@ impl Critter {
             step_size,
             energy: initial_energy,
             initial_energy,
-            rng: SmallRng::seed_from_u64(seed),
+            rng,
+            genome,
+        }
+    }
+
+    /// Test-only: build a critter with a specific genome.
+    #[cfg(test)]
+    pub fn with_genome(
+        x: i32,
+        y: i32,
+        heading: Heading,
+        instructions: Vec<Instruction>,
+        ticks_per_instruction: u32,
+        step_size: i32,
+        initial_energy: u32,
+        seed: u64,
+        genome: Genome,
+    ) -> Self {
+        let rng = SmallRng::seed_from_u64(seed);
+        Self {
+            x,
+            y,
+            heading,
+            instructions,
+            next_instruction_index: 0,
+            last_executed: None,
+            ticks_per_instruction,
+            tick_counter: 0,
+            next_fire_threshold: ticks_per_instruction,
+            step_size,
+            energy: initial_energy,
+            initial_energy,
+            rng,
+            genome,
         }
     }
 
@@ -69,10 +105,6 @@ impl Critter {
 
     pub fn initial_energy(&self) -> u32 {
         self.initial_energy
-    }
-
-    pub fn can_split(&self) -> bool {
-        self.energy >= 2 * self.initial_energy
     }
 
     pub fn gain_energy(&mut self, amount: u32) {
@@ -107,17 +139,28 @@ impl Critter {
         let instruction = self.instructions[self.next_instruction_index];
         self.next_instruction_index = (self.next_instruction_index + 1) % self.instructions.len();
 
-        let child = if instruction == Instruction::Split && !self.can_split() {
-            // Insufficient energy to split: the instruction still costs the
-            // critter its usual 1 energy and the pointer still advances, but
-            // no child is produced.
-            self.last_executed = Some(Instruction::Split);
-            None
-        } else {
+        // Each instruction is gated by the critter's genome. The probability of
+        // acting is a sigmoid of energy around a per-critter threshold; a "no"
+        // roll still consumes the instruction slot and the usual one energy,
+        // but the action does not occur and `last_executed` is left untouched
+        // so RepeatPreviousMove keeps referring to whatever did execute last.
+        let probability = self.genome.probability_of_acting(instruction, self.energy);
+        let child = if self.roll_against(probability) {
             self.execute(instruction)
+        } else {
+            None
         };
         self.energy = self.energy.saturating_sub(1);
         child
+    }
+
+    // The `<` vs `<=` mutation is an equivalent mutant for our continuous f32
+    // rolls: `rng.gen::<f32>()` produces values in [0, 1), so the boundary case
+    // `roll == probability` happens with probability 0 and is unobservable.
+    #[mutants::skip]
+    fn roll_against(&mut self, probability: f32) -> bool {
+        let roll: f32 = self.rng.gen();
+        roll < probability
     }
 
     fn execute(&mut self, instruction: Instruction) -> Option<Critter> {
@@ -190,6 +233,7 @@ impl Critter {
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
             rng: child_rng,
+            genome: self.genome.clone(),
         }
     }
 }
@@ -215,14 +259,34 @@ mod tests {
 
         #[test]
         fn it_starts_at_the_given_position() {
-            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX, 0);
+            let critter = Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::always_act(),
+            );
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
 
         #[test]
         fn it_starts_with_the_given_heading() {
-            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX, 0);
+            let critter = Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::always_act(),
+            );
 
             assert_eq!(critter.heading(), Heading::North);
         }
@@ -233,7 +297,7 @@ mod tests {
 
         #[test]
         fn it_does_not_execute_an_instruction_before_n_ticks_have_passed() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -242,6 +306,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -253,7 +318,7 @@ mod tests {
 
         #[test]
         fn it_executes_an_instruction_on_the_nth_tick() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -262,6 +327,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             for _ in 0..TICKS_PER_INSTRUCTION {
@@ -273,7 +339,7 @@ mod tests {
 
         #[test]
         fn move_forward_moves_one_pixel_in_the_heading_direction_with_unit_step_size() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -282,6 +348,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -292,7 +359,7 @@ mod tests {
         #[test]
         fn move_forward_advances_x_by_the_configured_step_size() {
             const STEP_SIZE: i32 = 25;
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -301,6 +368,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -311,7 +379,7 @@ mod tests {
         #[test]
         fn move_forward_advances_y_by_the_configured_step_size() {
             const STEP_SIZE: i32 = 25;
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::South,
@@ -320,6 +388,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -332,7 +401,7 @@ mod tests {
             // step_size 10, scaled by √2/2 ≈ 0.707 and rounded → 7.
             const STEP_SIZE: i32 = 10;
             const DIAGONAL_STEP: i32 = 7;
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::SouthEast,
@@ -341,6 +410,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -355,7 +425,7 @@ mod tests {
         fn move_forward_on_a_northwest_diagonal_subtracts_the_scaled_step_from_each_axis() {
             const STEP_SIZE: i32 = 10;
             const DIAGONAL_STEP: i32 = 7;
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::NorthWest,
@@ -364,6 +434,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -376,7 +447,7 @@ mod tests {
 
         #[test]
         fn turn_left_changes_the_heading() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -385,6 +456,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -394,7 +466,7 @@ mod tests {
 
         #[test]
         fn turn_left_does_not_change_the_position() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -403,6 +475,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -412,7 +485,7 @@ mod tests {
 
         #[test]
         fn turn_right_changes_the_heading() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -421,6 +494,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -430,7 +504,7 @@ mod tests {
 
         #[test]
         fn turn_right_does_not_change_the_position() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -439,6 +513,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -448,7 +523,7 @@ mod tests {
 
         #[test]
         fn do_nothing_leaves_position_unchanged() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -457,6 +532,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -466,7 +542,7 @@ mod tests {
 
         #[test]
         fn do_nothing_leaves_heading_unchanged() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -475,6 +551,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -484,7 +561,7 @@ mod tests {
 
         #[test]
         fn each_tick_consumes_the_next_instruction_in_the_list() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -493,6 +570,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -504,7 +582,7 @@ mod tests {
 
         #[test]
         fn the_instruction_list_loops_when_exhausted() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -513,6 +591,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -528,7 +607,7 @@ mod tests {
 
         #[test]
         fn it_re_executes_the_previously_executed_instruction() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -537,6 +616,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -547,7 +627,7 @@ mod tests {
 
         #[test]
         fn at_start_with_no_previous_move_it_does_not_change_position() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -556,6 +636,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -565,7 +646,7 @@ mod tests {
 
         #[test]
         fn at_start_with_no_previous_move_it_does_not_change_heading() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -574,6 +655,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -588,7 +670,7 @@ mod tests {
             //   tick 2: Repeat -> Right  — SouthEast -> South
             //   tick 3: Repeat -> Right  — South -> SouthWest
             // The third tick must reach back through two repeats to find TurnRight.
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -601,6 +683,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -618,7 +701,7 @@ mod tests {
 
         #[test]
         fn a_new_critter_starts_with_the_given_initial_energy() {
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -627,6 +710,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             assert_eq!(critter.energy(), INITIAL_ENERGY);
@@ -634,7 +718,7 @@ mod tests {
 
         #[test]
         fn initial_energy_reports_the_value_passed_at_construction() {
-            let critter = Critter::new(
+            let critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -643,6 +727,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             assert_eq!(critter.initial_energy(), INITIAL_ENERGY);
@@ -650,7 +735,7 @@ mod tests {
 
         #[test]
         fn initial_energy_does_not_decrease_when_energy_is_consumed() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -659,6 +744,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -668,7 +754,7 @@ mod tests {
 
         #[test]
         fn executing_an_instruction_decrements_energy_by_one() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -677,6 +763,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -686,7 +773,7 @@ mod tests {
 
         #[test]
         fn ticks_before_the_threshold_do_not_decrement_energy() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -695,6 +782,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -706,7 +794,7 @@ mod tests {
 
         #[test]
         fn at_zero_energy_move_forward_does_not_move_the_critter() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -715,6 +803,7 @@ mod tests {
                 1,
                 0,
                 0,
+                Genome::always_act(),
             );
 
             critter.tick();
@@ -724,7 +813,7 @@ mod tests {
 
         #[test]
         fn ticking_at_zero_energy_keeps_energy_at_zero() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -733,6 +822,7 @@ mod tests {
                 1,
                 0,
                 0,
+                Genome::always_act(),
             );
 
             for _ in 0..10 {
@@ -750,7 +840,17 @@ mod tests {
         const HEIGHT: i32 = 100;
 
         fn make_critter_at(x: i32, y: i32) -> Critter {
-            Critter::new(x, y, Heading::North, vec![], 1, 1, u32::MAX, 0)
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::always_act(),
+            )
         }
 
         #[test]
@@ -810,14 +910,15 @@ mod tests {
 
     mod split {
         use super::*;
+        use crate::Genome;
 
         const INITIAL_ENERGY: u32 = 60;
-        // Splits require energy ≥ 2 × initial_energy, so the splitter starts
-        // with enough stockpiled energy to qualify.
+        // Pre-split energy is the parent's energy at the moment of splitting; the
+        // child gets half and the parent retains half (minus the instruction cost).
         const SPLITTER_ENERGY: u32 = 2 * INITIAL_ENERGY;
 
         fn splitter() -> Critter {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -826,6 +927,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
             critter.gain_energy(SPLITTER_ENERGY - INITIAL_ENERGY);
             critter
@@ -890,7 +992,7 @@ mod tests {
         #[test]
         fn a_child_spawned_facing_east_appears_one_step_west_of_the_parent() {
             const STEP_SIZE: i32 = 5;
-            let mut parent = Critter::new(
+            let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -899,6 +1001,7 @@ mod tests {
                 STEP_SIZE,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
@@ -913,7 +1016,7 @@ mod tests {
             // northwest of parent (opposite of SouthEast), so at (parent - 7, parent - 7).
             const STEP_SIZE: i32 = 10;
             const DIAGONAL_OFFSET: i32 = 7;
-            let mut parent = Critter::new(
+            let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::SouthEast,
@@ -922,6 +1025,7 @@ mod tests {
                 STEP_SIZE,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
@@ -937,7 +1041,7 @@ mod tests {
         fn the_child_can_tick_independently_after_being_spawned() {
             // The child should have its own tick_counter starting fresh, and inherit
             // the parent's instruction list — so it can move on its own.
-            let mut parent = Critter::new(
+            let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -946,6 +1050,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
@@ -958,7 +1063,7 @@ mod tests {
 
         #[test]
         fn move_forward_does_not_produce_a_child() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -967,6 +1072,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             assert!(critter.tick().is_none());
@@ -974,7 +1080,7 @@ mod tests {
 
         #[test]
         fn turn_left_does_not_produce_a_child() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -983,6 +1089,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             assert!(critter.tick().is_none());
@@ -990,7 +1097,7 @@ mod tests {
 
         #[test]
         fn do_nothing_does_not_produce_a_child() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -999,6 +1106,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             assert!(critter.tick().is_none());
@@ -1006,7 +1114,7 @@ mod tests {
 
         #[test]
         fn a_tick_before_the_threshold_does_not_produce_a_child() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -1015,6 +1123,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
 
             assert!(critter.tick().is_none());
@@ -1022,7 +1131,7 @@ mod tests {
 
         #[test]
         fn a_split_when_repeating_a_previous_split_still_returns_a_child() {
-            let mut parent = Critter::new(
+            let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -1031,6 +1140,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
+                Genome::always_act(),
             );
             // Need enough energy for two splits: pre-split must be ≥ 2 × initial.
             // After the first split, parent will have ~half — so we start with
@@ -1088,7 +1198,7 @@ mod tests {
         const BASE_TICKS: u32 = 5;
 
         fn movement_only_critter(seed: u64) -> Critter {
-            Critter::new(
+            Critter::with_genome(
                 START_X,
                 START_Y,
                 Heading::East,
@@ -1097,6 +1207,7 @@ mod tests {
                 1,
                 u32::MAX,
                 seed,
+                Genome::always_act(),
             )
         }
 
@@ -1138,128 +1249,6 @@ mod tests {
         }
     }
 
-    mod can_split {
-        use super::*;
-
-        const INITIAL_ENERGY: u32 = 60;
-
-        fn critter_with_energy(energy: u32) -> Critter {
-            let mut critter = Critter::new(
-                START_X,
-                START_Y,
-                Heading::North,
-                vec![],
-                1,
-                1,
-                INITIAL_ENERGY,
-                0,
-            );
-            if energy < INITIAL_ENERGY {
-                critter.lose_energy(INITIAL_ENERGY - energy);
-            } else if energy > INITIAL_ENERGY {
-                critter.gain_energy(energy - INITIAL_ENERGY);
-            }
-            critter
-        }
-
-        #[test]
-        fn a_critter_at_initial_energy_cannot_split() {
-            let critter = critter_with_energy(INITIAL_ENERGY);
-
-            assert!(!critter.can_split());
-        }
-
-        #[test]
-        fn a_critter_just_below_double_initial_energy_cannot_split() {
-            let critter = critter_with_energy(2 * INITIAL_ENERGY - 1);
-
-            assert!(!critter.can_split());
-        }
-
-        #[test]
-        fn a_critter_at_exactly_double_initial_energy_can_split() {
-            let critter = critter_with_energy(2 * INITIAL_ENERGY);
-
-            assert!(critter.can_split());
-        }
-
-        #[test]
-        fn a_critter_above_double_initial_energy_can_split() {
-            let critter = critter_with_energy(3 * INITIAL_ENERGY);
-
-            assert!(critter.can_split());
-        }
-    }
-
-    mod split_threshold {
-        use super::*;
-
-        const INITIAL_ENERGY: u32 = 60;
-
-        fn make_splitter(energy: u32, instructions: Vec<Instruction>) -> Critter {
-            let mut critter = Critter::new(
-                START_X,
-                START_Y,
-                Heading::North,
-                instructions,
-                1,
-                1,
-                INITIAL_ENERGY,
-                0,
-            );
-            if energy < INITIAL_ENERGY {
-                critter.lose_energy(INITIAL_ENERGY - energy);
-            } else if energy > INITIAL_ENERGY {
-                critter.gain_energy(energy - INITIAL_ENERGY);
-            }
-            critter
-        }
-
-        #[test]
-        fn a_split_below_the_threshold_returns_no_child() {
-            let mut critter = make_splitter(INITIAL_ENERGY, vec![Instruction::Split]);
-
-            let child = critter.tick();
-
-            assert!(child.is_none());
-        }
-
-        #[test]
-        fn a_split_below_the_threshold_still_costs_one_energy() {
-            // A failed Split is not a no-op: it costs the same one-energy tick
-            // as every other instruction.
-            let mut critter = make_splitter(INITIAL_ENERGY, vec![Instruction::Split]);
-
-            critter.tick();
-
-            assert_eq!(critter.energy(), INITIAL_ENERGY - 1);
-        }
-
-        #[test]
-        fn a_split_below_the_threshold_still_advances_the_instruction_pointer() {
-            // After a failed Split, the next instruction must be considered on
-            // the following tick: the pointer must have moved past Split.
-            let mut critter = make_splitter(
-                INITIAL_ENERGY,
-                vec![Instruction::Split, Instruction::MoveForward],
-            );
-
-            critter.tick(); // failed Split, pointer advances to MoveForward
-            critter.tick(); // MoveForward fires
-
-            assert_eq!(critter.y(), START_Y - 1);
-        }
-
-        #[test]
-        fn a_split_at_or_above_the_threshold_returns_a_child() {
-            let mut critter = make_splitter(2 * INITIAL_ENERGY, vec![Instruction::Split]);
-
-            let child = critter.tick();
-
-            assert!(child.is_some());
-        }
-    }
-
     mod energy_cap {
         use super::*;
 
@@ -1270,7 +1259,7 @@ mod tests {
 
         #[test]
         fn gain_energy_caps_the_total_at_max_critter_energy() {
-            let mut critter = Critter::new(
+            let mut critter = Critter::with_genome(
                 0,
                 0,
                 Heading::North,
@@ -1279,6 +1268,7 @@ mod tests {
                 1,
                 MAX_CRITTER_ENERGY - 10,
                 0,
+                Genome::always_act(),
             );
 
             critter.gain_energy(1_000);
@@ -1288,7 +1278,17 @@ mod tests {
 
         #[test]
         fn gain_energy_below_the_cap_increases_normally() {
-            let mut critter = Critter::new(0, 0, Heading::North, vec![], 1, 1, 100, 0);
+            let mut critter = Critter::with_genome(
+                0,
+                0,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                100,
+                0,
+                Genome::always_act(),
+            );
 
             critter.gain_energy(50);
 

@@ -353,7 +353,7 @@ mod tests {
 
         #[test]
         fn a_critter_that_splits_appears_twice_in_the_critter_list_after_a_tick() {
-            let mut splitter = Critter::new(
+            let splitter = Critter::with_genome(
                 100,
                 100,
                 Heading::North,
@@ -362,9 +362,8 @@ mod tests {
                 1,
                 60,
                 0,
+                crate::Genome::always_act(),
             );
-            // Splits require energy ≥ 2 × initial_energy.
-            splitter.gain_energy(60);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
 

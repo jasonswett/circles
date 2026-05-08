@@ -1,5 +1,6 @@
 mod critter;
 mod fps_counter;
+mod genome;
 mod heading;
 mod instruction;
 mod pellet;
@@ -10,6 +11,7 @@ mod world;
 
 pub use critter::{Critter, MAX_CRITTER_ENERGY};
 pub use fps_counter::FpsCounter;
+pub use genome::Genome;
 pub use heading::Heading;
 pub use instruction::Instruction;
 pub use pellet::{Pellet, PELLET_COLOR, PELLET_ENERGY, PELLET_RADIUS};
