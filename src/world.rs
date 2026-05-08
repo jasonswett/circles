@@ -15,21 +15,24 @@ pub struct World {
     height: usize,
     critters: Vec<Critter>,
     pellets: Vec<Pellet>,
+    original_total_energy: u32,
 }
 
 impl World {
     pub fn new<R: Rng>(width: usize, height: usize, rng: &mut R) -> Self {
-        let critters = (0..NUM_CRITTERS)
+        let critters: Vec<Critter> = (0..NUM_CRITTERS)
             .map(|_| spawn_critter(width, height, rng))
             .collect();
-        let pellets = (0..NUM_PELLETS)
+        let pellets: Vec<Pellet> = (0..NUM_PELLETS)
             .map(|_| spawn_pellet(width, height, rng))
             .collect();
+        let original_total_energy = critter_total_energy(&critters) + pellet_total_energy(&pellets);
         Self {
             width,
             height,
             critters,
             pellets,
+            original_total_energy,
         }
     }
 
@@ -40,11 +43,31 @@ impl World {
         critters: Vec<Critter>,
         pellets: Vec<Pellet>,
     ) -> Self {
+        let original_total_energy = critter_total_energy(&critters) + pellet_total_energy(&pellets);
         Self {
             width,
             height,
             critters,
             pellets,
+            original_total_energy,
+        }
+    }
+
+    pub fn original_total_energy(&self) -> u32 {
+        self.original_total_energy
+    }
+
+    pub fn replenish_pellets<R: Rng>(&mut self, rng: &mut R) {
+        let current = self.total_energy();
+        if current >= self.original_total_energy {
+            return;
+        }
+        let deficit = self.original_total_energy - current;
+        // Round up: add enough pellets so the new total is at least the target.
+        let pellets_needed = deficit.div_ceil(crate::PELLET_ENERGY);
+        for _ in 0..pellets_needed {
+            self.pellets
+                .push(spawn_pellet(self.width, self.height, rng));
         }
     }
 
@@ -106,6 +129,14 @@ impl World {
             .map(|_| spawn_pellet(self.width, self.height, rng))
             .collect();
     }
+}
+
+fn critter_total_energy(critters: &[Critter]) -> u32 {
+    critters.iter().map(|c| c.energy()).sum()
+}
+
+fn pellet_total_energy(pellets: &[Pellet]) -> u32 {
+    pellets.len() as u32 * crate::PELLET_ENERGY
 }
 
 fn toroidal_delta(a: i32, b: i32, size: i32) -> i32 {
@@ -795,6 +826,140 @@ mod tests {
             world.reap_dead_critters();
 
             assert_eq!(world.pellets().len(), 1);
+        }
+    }
+
+    mod original_total_energy {
+        use super::*;
+
+        #[test]
+        fn it_returns_the_total_energy_present_at_construction() {
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            assert_eq!(world.original_total_energy(), world.total_energy());
+        }
+
+        #[test]
+        fn it_does_not_change_after_critters_lose_energy() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            let original = world.original_total_energy();
+
+            for _ in 0..100 {
+                world.tick();
+            }
+
+            assert_eq!(world.original_total_energy(), original);
+            assert!(world.total_energy() < original);
+        }
+    }
+
+    mod replenish_pellets {
+        use super::*;
+        use crate::{Critter, Heading, Instruction, PELLET_ENERGY};
+
+        fn empty_world() -> World {
+            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
+        }
+
+        fn world_with_target(target: u32) -> World {
+            // Construct an "empty" world and then make the target deterministic
+            // by directly using with_critters_and_pellets with a known
+            // composition that achieves total_energy == target.
+            let mut world = empty_world();
+            let pellets_needed = target / PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..pellets_needed {
+                world
+                    .pellets
+                    .push(super::spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng));
+            }
+            world.original_total_energy = world.total_energy();
+            world
+        }
+
+        #[test]
+        fn it_does_not_add_pellets_when_total_energy_is_already_at_or_above_original() {
+            let target = 10 * PELLET_ENERGY;
+            let mut world = world_with_target(target);
+            let pellets_before = world.pellets().len();
+            let mut rng = StdRng::seed_from_u64(1);
+
+            world.replenish_pellets(&mut rng);
+
+            assert_eq!(world.pellets().len(), pellets_before);
+        }
+
+        #[test]
+        fn it_adds_enough_pellets_to_bring_total_energy_back_to_the_original() {
+            let target = 10 * PELLET_ENERGY;
+            let mut world = world_with_target(target);
+            // Drain energy by removing pellets directly.
+            world.pellets.clear();
+            let mut rng = StdRng::seed_from_u64(1);
+
+            world.replenish_pellets(&mut rng);
+
+            assert!(world.total_energy() >= target);
+        }
+
+        #[test]
+        fn it_does_not_add_substantially_more_pellets_than_needed() {
+            // After replenish, total should be within one pellet's worth of the
+            // target, not (current + target). Test with a partially-full world.
+            let target = 10 * PELLET_ENERGY;
+            let mut world = world_with_target(target);
+            // Remove half the pellets so current > 0 but < target.
+            world.pellets.truncate(5);
+            let mut rng = StdRng::seed_from_u64(1);
+
+            world.replenish_pellets(&mut rng);
+
+            assert!(world.total_energy() < target + PELLET_ENERGY);
+        }
+
+        #[test]
+        fn replenished_pellets_land_inside_the_world_bounds() {
+            let mut world = empty_world();
+            world.original_total_energy = 50 * PELLET_ENERGY;
+            for seed in 0..20 {
+                let mut rng = StdRng::seed_from_u64(seed);
+                world.pellets.clear();
+                world.replenish_pellets(&mut rng);
+                for pellet in world.pellets() {
+                    assert!(pellet.x >= PELLET_RADIUS);
+                    assert!(pellet.x < TEST_WIDTH as i32 - PELLET_RADIUS);
+                    assert!(pellet.y >= PELLET_RADIUS);
+                    assert!(pellet.y < TEST_HEIGHT as i32 - PELLET_RADIUS);
+                }
+            }
+        }
+
+        #[test]
+        fn replenishment_accounts_for_critter_energy_too() {
+            // The original target = critter_energy + pellet_energy. If a critter
+            // exists with substantial energy, fewer pellets are needed to top up.
+            let mut world = empty_world();
+            let critter = Critter::new(
+                50,
+                50,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                u32::MAX,
+                1,
+                100,
+                0,
+            );
+            world.critters.push(critter);
+            // Target = 100 (critter) + 5 pellets * 100 (pellet energy hypothetical) — let's be concrete:
+            world.original_total_energy = 100 + 5 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            world.replenish_pellets(&mut rng);
+
+            assert!(world.total_energy() >= world.original_total_energy);
         }
     }
 }

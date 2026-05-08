@@ -12,6 +12,8 @@ const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 const REAPER_INTERVAL_FRAMES: u32 = 300;
+const REPLENISH_INTERVAL_FRAMES: u32 = 300;
+const REPLENISH_MIN_FPS: u32 = 40;
 const FPS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 #[repr(C)]
@@ -85,6 +87,12 @@ fn main() {
         }
         if frame_counter > 0 && frame_counter.is_multiple_of(REAPER_INTERVAL_FRAMES) {
             world.reap_dead_critters();
+        }
+        if frame_counter > 0
+            && frame_counter.is_multiple_of(REPLENISH_INTERVAL_FRAMES)
+            && fps_counter.current_fps() >= REPLENISH_MIN_FPS
+        {
+            world.replenish_pellets(&mut rng);
         }
         frame_counter = frame_counter.wrapping_add(1);
 
