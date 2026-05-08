@@ -94,6 +94,10 @@ impl World {
         }
     }
 
+    pub fn reap_dead_critters(&mut self) {
+        self.critters.retain(|c| c.energy() > 0);
+    }
+
     pub fn reset<R: Rng>(&mut self, rng: &mut R) {
         self.critters = (0..NUM_CRITTERS)
             .map(|_| spawn_critter(self.width, self.height, rng))
@@ -719,6 +723,78 @@ mod tests {
             );
 
             assert_eq!(world.total_energy(), 40 + PELLET_ENERGY);
+        }
+    }
+
+    mod reap_dead_critters {
+        use super::*;
+        use crate::{Critter, Heading, Instruction};
+
+        fn critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
+            let mut critter = Critter::new(
+                x,
+                y,
+                Heading::North,
+                vec![Instruction::DoNothing],
+                u32::MAX,
+                1,
+                100,
+                0,
+            );
+            critter.lose_energy(100 - energy);
+            critter
+        }
+
+        #[test]
+        fn it_removes_critters_whose_energy_is_zero() {
+            let dead = critter_with_energy(50, 50, 0);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![dead], vec![]);
+
+            world.reap_dead_critters();
+
+            assert!(world.critters().is_empty());
+        }
+
+        #[test]
+        fn it_leaves_critters_with_energy_above_zero() {
+            let alive = critter_with_energy(50, 50, 1);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![alive], vec![]);
+
+            world.reap_dead_critters();
+
+            assert_eq!(world.critters().len(), 1);
+        }
+
+        #[test]
+        fn it_removes_only_the_dead_critters_in_a_mixed_population() {
+            let alive = critter_with_energy(50, 50, 5);
+            let dead = critter_with_energy(60, 60, 0);
+            let also_alive = critter_with_energy(70, 70, 10);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![alive, dead, also_alive],
+                vec![],
+            );
+
+            world.reap_dead_critters();
+
+            let energies: Vec<u32> = world.critters().iter().map(|c| c.energy()).collect();
+            assert_eq!(energies, vec![5, 10]);
+        }
+
+        #[test]
+        fn it_does_not_remove_pellets() {
+            let dead = critter_with_energy(50, 50, 0);
+            let pellet = Pellet { x: 30, y: 30 };
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![dead], vec![pellet]);
+
+            world.reap_dead_critters();
+
+            assert_eq!(world.pellets().len(), 1);
         }
     }
 }

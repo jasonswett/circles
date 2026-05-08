@@ -9,6 +9,7 @@ const TEXT_SCALE: usize = 4;
 const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
+const REAPER_INTERVAL_FRAMES: u32 = 300;
 
 #[repr(C)]
 struct CGSize {
@@ -76,6 +77,9 @@ fn main() {
 
         if frame_counter.is_multiple_of(ENERGY_REFRESH_FRAMES) {
             displayed_total_energy = total_energy;
+        }
+        if frame_counter > 0 && frame_counter.is_multiple_of(REAPER_INTERVAL_FRAMES) {
+            world.reap_dead_critters();
         }
         frame_counter = frame_counter.wrapping_add(1);
 
