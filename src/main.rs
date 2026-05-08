@@ -53,7 +53,7 @@ fn main() {
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
-            world.reset(width, height, &mut rng);
+            world.reset(&mut rng);
         }
 
         world.tick();

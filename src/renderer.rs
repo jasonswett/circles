@@ -38,7 +38,7 @@ impl Renderer {
             radius,
             inner_squared: inner_radius * inner_radius,
         };
-        Self::fill_ring(&body, &mut canvas, color);
+        Self::fill_ring_with_wrap(&body, &mut canvas, color);
 
         let heading = critter.heading();
         let (offset_x, offset_y) = heading.offset();
@@ -54,7 +54,7 @@ impl Renderer {
             radius: FRONT_DOT_RADIUS,
             inner_squared: -1,
         };
-        Self::fill_ring(&dot, &mut canvas, color);
+        Self::fill_ring_with_wrap(&dot, &mut canvas, color);
     }
 
     pub fn draw_pellet(pellet: &Pellet, buffer: &mut [u32], width: usize, height: usize) {
@@ -69,7 +69,27 @@ impl Renderer {
             radius: PELLET_RADIUS,
             inner_squared: -1,
         };
-        Self::fill_ring(&disc, &mut canvas, PELLET_COLOR);
+        Self::fill_ring_with_wrap(&disc, &mut canvas, PELLET_COLOR);
+    }
+
+    // The `+` mutations on the offset additions below are equivalent: the loops
+    // iterate over the symmetric set {-w, 0, w}, which is closed under negation,
+    // so any sign flip produces the same set of draws in a different order.
+    #[mutants::skip]
+    fn fill_ring_with_wrap(ring: &Ring, canvas: &mut Canvas, color: u32) {
+        let w = canvas.width as i32;
+        let h = canvas.height as i32;
+        for dx in [-w, 0, w] {
+            for dy in [-h, 0, h] {
+                let shifted = Ring {
+                    cx: ring.cx + dx,
+                    cy: ring.cy + dy,
+                    radius: ring.radius,
+                    inner_squared: ring.inner_squared,
+                };
+                Self::fill_ring(&shifted, canvas, color);
+            }
+        }
     }
 
     fn fill_ring(ring: &Ring, canvas: &mut Canvas, color: u32) {
@@ -463,6 +483,32 @@ mod tests {
                     critter.tick();
                 }
                 critter
+            }
+        }
+
+        mod wrap_rendering {
+            use super::*;
+
+            #[test]
+            fn a_critter_against_the_right_edge_renders_pixels_on_the_left_edge_too() {
+                // Critter at x = CANVAS - 1: ring extends from x = CANVAS - 1 - RADIUS to
+                // x = CANVAS - 1 + RADIUS, the latter wrapping into [0, RADIUS - 1].
+                let critter = stationary_critter(CANVAS as i32 - 1, CENTER, Heading::North);
+
+                let buffer = render(&critter);
+
+                // A pixel that would be lit on the unwrapped circle's right side now
+                // appears on the left edge.
+                assert_eq!(pixel_at(&buffer, RADIUS - 2, CENTER), OUTLINE_COLOR);
+            }
+
+            #[test]
+            fn a_critter_against_the_bottom_edge_renders_pixels_on_the_top_edge_too() {
+                let critter = stationary_critter(CENTER, CANVAS as i32 - 1, Heading::North);
+
+                let buffer = render(&critter);
+
+                assert_eq!(pixel_at(&buffer, CENTER, RADIUS - 2), OUTLINE_COLOR);
             }
         }
 

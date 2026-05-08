@@ -68,6 +68,11 @@ impl Critter {
         self.energy = self.energy.saturating_sub(amount);
     }
 
+    pub fn wrap_position(&mut self, width: i32, height: i32) {
+        self.x = self.x.rem_euclid(width);
+        self.y = self.y.rem_euclid(height);
+    }
+
     pub fn tick(&mut self) {
         self.tick_counter += 1;
         if self.tick_counter < self.ticks_per_instruction {
@@ -636,6 +641,71 @@ mod tests {
             }
 
             assert_eq!(critter.energy(), 0);
+        }
+    }
+
+    mod wrap_position {
+        use super::*;
+
+        const WIDTH: i32 = 100;
+        const HEIGHT: i32 = 100;
+
+        fn make_critter_at(x: i32, y: i32) -> Critter {
+            Critter::new(x, y, Heading::North, vec![], 1, 1, u32::MAX)
+        }
+
+        #[test]
+        fn a_position_already_in_bounds_is_unchanged() {
+            let mut critter = make_critter_at(50, 50);
+
+            critter.wrap_position(WIDTH, HEIGHT);
+
+            assert_eq!((critter.x(), critter.y()), (50, 50));
+        }
+
+        #[test]
+        fn x_past_the_right_edge_wraps_to_the_left() {
+            let mut critter = make_critter_at(WIDTH + 5, 50);
+
+            critter.wrap_position(WIDTH, HEIGHT);
+
+            assert_eq!(critter.x(), 5);
+        }
+
+        #[test]
+        fn y_past_the_bottom_edge_wraps_to_the_top() {
+            let mut critter = make_critter_at(50, HEIGHT + 5);
+
+            critter.wrap_position(WIDTH, HEIGHT);
+
+            assert_eq!(critter.y(), 5);
+        }
+
+        #[test]
+        fn negative_x_wraps_to_the_right_side() {
+            let mut critter = make_critter_at(-1, 50);
+
+            critter.wrap_position(WIDTH, HEIGHT);
+
+            assert_eq!(critter.x(), WIDTH - 1);
+        }
+
+        #[test]
+        fn negative_y_wraps_to_the_bottom_side() {
+            let mut critter = make_critter_at(50, -1);
+
+            critter.wrap_position(WIDTH, HEIGHT);
+
+            assert_eq!(critter.y(), HEIGHT - 1);
+        }
+
+        #[test]
+        fn x_far_past_the_right_edge_wraps_modulo_width() {
+            let mut critter = make_critter_at(WIDTH * 3 + 7, 50);
+
+            critter.wrap_position(WIDTH, HEIGHT);
+
+            assert_eq!(critter.x(), 7);
         }
     }
 }

@@ -11,6 +11,8 @@ const INSTRUCTION_LIST_LENGTH: usize = 4;
 const STEP_SIZE: i32 = 25;
 
 pub struct World {
+    width: usize,
+    height: usize,
     critters: Vec<Critter>,
     pellets: Vec<Pellet>,
 }
@@ -23,12 +25,27 @@ impl World {
         let pellets = (0..NUM_PELLETS)
             .map(|_| spawn_pellet(width, height, rng))
             .collect();
-        Self { critters, pellets }
+        Self {
+            width,
+            height,
+            critters,
+            pellets,
+        }
     }
 
     #[cfg(test)]
-    pub fn with_critters_and_pellets(critters: Vec<Critter>, pellets: Vec<Pellet>) -> Self {
-        Self { critters, pellets }
+    pub fn with_critters_and_pellets(
+        width: usize,
+        height: usize,
+        critters: Vec<Critter>,
+        pellets: Vec<Pellet>,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            critters,
+            pellets,
+        }
     }
 
     pub fn critters(&self) -> &[Critter] {
@@ -42,6 +59,7 @@ impl World {
     pub fn tick(&mut self) {
         for critter in &mut self.critters {
             critter.tick();
+            critter.wrap_position(self.width as i32, self.height as i32);
         }
         self.consume_pellets();
     }
@@ -49,6 +67,8 @@ impl World {
     fn consume_pellets(&mut self) {
         let eat_distance_squared =
             (CRITTER_RADIUS + PELLET_RADIUS) * (CRITTER_RADIUS + PELLET_RADIUS);
+        let width = self.width as i32;
+        let height = self.height as i32;
         for critter in &mut self.critters {
             if critter.energy() >= critter.initial_energy() {
                 continue;
@@ -57,8 +77,8 @@ impl World {
                 if critter.energy() >= critter.initial_energy() {
                     return true;
                 }
-                let dx = critter.x() - pellet.x;
-                let dy = critter.y() - pellet.y;
+                let dx = toroidal_delta(critter.x(), pellet.x, width);
+                let dy = toroidal_delta(critter.y(), pellet.y, height);
                 if dx * dx + dy * dy < eat_distance_squared {
                     critter.gain_energy(crate::PELLET_ENERGY);
                     false
@@ -69,13 +89,22 @@ impl World {
         }
     }
 
-    pub fn reset<R: Rng>(&mut self, width: usize, height: usize, rng: &mut R) {
+    pub fn reset<R: Rng>(&mut self, rng: &mut R) {
         self.critters = (0..NUM_CRITTERS)
-            .map(|_| spawn_critter(width, height, rng))
+            .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
         self.pellets = (0..NUM_PELLETS)
-            .map(|_| spawn_pellet(width, height, rng))
+            .map(|_| spawn_pellet(self.width, self.height, rng))
             .collect();
+    }
+}
+
+fn toroidal_delta(a: i32, b: i32, size: i32) -> i32 {
+    let raw = (a - b).rem_euclid(size);
+    if raw <= size / 2 {
+        raw
+    } else {
+        raw - size
     }
 }
 
@@ -159,7 +188,8 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0);
             let world_with_critters = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
             let critters: Vec<Critter> = world_with_critters.critters().to_vec();
-            let mut world = World::with_critters_and_pellets(critters.clone(), vec![]);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, critters.clone(), vec![]);
             let initial_energies: Vec<u32> = critters.iter().map(|c| c.energy()).collect();
 
             for _ in 0..TICKS_PER_INSTRUCTION {
@@ -176,19 +206,107 @@ mod tests {
         use super::*;
 
         #[test]
-        fn it_replaces_the_critters() {
+        fn after_reset_every_critter_is_at_full_energy() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
+
+            world.reset(&mut rng);
+
+            assert!(world
+                .critters()
+                .iter()
+                .all(|c| c.energy() == INITIAL_ENERGY));
+        }
+
+        #[test]
+        fn after_reset_the_critter_positions_change() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-            for _ in 0..TICKS_PER_INSTRUCTION {
-                world.tick();
-            }
-            let depleted_energies: Vec<u32> = world.critters().iter().map(|c| c.energy()).collect();
+            let original_positions: Vec<(i32, i32)> =
+                world.critters().iter().map(|c| (c.x(), c.y())).collect();
 
-            world.reset(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.reset(&mut rng);
 
-            let fresh_energies: Vec<u32> = world.critters().iter().map(|c| c.energy()).collect();
-            assert_ne!(fresh_energies, depleted_energies);
-            assert!(fresh_energies.iter().all(|&e| e == INITIAL_ENERGY));
+            let new_positions: Vec<(i32, i32)> =
+                world.critters().iter().map(|c| (c.x(), c.y())).collect();
+            assert_ne!(new_positions, original_positions);
+        }
+    }
+
+    mod toroidal_delta_tests {
+        use super::super::toroidal_delta;
+
+        #[test]
+        fn equal_values_have_zero_delta() {
+            assert_eq!(toroidal_delta(50, 50, 200), 0);
+        }
+
+        #[test]
+        fn small_positive_delta_is_returned_as_is() {
+            assert_eq!(toroidal_delta(50, 30, 200), 20);
+        }
+
+        #[test]
+        fn small_negative_delta_is_returned_as_negative() {
+            assert_eq!(toroidal_delta(30, 50, 200), -20);
+        }
+
+        #[test]
+        fn delta_larger_than_half_size_wraps_to_a_smaller_negative_value() {
+            // Half-size = 100. raw = (10 - 190).rem_euclid(200) = 20.
+            // 20 < 100, so the result is 20 — but that's the unwrapped path.
+            // For 150: raw = (190 - 40).rem_euclid(200) = 150. 150 > 100, returns 150 - 200 = -50.
+            assert_eq!(toroidal_delta(190, 40, 200), -50);
+        }
+
+        #[test]
+        fn delta_just_above_half_size_wraps_to_negative() {
+            // (5 - 100).rem_euclid(200) = 105. > 100 → returns 105 - 200 = -95.
+            assert_eq!(toroidal_delta(5, 100, 200), -95);
+        }
+    }
+
+    mod wrapping {
+        use super::*;
+        use crate::{Critter, Heading, Instruction};
+
+        #[test]
+        fn a_critter_that_walks_past_the_right_edge_wraps_to_the_left() {
+            let critter = Critter::new(
+                TEST_WIDTH as i32 - 1,
+                50,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                1,
+                1,
+                u32::MAX,
+            );
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
+
+            world.tick();
+
+            assert_eq!(world.critters()[0].x(), 0);
+        }
+
+        #[test]
+        fn a_critter_that_walks_past_the_top_edge_wraps_to_the_bottom() {
+            let critter = Critter::new(
+                50,
+                0,
+                Heading::North,
+                vec![Instruction::MoveForward],
+                1,
+                1,
+                u32::MAX,
+            );
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
+
+            world.tick();
+
+            assert_eq!(world.critters()[0].y(), TEST_HEIGHT as i32 - 1);
         }
     }
 
@@ -217,7 +335,12 @@ mod tests {
         fn a_critter_overlapping_a_pellet_consumes_it() {
             let critter = hungry_critter(100, 100);
             let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(vec![critter], vec![pellet]);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
 
             world.tick();
 
@@ -228,7 +351,12 @@ mod tests {
         fn eating_a_pellet_increases_energy_by_the_pellet_energy_amount() {
             let critter = hungry_critter(100, 100);
             let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(vec![critter], vec![pellet]);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
 
             world.tick();
 
@@ -240,10 +368,15 @@ mod tests {
 
         #[test]
         fn a_critter_that_does_not_overlap_a_pellet_leaves_it_alone() {
-            // Centers far apart: critter at (100, 100), pellet at (300, 100).
-            let critter = hungry_critter(100, 100);
-            let pellet = Pellet { x: 300, y: 100 };
-            let mut world = World::with_critters_and_pellets(vec![critter], vec![pellet]);
+            // Critter at (50, 100), pellet at (100, 100): dx = 50, no wrap is shorter.
+            let critter = hungry_critter(50, 100);
+            let pellet = Pellet { x: 100, y: 100 };
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
 
             world.tick();
 
@@ -260,11 +393,35 @@ mod tests {
                 x: 100 + (CRITTER_RADIUS + PELLET_RADIUS - 1),
                 y: 100,
             };
-            let mut world = World::with_critters_and_pellets(vec![critter], vec![pellet]);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
 
             world.tick();
 
             assert_eq!(world.pellets().len(), 0);
+        }
+
+        #[test]
+        fn a_pellet_diagonally_just_outside_the_eating_distance_is_not_consumed() {
+            // dx = dy = 20: euclidean distance ≈ 28.3, beyond the 24-pixel eating
+            // distance. Diagonal placement ensures both axes contribute, so the
+            // distance formula is exercised on both coordinates.
+            let critter = hungry_critter(100, 100);
+            let pellet = Pellet { x: 120, y: 120 };
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
+
+            world.tick();
+
+            assert_eq!(world.pellets().len(), 1);
         }
 
         #[test]
@@ -275,7 +432,12 @@ mod tests {
                 x: 100 + CRITTER_RADIUS + PELLET_RADIUS,
                 y: 100,
             };
-            let mut world = World::with_critters_and_pellets(vec![critter], vec![pellet]);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
 
             world.tick();
 
@@ -294,7 +456,8 @@ mod tests {
                 HUNGRY_INITIAL,
             );
             let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(vec![full], vec![pellet]);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![full], vec![pellet]);
 
             world.tick();
 
@@ -316,11 +479,56 @@ mod tests {
             );
             critter.lose_energy(2); // energy = 58, space for 2 of the 10 pellet energy
             let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(vec![critter], vec![pellet]);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
 
             world.tick();
 
             assert_eq!(world.critters()[0].energy(), HUNGRY_INITIAL);
+        }
+
+        #[test]
+        fn a_critter_near_the_left_edge_can_eat_a_pellet_near_the_right_edge_via_wrap() {
+            // Critter at x=2, pellet at x=TEST_WIDTH-2: euclidean distance ≈ 196,
+            // but wrapped (toroidal) distance is just 4 — well within eating range.
+            let critter = hungry_critter(2, 100);
+            let pellet = Pellet {
+                x: TEST_WIDTH as i32 - 2,
+                y: 100,
+            };
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
+
+            world.tick();
+
+            assert_eq!(world.pellets().len(), 0);
+        }
+
+        #[test]
+        fn a_critter_near_the_top_edge_can_eat_a_pellet_near_the_bottom_edge_via_wrap() {
+            let critter = hungry_critter(100, 2);
+            let pellet = Pellet {
+                x: 100,
+                y: TEST_HEIGHT as i32 - 2,
+            };
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![pellet],
+            );
+
+            world.tick();
+
+            assert_eq!(world.pellets().len(), 0);
         }
     }
 
@@ -384,7 +592,7 @@ mod tests {
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
             let original: Vec<_> = world.pellets().to_vec();
 
-            world.reset(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.reset(&mut rng);
 
             assert_eq!(world.pellets().len(), NUM_PELLETS);
             assert_ne!(world.pellets(), original.as_slice());
