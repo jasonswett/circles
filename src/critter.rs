@@ -1,4 +1,6 @@
 use crate::{Heading, Instruction};
+use rand::rngs::SmallRng;
+use rand::{Rng, SeedableRng};
 
 #[derive(Clone)]
 pub struct Critter {
@@ -10,9 +12,11 @@ pub struct Critter {
     last_executed: Option<Instruction>,
     ticks_per_instruction: u32,
     tick_counter: u32,
+    next_fire_threshold: u32,
     step_size: i32,
     energy: u32,
     initial_energy: u32,
+    rng: SmallRng,
 }
 
 impl Critter {
@@ -24,6 +28,7 @@ impl Critter {
         ticks_per_instruction: u32,
         step_size: i32,
         initial_energy: u32,
+        seed: u64,
     ) -> Self {
         Self {
             x,
@@ -34,9 +39,13 @@ impl Critter {
             last_executed: None,
             ticks_per_instruction,
             tick_counter: 0,
+            // Initial firing is deterministic at ticks_per_instruction; only
+            // subsequent rerolls are jittered.
+            next_fire_threshold: ticks_per_instruction,
             step_size,
             energy: initial_energy,
             initial_energy,
+            rng: SmallRng::seed_from_u64(seed),
         }
     }
 
@@ -75,10 +84,11 @@ impl Critter {
 
     pub fn tick(&mut self) -> Option<Critter> {
         self.tick_counter += 1;
-        if self.tick_counter < self.ticks_per_instruction {
+        if self.tick_counter < self.next_fire_threshold {
             return None;
         }
         self.tick_counter = 0;
+        self.next_fire_threshold = jitter_threshold(&mut self.rng, self.ticks_per_instruction);
 
         if self.instructions.is_empty() {
             return None;
@@ -140,13 +150,18 @@ impl Critter {
         }
     }
 
-    fn spawn_child(&self) -> Critter {
+    fn spawn_child(&mut self) -> Critter {
         let (dx, dy) = self.heading.offset();
         let offset = if self.heading.is_diagonal() {
             ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
         } else {
             self.step_size
         };
+        let child_seed: u64 = self.rng.gen();
+        let mut child_rng = SmallRng::seed_from_u64(child_seed);
+        // Children's first firing is jittered, so they desynchronize from the
+        // parent immediately.
+        let child_threshold = jitter_threshold(&mut child_rng, self.ticks_per_instruction);
         Critter {
             x: self.x - dx * offset,
             y: self.y - dy * offset,
@@ -156,11 +171,20 @@ impl Critter {
             last_executed: None,
             ticks_per_instruction: self.ticks_per_instruction,
             tick_counter: 0,
+            next_fire_threshold: child_threshold,
             step_size: self.step_size,
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
+            rng: child_rng,
         }
     }
+}
+
+fn jitter_threshold<R: Rng>(rng: &mut R, base: u32) -> u32 {
+    if base <= 1 {
+        return base;
+    }
+    rng.gen_range(1..=(2 * base - 1))
 }
 
 #[cfg(test)]
@@ -177,14 +201,14 @@ mod tests {
 
         #[test]
         fn it_starts_at_the_given_position() {
-            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX);
+            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX, 0);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
 
         #[test]
         fn it_starts_with_the_given_heading() {
-            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX);
+            let critter = Critter::new(START_X, START_Y, Heading::North, vec![], 1, 1, u32::MAX, 0);
 
             assert_eq!(critter.heading(), Heading::North);
         }
@@ -203,6 +227,7 @@ mod tests {
                 TICKS_PER_INSTRUCTION,
                 1,
                 u32::MAX,
+                0,
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -222,6 +247,7 @@ mod tests {
                 TICKS_PER_INSTRUCTION,
                 1,
                 u32::MAX,
+                0,
             );
 
             for _ in 0..TICKS_PER_INSTRUCTION {
@@ -241,6 +267,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -259,6 +286,7 @@ mod tests {
                 1,
                 STEP_SIZE,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -277,6 +305,7 @@ mod tests {
                 1,
                 STEP_SIZE,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -297,6 +326,7 @@ mod tests {
                 1,
                 STEP_SIZE,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -319,6 +349,7 @@ mod tests {
                 1,
                 STEP_SIZE,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -339,6 +370,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -356,6 +388,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -373,6 +406,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -390,6 +424,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -407,6 +442,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -424,6 +460,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -441,6 +478,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -460,6 +498,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -483,6 +522,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -501,6 +541,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -518,6 +559,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -544,6 +586,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
 
             critter.tick();
@@ -569,6 +612,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             assert_eq!(critter.energy(), INITIAL_ENERGY);
@@ -584,6 +628,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             assert_eq!(critter.initial_energy(), INITIAL_ENERGY);
@@ -599,6 +644,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             critter.tick();
@@ -616,6 +662,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             critter.tick();
@@ -633,6 +680,7 @@ mod tests {
                 TICKS_PER_INSTRUCTION,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -652,6 +700,7 @@ mod tests {
                 1,
                 1,
                 0,
+                0,
             );
 
             critter.tick();
@@ -668,6 +717,7 @@ mod tests {
                 vec![Instruction::MoveForward],
                 1,
                 1,
+                0,
                 0,
             );
 
@@ -686,7 +736,7 @@ mod tests {
         const HEIGHT: i32 = 100;
 
         fn make_critter_at(x: i32, y: i32) -> Critter {
-            Critter::new(x, y, Heading::North, vec![], 1, 1, u32::MAX)
+            Critter::new(x, y, Heading::North, vec![], 1, 1, u32::MAX, 0)
         }
 
         #[test]
@@ -758,6 +808,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             )
         }
 
@@ -828,6 +879,7 @@ mod tests {
                 1,
                 STEP_SIZE,
                 INITIAL_ENERGY,
+                0,
             );
 
             let child = parent.tick().unwrap();
@@ -849,6 +901,7 @@ mod tests {
                 1,
                 STEP_SIZE,
                 INITIAL_ENERGY,
+                0,
             );
 
             let child = parent.tick().unwrap();
@@ -871,6 +924,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             let mut child = parent.tick().unwrap();
@@ -890,6 +944,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             assert!(critter.tick().is_none());
@@ -905,6 +960,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             assert!(critter.tick().is_none());
@@ -920,6 +976,7 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             assert!(critter.tick().is_none());
@@ -935,6 +992,7 @@ mod tests {
                 10,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             assert!(critter.tick().is_none());
@@ -952,6 +1010,7 @@ mod tests {
                 1,
                 1,
                 1,
+                0,
             );
 
             parent.tick();
@@ -969,12 +1028,107 @@ mod tests {
                 1,
                 1,
                 INITIAL_ENERGY,
+                0,
             );
 
             parent.tick(); // first split
             let second_child = parent.tick(); // repeat → split again
 
             assert!(second_child.is_some());
+        }
+    }
+
+    mod jitter_threshold_tests {
+        use super::super::jitter_threshold;
+        use rand::rngs::SmallRng;
+        use rand::SeedableRng;
+
+        #[test]
+        fn at_base_zero_it_returns_zero() {
+            let mut rng = SmallRng::seed_from_u64(0);
+
+            assert_eq!(jitter_threshold(&mut rng, 0), 0);
+        }
+
+        #[test]
+        fn at_base_one_it_returns_one() {
+            let mut rng = SmallRng::seed_from_u64(0);
+
+            assert_eq!(jitter_threshold(&mut rng, 1), 1);
+        }
+
+        #[test]
+        fn for_a_base_above_one_results_span_one_to_two_base_minus_one() {
+            // Over many draws at base=5, the lowest result must be 1 and the
+            // highest must be 9. This pins down both endpoints of the range.
+            const BASE: u32 = 5;
+            let mut rng = SmallRng::seed_from_u64(0);
+            let mut min_seen = u32::MAX;
+            let mut max_seen = 0;
+            for _ in 0..1000 {
+                let v = jitter_threshold(&mut rng, BASE);
+                min_seen = min_seen.min(v);
+                max_seen = max_seen.max(v);
+            }
+
+            assert_eq!(min_seen, 1);
+            assert_eq!(max_seen, 2 * BASE - 1);
+        }
+    }
+
+    mod jitter {
+        use super::*;
+
+        const BASE_TICKS: u32 = 5;
+
+        fn movement_only_critter(seed: u64) -> Critter {
+            Critter::new(
+                START_X,
+                START_Y,
+                Heading::East,
+                vec![Instruction::MoveForward],
+                BASE_TICKS,
+                1,
+                u32::MAX,
+                seed,
+            )
+        }
+
+        #[test]
+        fn two_critters_with_different_seeds_desynchronize_after_their_first_firing() {
+            let mut a = movement_only_critter(1);
+            let mut b = movement_only_critter(2);
+
+            // Both fire at the deterministic initial threshold (BASE_TICKS).
+            for _ in 0..BASE_TICKS {
+                a.tick();
+                b.tick();
+            }
+            // After the first firing each gets a jittered next threshold drawn
+            // from its own rng — over enough ticks, their x values must diverge.
+            for _ in 0..(BASE_TICKS * 4) {
+                a.tick();
+                b.tick();
+            }
+
+            assert_ne!(a.x(), b.x());
+        }
+
+        #[test]
+        fn the_initial_firing_uses_the_deterministic_ticks_per_instruction_threshold() {
+            // The first firing must happen at exactly BASE_TICKS ticks regardless
+            // of seed; subsequent firings are the ones that vary.
+            let mut critter = movement_only_critter(0);
+
+            for _ in 0..(BASE_TICKS - 1) {
+                critter.tick();
+            }
+            let before = critter.x();
+            critter.tick();
+            let after = critter.x();
+
+            assert_eq!(before, START_X);
+            assert_eq!(after, START_X + 1);
         }
     }
 }

@@ -478,6 +478,7 @@ mod tests {
                     1,
                     1,
                     INITIAL_ENERGY,
+                    0,
                 );
                 for _ in 0..(INITIAL_ENERGY - current_energy) {
                     critter.tick();
@@ -560,7 +561,7 @@ mod tests {
         // Helpers below the tests, in keeping with hiding incidental detail.
 
         fn stationary_critter(x: i32, y: i32, heading: Heading) -> Critter {
-            Critter::new(x, y, heading, vec![], 1, 1, u32::MAX)
+            Critter::new(x, y, heading, vec![], 1, 1, u32::MAX, 0)
         }
 
         fn render(critter: &Critter) -> Vec<u32> {

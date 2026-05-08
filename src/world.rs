@@ -3,7 +3,7 @@ use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 10;
 
-const NUM_CRITTERS: usize = 16;
+const NUM_CRITTERS: usize = 100;
 const NUM_PELLETS: usize = 1000;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
@@ -131,6 +131,7 @@ fn spawn_critter<R: Rng>(width: usize, height: usize, rng: &mut R) -> Critter {
         TICKS_PER_INSTRUCTION,
         STEP_SIZE,
         INITIAL_ENERGY,
+        rng.gen(),
     )
 }
 
@@ -311,8 +312,16 @@ mod tests {
 
         #[test]
         fn a_critter_that_splits_appears_twice_in_the_critter_list_after_a_tick() {
-            let splitter =
-                Critter::new(100, 100, Heading::North, vec![Instruction::Split], 1, 1, 60);
+            let splitter = Critter::new(
+                100,
+                100,
+                Heading::North,
+                vec![Instruction::Split],
+                1,
+                1,
+                60,
+                0,
+            );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
 
@@ -336,6 +345,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
@@ -355,6 +365,7 @@ mod tests {
                 1,
                 1,
                 u32::MAX,
+                0,
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
@@ -369,7 +380,7 @@ mod tests {
         use super::*;
         use crate::{Critter, Heading, Instruction, Pellet, PELLET_ENERGY};
 
-        const HUNGRY_INITIAL: u32 = 60;
+        const HUNGRY_INITIAL: u32 = 1_000;
         const STARTING_ENERGY: u32 = 10;
 
         fn hungry_critter(x: i32, y: i32) -> Critter {
@@ -381,6 +392,7 @@ mod tests {
                 u32::MAX, // never executes
                 1,
                 HUNGRY_INITIAL,
+                0,
             );
             critter.lose_energy(HUNGRY_INITIAL - STARTING_ENERGY);
             critter
@@ -510,6 +522,7 @@ mod tests {
                 u32::MAX,
                 1,
                 HUNGRY_INITIAL,
+                0,
             );
             let pellet = Pellet { x: 100, y: 100 };
             let mut world =
@@ -532,6 +545,7 @@ mod tests {
                 u32::MAX,
                 1,
                 HUNGRY_INITIAL,
+                0,
             );
             critter.lose_energy(2); // energy = 58, space for 2 of the 10 pellet energy
             let pellet = Pellet { x: 100, y: 100 };
@@ -676,6 +690,7 @@ mod tests {
                 1,
                 1,
                 30,
+                0,
             );
             let critter_b = Critter::new(
                 70,
@@ -685,6 +700,7 @@ mod tests {
                 1,
                 1,
                 25,
+                0,
             );
             let world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -718,6 +734,7 @@ mod tests {
                 1,
                 1,
                 40,
+                0,
             );
             let pellet = Pellet { x: 20, y: 20 };
             let world = World::with_critters_and_pellets(
