@@ -1,15 +1,18 @@
-use circles::{text_pixels, Renderer, StagnationDetector, World, CRITTER_RADIUS};
+use circles::{text_pixels, FpsCounter, Renderer, StagnationDetector, World, CRITTER_RADIUS};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
+use std::time::{Duration, Instant};
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 const TEXT_COLOR: u32 = 0xFF_FF_FF;
 const TEXT_SIZE: f32 = 28.0;
+const TEXT_LINE_HEIGHT: usize = 36;
 const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 const REAPER_INTERVAL_FRAMES: u32 = 300;
+const FPS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 #[repr(C)]
 struct CGSize {
@@ -59,8 +62,10 @@ fn main() {
     let mut frame_counter: u32 = 0;
     let mut displayed_total_energy = world.total_energy();
     let mut stagnation = StagnationDetector::new(STAGNATION_THRESHOLD_FRAMES);
+    let mut fps_counter = FpsCounter::new(FPS_REFRESH_INTERVAL);
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        fps_counter.observe_frame(Instant::now());
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
             world.reset(&mut rng);
             stagnation.reset();
@@ -90,7 +95,10 @@ fn main() {
         for critter in world.critters() {
             Renderer::draw(critter, CRITTER_RADIUS, &mut frame_pixels, width, height);
         }
-        draw_total_energy(displayed_total_energy, &mut frame_pixels, width, height);
+        let energy_text = format!("Energy: {displayed_total_energy}");
+        let fps_text = format!("FPS: {}", fps_counter.current_fps());
+        draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
+        draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
@@ -98,12 +106,17 @@ fn main() {
     }
 }
 
-fn draw_total_energy(value: u32, buffer: &mut [u32], width: usize, height: usize) {
-    let text = value.to_string();
-    let pixels = text_pixels(&text, TEXT_SIZE);
+fn draw_text_top_right(
+    text: &str,
+    line_index: usize,
+    buffer: &mut [u32],
+    width: usize,
+    height: usize,
+) {
+    let pixels = text_pixels(text, TEXT_SIZE);
     let text_width = pixels.iter().map(|&(x, _, _)| x + 1).max().unwrap_or(0);
     let origin_x = width.saturating_sub(text_width + TEXT_MARGIN);
-    let origin_y = TEXT_MARGIN;
+    let origin_y = TEXT_MARGIN + line_index * TEXT_LINE_HEIGHT;
     for (x, y, alpha) in pixels {
         let px = origin_x + x;
         let py = origin_y + y;

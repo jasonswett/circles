@@ -1,4 +1,5 @@
 mod critter;
+mod fps_counter;
 mod heading;
 mod instruction;
 mod pellet;
@@ -8,6 +9,7 @@ mod text;
 mod world;
 
 pub use critter::Critter;
+pub use fps_counter::FpsCounter;
 pub use heading::Heading;
 pub use instruction::Instruction;
 pub use pellet::{Pellet, PELLET_COLOR, PELLET_ENERGY, PELLET_RADIUS};
