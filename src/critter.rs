@@ -137,7 +137,7 @@ impl Critter {
         self.y = self.y.rem_euclid(height);
     }
 
-    pub fn tick(&mut self) -> Option<Critter> {
+    pub fn tick(&mut self, allow_split: bool) -> Option<Critter> {
         self.tick_counter += 1;
         if self.tick_counter < self.next_fire_threshold {
             return None;
@@ -160,7 +160,8 @@ impl Critter {
         // energy and `last_executed` is left untouched so RepeatPreviousMove
         // keeps referring to whatever did execute last.
         let probability = self.genome.probability_of_acting(instruction, self.energy);
-        let child = if self.roll_against(probability) {
+        let split_blocked = instruction == Instruction::Split && !allow_split;
+        let child = if !split_blocked && self.roll_against(probability) {
             self.execute(instruction)
         } else {
             None
@@ -327,7 +328,7 @@ mod tests {
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
-                critter.tick();
+                critter.tick(true);
             }
 
             assert_eq!(critter.y(), START_Y);
@@ -347,7 +348,7 @@ mod tests {
             );
 
             for _ in 0..TICKS_PER_INSTRUCTION {
-                critter.tick();
+                critter.tick(true);
             }
 
             assert_eq!(critter.y(), START_Y - 1);
@@ -366,7 +367,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X + 1, START_Y));
         }
@@ -385,7 +386,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.x(), START_X + STEP_SIZE);
         }
@@ -404,7 +405,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.y(), START_Y + STEP_SIZE);
         }
@@ -425,7 +426,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(
                 (critter.x(), critter.y()),
@@ -448,7 +449,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(
                 (critter.x(), critter.y()),
@@ -469,7 +470,7 @@ mod tests {
                 Genome::all(Instruction::TurnLeft),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.heading(), Heading::NorthWest);
         }
@@ -487,7 +488,7 @@ mod tests {
                 Genome::all(Instruction::TurnLeft),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
@@ -505,7 +506,7 @@ mod tests {
                 Genome::all(Instruction::TurnRight),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.heading(), Heading::NorthEast);
         }
@@ -523,7 +524,7 @@ mod tests {
                 Genome::all(Instruction::TurnRight),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
@@ -541,7 +542,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
@@ -559,7 +560,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.heading(), Heading::North);
         }
@@ -577,8 +578,8 @@ mod tests {
                 Genome::from_instructions(&[Instruction::MoveForward, Instruction::TurnRight]),
             );
 
-            critter.tick();
-            critter.tick();
+            critter.tick(true);
+            critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 1);
             assert_eq!(critter.heading(), Heading::SouthEast);
@@ -597,9 +598,9 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
-            critter.tick();
-            critter.tick();
+            critter.tick(true);
+            critter.tick(true);
+            critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 3);
         }
@@ -624,8 +625,8 @@ mod tests {
                 ]),
             );
 
-            critter.tick();
-            critter.tick();
+            critter.tick(true);
+            critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 2);
         }
@@ -643,7 +644,7 @@ mod tests {
                 Genome::all(Instruction::RepeatPreviousMove),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
@@ -661,7 +662,7 @@ mod tests {
                 Genome::all(Instruction::RepeatPreviousMove),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.heading(), Heading::East);
         }
@@ -688,9 +689,9 @@ mod tests {
                 ]),
             );
 
-            critter.tick();
-            critter.tick();
-            critter.tick();
+            critter.tick(true);
+            critter.tick(true);
+            critter.tick(true);
 
             assert_eq!(critter.heading(), Heading::SouthWest);
         }
@@ -746,7 +747,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.initial_energy(), INITIAL_ENERGY);
         }
@@ -764,7 +765,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!(critter.energy(), INITIAL_ENERGY - 1);
         }
@@ -783,7 +784,7 @@ mod tests {
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
-                critter.tick();
+                critter.tick(true);
             }
 
             assert_eq!(critter.energy(), INITIAL_ENERGY);
@@ -802,7 +803,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            critter.tick();
+            critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
         }
@@ -821,7 +822,7 @@ mod tests {
             );
 
             for _ in 0..10 {
-                critter.tick();
+                critter.tick(true);
             }
 
             assert_eq!(critter.energy(), 0);
@@ -930,7 +931,7 @@ mod tests {
         fn ticking_a_split_instruction_returns_a_child_critter() {
             let mut critter = splitter();
 
-            let child = critter.tick();
+            let child = critter.tick(true);
 
             assert!(child.is_some());
         }
@@ -939,7 +940,7 @@ mod tests {
         fn the_child_receives_half_of_the_parents_pre_split_energy() {
             let mut parent = splitter();
 
-            let child = parent.tick().unwrap();
+            let child = parent.tick(true).unwrap();
 
             assert_eq!(child.energy(), SPLITTER_ENERGY / 2);
         }
@@ -948,7 +949,7 @@ mod tests {
         fn the_parent_keeps_half_of_its_pre_split_energy_minus_the_instruction_cost() {
             let mut parent = splitter();
 
-            parent.tick();
+            parent.tick(true);
 
             assert_eq!(parent.energy(), SPLITTER_ENERGY / 2 - 1);
         }
@@ -957,7 +958,7 @@ mod tests {
         fn the_child_inherits_the_parents_heading() {
             let mut parent = splitter();
 
-            let child = parent.tick().unwrap();
+            let child = parent.tick(true).unwrap();
 
             assert_eq!(child.heading(), Heading::North);
         }
@@ -966,7 +967,7 @@ mod tests {
         fn the_child_inherits_the_parents_initial_energy() {
             let mut parent = splitter();
 
-            let child = parent.tick().unwrap();
+            let child = parent.tick(true).unwrap();
 
             assert_eq!(child.initial_energy(), INITIAL_ENERGY);
         }
@@ -977,7 +978,7 @@ mod tests {
             // one pixel south, at (10, 11) — directly behind.
             let mut parent = splitter();
 
-            let child = parent.tick().unwrap();
+            let child = parent.tick(true).unwrap();
 
             assert_eq!((child.x(), child.y()), (START_X, START_Y + 1));
         }
@@ -997,7 +998,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let child = parent.tick().unwrap();
+            let child = parent.tick(true).unwrap();
 
             assert_eq!((child.x(), child.y()), (START_X - STEP_SIZE, START_Y));
         }
@@ -1020,7 +1021,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let child = parent.tick().unwrap();
+            let child = parent.tick(true).unwrap();
 
             assert_eq!(
                 (child.x(), child.y()),
@@ -1044,9 +1045,9 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let mut child = parent.tick().unwrap();
+            let mut child = parent.tick(true).unwrap();
             let initial_child_x = child.x();
-            child.tick(); // executes the second instruction (MoveForward)
+            child.tick(true); // executes the second instruction (MoveForward)
 
             assert_eq!(child.x(), initial_child_x + 1);
         }
@@ -1064,7 +1065,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            assert!(critter.tick().is_none());
+            assert!(critter.tick(true).is_none());
         }
 
         #[test]
@@ -1080,7 +1081,7 @@ mod tests {
                 Genome::all(Instruction::TurnLeft),
             );
 
-            assert!(critter.tick().is_none());
+            assert!(critter.tick(true).is_none());
         }
 
         #[test]
@@ -1096,7 +1097,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            assert!(critter.tick().is_none());
+            assert!(critter.tick(true).is_none());
         }
 
         #[test]
@@ -1112,7 +1113,7 @@ mod tests {
                 Genome::all(Instruction::Split),
             );
 
-            assert!(critter.tick().is_none());
+            assert!(critter.tick(true).is_none());
         }
 
         #[test]
@@ -1132,8 +1133,8 @@ mod tests {
             // 4 × initial to leave enough for the second split.
             parent.gain_energy(3 * INITIAL_ENERGY);
 
-            parent.tick(); // first split
-            let second_child = parent.tick(); // repeat → split again
+            parent.tick(true); // first split
+            let second_child = parent.tick(true); // repeat → split again
 
             assert!(second_child.is_some());
         }
@@ -1159,7 +1160,7 @@ mod tests {
             );
             parent.gain_energy(MAX_CRITTER_ENERGY - 10);
             let parent_genome = parent.genome().clone();
-            let child = parent.tick().expect("parent should split");
+            let child = parent.tick(true).expect("parent should split");
             (parent_genome, child.genome().clone())
         }
 
@@ -1199,6 +1200,54 @@ mod tests {
                 any_differ,
                 "expected at least one mutated child in 200 splits"
             );
+        }
+    }
+
+    mod allow_split_gate {
+        use super::*;
+        use crate::Genome;
+
+        fn ready_to_split(seed: u64) -> Critter {
+            let mut critter = Critter::with_genome(
+                10,
+                10,
+                Heading::North,
+                1,
+                1,
+                10,
+                seed,
+                Genome::all(Instruction::Split),
+            );
+            critter.gain_energy(MAX_CRITTER_ENERGY - 10);
+            critter
+        }
+
+        #[test]
+        fn when_split_is_disallowed_no_child_is_produced() {
+            let mut parent = ready_to_split(0);
+
+            let child = parent.tick(false);
+
+            assert!(child.is_none());
+        }
+
+        #[test]
+        fn when_split_is_disallowed_the_parent_still_pays_the_one_energy_cost() {
+            let mut parent = ready_to_split(0);
+            let energy_before = parent.energy();
+
+            parent.tick(false);
+
+            assert_eq!(parent.energy(), energy_before - 1);
+        }
+
+        #[test]
+        fn when_split_is_allowed_a_child_is_still_produced() {
+            let mut parent = ready_to_split(0);
+
+            let child = parent.tick(true);
+
+            assert!(child.is_some());
         }
     }
 
@@ -1265,14 +1314,14 @@ mod tests {
 
             // Both fire at the deterministic initial threshold (BASE_TICKS).
             for _ in 0..BASE_TICKS {
-                a.tick();
-                b.tick();
+                a.tick(true);
+                b.tick(true);
             }
             // After the first firing each gets a jittered next threshold drawn
             // from its own rng — over enough ticks, their x values must diverge.
             for _ in 0..(BASE_TICKS * 4) {
-                a.tick();
-                b.tick();
+                a.tick(true);
+                b.tick(true);
             }
 
             assert_ne!(a.x(), b.x());
@@ -1285,10 +1334,10 @@ mod tests {
             let mut critter = movement_only_critter(0);
 
             for _ in 0..(BASE_TICKS - 1) {
-                critter.tick();
+                critter.tick(true);
             }
             let before = critter.x();
-            critter.tick();
+            critter.tick(true);
             let after = critter.x();
 
             assert_eq!(before, START_X);

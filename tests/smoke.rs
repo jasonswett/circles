@@ -13,7 +13,7 @@ fn the_simulation_can_run_for_many_frames_without_panicking() {
     let mut frame_pixels = vec![0u32; WIDTH * HEIGHT];
 
     for _ in 0..FRAMES {
-        world.tick();
+        world.tick(true);
         frame_pixels.fill(0);
         for pellet in world.pellets() {
             Renderer::draw_pellet(pellet, &mut frame_pixels, WIDTH, HEIGHT);

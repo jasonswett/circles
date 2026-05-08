@@ -496,7 +496,7 @@ mod tests {
                     Genome::all(Instruction::DoNothing),
                 );
                 for _ in 0..(INITIAL_ENERGY - current_energy) {
-                    critter.tick();
+                    critter.tick(true);
                 }
                 critter
             }

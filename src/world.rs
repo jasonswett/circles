@@ -88,10 +88,10 @@ impl World {
         critter_energy + pellet_energy
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self, allow_split: bool) {
         let mut children = Vec::new();
         for critter in &mut self.critters {
-            if let Some(mut child) = critter.tick() {
+            if let Some(mut child) = critter.tick(allow_split) {
                 child.wrap_position(self.width as i32, self.height as i32);
                 children.push(child);
             }
@@ -279,7 +279,7 @@ mod tests {
             let initial_total: u32 = critters.iter().map(|c| c.energy()).sum();
 
             for _ in 0..TICKS_PER_INSTRUCTION {
-                world.tick();
+                world.tick(true);
             }
 
             let final_total: u32 = world.critters().iter().map(|c| c.energy()).sum();
@@ -371,7 +371,7 @@ mod tests {
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.critters().len(), 2);
         }
@@ -396,7 +396,7 @@ mod tests {
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.critters()[0].x(), 0);
         }
@@ -416,7 +416,7 @@ mod tests {
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.critters()[0].y(), TEST_HEIGHT as i32 - 1);
         }
@@ -455,7 +455,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 0);
         }
@@ -471,7 +471,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(
                 world.critters()[0].energy(),
@@ -491,7 +491,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
             assert_eq!(world.critters()[0].energy(), STARTING_ENERGY);
@@ -513,7 +513,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 0);
         }
@@ -533,7 +533,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
         }
@@ -553,7 +553,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
         }
@@ -580,7 +580,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
             assert_eq!(world.critters()[0].energy(), crate::MAX_CRITTER_ENERGY);
@@ -607,7 +607,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.critters()[0].energy(), HUNGRY_INITIAL + PELLET_ENERGY);
         }
@@ -628,7 +628,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 0);
         }
@@ -647,7 +647,7 @@ mod tests {
                 vec![pellet],
             );
 
-            world.tick();
+            world.tick(true);
 
             assert_eq!(world.pellets().len(), 0);
         }
@@ -890,7 +890,7 @@ mod tests {
             let original = world.original_total_energy();
 
             for _ in 0..100 {
-                world.tick();
+                world.tick(true);
             }
 
             assert_eq!(world.original_total_energy(), original);

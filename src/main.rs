@@ -13,7 +13,10 @@ const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 const REAPER_INTERVAL_FRAMES: u32 = 300;
 const REPLENISH_INTERVAL_FRAMES: u32 = 300;
-const REPLENISH_MIN_FPS: u32 = 40;
+// Minimum FPS at which work that grows the simulation (splitting, pellet
+// replenishment) is allowed to run. Below this, the simulation throttles
+// growth so it can recover.
+const MIN_FPS_FOR_GROWTH: u32 = 40;
 const FPS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 #[repr(C)]
@@ -73,7 +76,8 @@ fn main() {
             stagnation.reset();
         }
 
-        world.tick();
+        let allow_growth = fps_counter.current_fps() >= MIN_FPS_FOR_GROWTH;
+        world.tick(allow_growth);
 
         let total_energy = world.total_energy();
         stagnation.observe(total_energy);
@@ -94,7 +98,7 @@ fn main() {
         }
         if frame_counter > 0
             && frame_counter.is_multiple_of(REPLENISH_INTERVAL_FRAMES)
-            && fps_counter.current_fps() >= REPLENISH_MIN_FPS
+            && allow_growth
         {
             world.replenish_pellets(&mut rng);
         }
