@@ -5,7 +5,7 @@ use rand::thread_rng;
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 const TEXT_COLOR: u32 = 0xFF_FF_FF;
-const TEXT_SCALE: usize = 4;
+const TEXT_SIZE: f32 = 28.0;
 const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
@@ -100,15 +100,31 @@ fn main() {
 
 fn draw_total_energy(value: u32, buffer: &mut [u32], width: usize, height: usize) {
     let text = value.to_string();
-    let pixels = text_pixels(&text, TEXT_SCALE);
-    let text_width = pixels.iter().map(|&(x, _)| x + 1).max().unwrap_or(0);
+    let pixels = text_pixels(&text, TEXT_SIZE);
+    let text_width = pixels.iter().map(|&(x, _, _)| x + 1).max().unwrap_or(0);
     let origin_x = width.saturating_sub(text_width + TEXT_MARGIN);
     let origin_y = TEXT_MARGIN;
-    for (x, y) in pixels {
+    for (x, y, alpha) in pixels {
         let px = origin_x + x;
         let py = origin_y + y;
         if px < width && py < height {
-            buffer[py * width + px] = TEXT_COLOR;
+            let existing = buffer[py * width + px];
+            buffer[py * width + px] = blend(existing, TEXT_COLOR, alpha);
         }
     }
+}
+
+fn blend(background: u32, foreground: u32, alpha: u8) -> u32 {
+    let a = alpha as u32;
+    let inv = 255 - a;
+    let bg_r = (background >> 16) & 0xFF;
+    let bg_g = (background >> 8) & 0xFF;
+    let bg_b = background & 0xFF;
+    let fg_r = (foreground >> 16) & 0xFF;
+    let fg_g = (foreground >> 8) & 0xFF;
+    let fg_b = foreground & 0xFF;
+    let r = (fg_r * a + bg_r * inv) / 255;
+    let g = (fg_g * a + bg_g * inv) / 255;
+    let b = (fg_b * a + bg_b * inv) / 255;
+    (r << 16) | (g << 8) | b
 }

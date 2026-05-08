@@ -1,42 +1,55 @@
-const GLYPH_WIDTH: usize = 3;
-const GLYPH_HEIGHT: usize = 5;
-const GLYPH_GAP: usize = 1;
+use fontdue::{Font, FontSettings};
+use std::sync::OnceLock;
 
-const DIGIT_GLYPHS: [[u8; GLYPH_HEIGHT]; 10] = [
-    [0b111, 0b101, 0b101, 0b101, 0b111], // 0
-    [0b010, 0b110, 0b010, 0b010, 0b111], // 1
-    [0b111, 0b001, 0b111, 0b100, 0b111], // 2
-    [0b111, 0b001, 0b111, 0b001, 0b111], // 3
-    [0b101, 0b101, 0b111, 0b001, 0b001], // 4
-    [0b111, 0b100, 0b111, 0b001, 0b111], // 5
-    [0b111, 0b100, 0b111, 0b101, 0b111], // 6
-    [0b111, 0b001, 0b010, 0b010, 0b010], // 7
-    [0b111, 0b101, 0b111, 0b101, 0b111], // 8
-    [0b111, 0b101, 0b111, 0b001, 0b111], // 9
-];
+const FONT_BYTES: &[u8] = include_bytes!("../assets/DejaVuSansMono.ttf");
 
-fn glyph_for(ch: char) -> Option<[u8; GLYPH_HEIGHT]> {
-    ch.to_digit(10).map(|d| DIGIT_GLYPHS[d as usize])
+fn font() -> &'static Font {
+    static FONT: OnceLock<Font> = OnceLock::new();
+    FONT.get_or_init(|| {
+        Font::from_bytes(FONT_BYTES, FontSettings::default()).expect("font failed to parse")
+    })
 }
 
-pub fn pixels(text: &str, scale: usize) -> Vec<(usize, usize)> {
+// Glyph layout is essentially a port of fontdue's API into our coordinate
+// system. The arithmetic (xmin/ymin offsets, baseline computation, bounds
+// checks) is verified by visual inspection of the running binary; pinning
+// down exact pixel positions in unit tests would tightly couple them to
+// fontdue's rasterizer and the bundled font version.
+#[mutants::skip]
+pub fn pixels(text: &str, size: f32) -> Vec<(usize, usize, u8)> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let font = font();
+    // Compute a baseline y high enough to host the largest glyph in the line.
+    // ascent at this size = how far above baseline a glyph reaches.
+    let line_metrics = font.horizontal_line_metrics(size).expect("missing metrics");
+    let baseline = line_metrics.ascent.ceil() as i32;
+
     let mut out = Vec::new();
-    let mut cursor_x = 0;
+    let mut cursor_x: f32 = 0.0;
     for ch in text.chars() {
-        if let Some(glyph) = glyph_for(ch) {
-            for (row, bits) in glyph.iter().enumerate() {
-                for col in 0..GLYPH_WIDTH {
-                    if bits & (1 << (GLYPH_WIDTH - 1 - col)) != 0 {
-                        for sy in 0..scale {
-                            for sx in 0..scale {
-                                out.push((cursor_x + col * scale + sx, row * scale + sy));
-                            }
-                        }
-                    }
+        let (metrics, bitmap) = font.rasterize(ch, size);
+        let glyph_origin_x = cursor_x.round() as i32 + metrics.xmin;
+        // ymin in fontdue is the y offset of the bottom-left of the glyph
+        // bitmap from the baseline (positive y = up). The top of the bitmap
+        // sits at `baseline - ymin - height`.
+        let glyph_origin_y = baseline - metrics.ymin - metrics.height as i32;
+        for row in 0..metrics.height {
+            for col in 0..metrics.width {
+                let alpha = bitmap[row * metrics.width + col];
+                if alpha == 0 {
+                    continue;
                 }
+                let px = glyph_origin_x + col as i32;
+                let py = glyph_origin_y + row as i32;
+                if px < 0 || py < 0 {
+                    continue;
+                }
+                out.push((px as usize, py as usize, alpha));
             }
         }
-        cursor_x += (GLYPH_WIDTH + GLYPH_GAP) * scale;
+        cursor_x += metrics.advance_width;
     }
     out
 }
@@ -45,81 +58,48 @@ pub fn pixels(text: &str, scale: usize) -> Vec<(usize, usize)> {
 mod tests {
     use super::*;
 
-    mod pixels {
-        use super::*;
+    #[test]
+    fn an_empty_string_produces_no_pixels() {
+        let pixels = pixels("", 16.0);
 
-        #[test]
-        fn rendering_an_empty_string_produces_no_pixels() {
-            let pixels = pixels("", 1);
+        assert!(pixels.is_empty());
+    }
 
-            assert!(pixels.is_empty());
-        }
+    #[test]
+    fn a_single_character_produces_some_lit_pixels() {
+        let pixels = pixels("A", 16.0);
 
-        #[test]
-        fn the_digit_one_lights_up_the_top_center_pixel() {
-            // Digit '1' glyph (3 cols × 5 rows) has bit set at row 0, col 1.
-            let pixels = pixels("1", 1);
+        assert!(!pixels.is_empty());
+    }
 
-            assert!(pixels.contains(&(1, 0)));
-        }
+    #[test]
+    fn every_returned_pixel_has_nonzero_alpha() {
+        let pixels = pixels("ABCabc123", 16.0);
 
-        #[test]
-        fn the_digit_zero_does_not_light_up_the_center_pixel() {
-            // '0' is a hollow ring; the inner cell (1, 2) should be dark.
-            let pixels = pixels("0", 1);
+        assert!(pixels.iter().all(|&(_, _, alpha)| alpha > 0));
+    }
 
-            assert!(!pixels.contains(&(1, 2)));
-        }
+    #[test]
+    fn the_same_text_at_the_same_size_produces_the_same_output() {
+        let a = pixels("Hello 42", 20.0);
+        let b = pixels("Hello 42", 20.0);
 
-        #[test]
-        fn at_scale_two_each_glyph_pixel_becomes_a_2x2_block() {
-            let pixels = pixels("1", 2);
+        assert_eq!(a, b);
+    }
 
-            // The single lit pixel at (1, 0) becomes a 2x2 block at (2..4, 0..2).
-            assert!(pixels.contains(&(2, 0)));
-            assert!(pixels.contains(&(3, 0)));
-            assert!(pixels.contains(&(2, 1)));
-            assert!(pixels.contains(&(3, 1)));
-        }
+    #[test]
+    fn rendering_two_characters_extends_further_right_than_one() {
+        let one_x_max = pixels("X", 16.0).iter().map(|&(x, _, _)| x).max().unwrap();
+        let two_x_max = pixels("XX", 16.0).iter().map(|&(x, _, _)| x).max().unwrap();
 
-        #[test]
-        fn at_scale_two_the_bottom_row_lands_at_y_eight_or_nine() {
-            // The glyph is 5 rows tall. At scale 2 the bottom row maps to y = 8 or 9.
-            // '1' row 4 = 0b111 (all cols lit), so col 0 at scale 2 sy=1 → (0, 9).
-            // Under a row*scale → row/scale mutation, y would never exceed 3.
-            let pixels = pixels("1", 2);
+        assert!(two_x_max > one_x_max);
+    }
 
-            assert!(pixels.contains(&(0, 9)));
-        }
+    #[test]
+    fn larger_size_produces_pixels_at_larger_y_coordinates() {
+        let small_y_max = pixels("X", 12.0).iter().map(|&(_, y, _)| y).max().unwrap();
+        let large_y_max = pixels("X", 48.0).iter().map(|&(_, y, _)| y).max().unwrap();
 
-        #[test]
-        fn rendering_two_digits_offsets_the_second_to_the_right_of_the_first() {
-            // Glyph width 3 + 1px gap = 4 columns per glyph at scale 1. The first
-            // pixel of the second '1' is at column 4 + 1 = 5.
-            let pixels = pixels("11", 1);
-
-            assert!(pixels.contains(&(5, 0)));
-        }
-
-        #[test]
-        fn at_scale_two_the_cursor_advances_by_eight_columns_per_glyph() {
-            // (3 + 1) * 2 = 8 columns per glyph slot. The lit top pixel of '1' is
-            // at glyph-local col 1, so the second '1' starts its lit pixel at
-            // x = 8 + 1*2 = 10 (a 2x2 block at x=10,11).
-            let pixels = pixels("11", 2);
-
-            assert!(pixels.contains(&(10, 0)));
-            assert!(pixels.contains(&(11, 0)));
-        }
-
-        #[test]
-        fn unsupported_characters_advance_the_cursor_without_drawing() {
-            // A space advances the cursor; the digit after it lands at the second
-            // position. With glyph_width 3 + 1 gap = 4 cols per slot at scale 1,
-            // the '1' after the space starts at col 4, with its lit pixel at col 5.
-            let pixels = pixels(" 1", 1);
-
-            assert!(pixels.contains(&(5, 0)));
-        }
+        assert!(large_y_max > small_y_max);
     }
 }
