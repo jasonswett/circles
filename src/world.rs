@@ -16,6 +16,7 @@ pub struct World {
     critters: Vec<Critter>,
     pellets: Vec<Pellet>,
     original_total_energy: u32,
+    generation: u32,
 }
 
 impl World {
@@ -33,6 +34,7 @@ impl World {
             critters,
             pellets,
             original_total_energy,
+            generation: 1,
         }
     }
 
@@ -50,6 +52,7 @@ impl World {
             critters,
             pellets,
             original_total_energy,
+            generation: 1,
         }
     }
 
@@ -131,6 +134,10 @@ impl World {
         self.critters.len() < MIN_POPULATION
     }
 
+    pub fn generation(&self) -> u32 {
+        self.generation
+    }
+
     pub fn reset<R: Rng>(&mut self, rng: &mut R) {
         self.critters = (0..NUM_CRITTERS)
             .map(|_| spawn_critter(self.width, self.height, rng))
@@ -138,6 +145,7 @@ impl World {
         self.pellets = (0..NUM_PELLETS)
             .map(|_| spawn_pellet(self.width, self.height, rng))
             .collect();
+        self.generation += 1;
     }
 }
 
@@ -1038,6 +1046,41 @@ mod tests {
             let world = world_with_critter_count(MIN_POPULATION + 30);
 
             assert!(!world.population_too_low());
+        }
+    }
+
+    mod generation {
+        use super::*;
+
+        #[test]
+        fn a_new_world_starts_at_generation_one() {
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            assert_eq!(world.generation(), 1);
+        }
+
+        #[test]
+        fn each_reset_increments_the_generation() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            world.reset(&mut rng);
+
+            assert_eq!(world.generation(), 2);
+        }
+
+        #[test]
+        fn the_generation_count_persists_across_multiple_resets() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            world.reset(&mut rng);
+            world.reset(&mut rng);
+            world.reset(&mut rng);
+
+            assert_eq!(world.generation(), 4);
         }
     }
 }
