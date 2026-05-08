@@ -469,6 +469,21 @@ mod tests {
                 );
             }
 
+            #[test]
+            fn a_critter_with_energy_above_initial_still_renders_in_pure_blue() {
+                // With the cap on gain_energy removed, a critter can stockpile
+                // past its initial_energy. The color must clamp at pure blue.
+                let mut critter = critter_with_energy(INITIAL_ENERGY);
+                critter.gain_energy(INITIAL_ENERGY); // total = 2 × INITIAL_ENERGY
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0x00_00_FF
+                );
+            }
+
             fn critter_with_energy(current_energy: u32) -> Critter {
                 let mut critter = Critter::new(
                     CENTER,

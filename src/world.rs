@@ -81,13 +81,7 @@ impl World {
         let width = self.width as i32;
         let height = self.height as i32;
         for critter in &mut self.critters {
-            if critter.energy() >= critter.initial_energy() {
-                continue;
-            }
             self.pellets.retain(|pellet| {
-                if critter.energy() >= critter.initial_energy() {
-                    return true;
-                }
                 let dx = toroidal_delta(critter.x(), pellet.x, width);
                 let dy = toroidal_delta(critter.y(), pellet.y, height);
                 if dx * dx + dy * dy < eat_distance_squared {
@@ -221,23 +215,24 @@ mod tests {
         use super::*;
 
         #[test]
-        fn it_advances_each_critter_by_one_tick() {
+        fn ticking_a_world_decreases_total_critter_energy() {
             // Construct with no pellets so eating doesn't interfere with the
-            // per-instruction energy decrement.
+            // per-instruction energy decrement. Some critters may stall on a
+            // Split they can't afford, but the total across all critters must
+            // still drop because at least some will execute non-Split instructions.
             let mut rng = StdRng::seed_from_u64(0);
             let world_with_critters = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
             let critters: Vec<Critter> = world_with_critters.critters().to_vec();
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, critters.clone(), vec![]);
-            let initial_energies: Vec<u32> = critters.iter().map(|c| c.energy()).collect();
+            let initial_total: u32 = critters.iter().map(|c| c.energy()).sum();
 
             for _ in 0..TICKS_PER_INSTRUCTION {
                 world.tick();
             }
 
-            for (critter, initial) in world.critters().iter().zip(initial_energies) {
-                assert!(critter.energy() < initial);
-            }
+            let final_total: u32 = world.critters().iter().map(|c| c.energy()).sum();
+            assert!(final_total < initial_total);
         }
     }
 
@@ -312,7 +307,7 @@ mod tests {
 
         #[test]
         fn a_critter_that_splits_appears_twice_in_the_critter_list_after_a_tick() {
-            let splitter = Critter::new(
+            let mut splitter = Critter::new(
                 100,
                 100,
                 Heading::North,
@@ -322,6 +317,8 @@ mod tests {
                 60,
                 0,
             );
+            // Splits require energy ≥ 2 × initial_energy.
+            splitter.gain_energy(60);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
 
@@ -513,8 +510,9 @@ mod tests {
         }
 
         #[test]
-        fn a_full_critter_does_not_consume_a_pellet() {
-            let full = Critter::new(
+        fn eating_can_push_energy_past_initial_energy() {
+            // Eating no longer caps at initial_energy: a critter can stockpile.
+            let critter = Critter::new(
                 100,
                 100,
                 Heading::North,
@@ -524,30 +522,6 @@ mod tests {
                 HUNGRY_INITIAL,
                 0,
             );
-            let pellet = Pellet { x: 100, y: 100 };
-            let mut world =
-                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![full], vec![pellet]);
-
-            world.tick();
-
-            assert_eq!(world.pellets().len(), 1);
-            assert_eq!(world.critters()[0].energy(), HUNGRY_INITIAL);
-        }
-
-        #[test]
-        fn eating_caps_energy_at_initial_energy() {
-            // Critter just below full: only has room for a partial pellet.
-            let mut critter = Critter::new(
-                100,
-                100,
-                Heading::North,
-                vec![Instruction::DoNothing],
-                u32::MAX,
-                1,
-                HUNGRY_INITIAL,
-                0,
-            );
-            critter.lose_energy(2); // energy = 58, space for 2 of the 10 pellet energy
             let pellet = Pellet { x: 100, y: 100 };
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -558,7 +532,7 @@ mod tests {
 
             world.tick();
 
-            assert_eq!(world.critters()[0].energy(), HUNGRY_INITIAL);
+            assert_eq!(world.critters()[0].energy(), HUNGRY_INITIAL + PELLET_ENERGY);
         }
 
         #[test]

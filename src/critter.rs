@@ -69,8 +69,12 @@ impl Critter {
         self.initial_energy
     }
 
+    pub fn can_split(&self) -> bool {
+        self.energy >= 2 * self.initial_energy
+    }
+
     pub fn gain_energy(&mut self, amount: u32) {
-        self.energy = self.energy.saturating_add(amount).min(self.initial_energy);
+        self.energy = self.energy.saturating_add(amount);
     }
 
     pub fn lose_energy(&mut self, amount: u32) {
@@ -101,7 +105,15 @@ impl Critter {
         let instruction = self.instructions[self.next_instruction_index];
         self.next_instruction_index = (self.next_instruction_index + 1) % self.instructions.len();
 
-        let child = self.execute(instruction);
+        let child = if instruction == Instruction::Split && !self.can_split() {
+            // Insufficient energy to split: the instruction still costs the
+            // critter its usual 1 energy and the pointer still advances, but
+            // no child is produced.
+            self.last_executed = Some(Instruction::Split);
+            None
+        } else {
+            self.execute(instruction)
+        };
         self.energy = self.energy.saturating_sub(1);
         child
     }
@@ -798,9 +810,12 @@ mod tests {
         use super::*;
 
         const INITIAL_ENERGY: u32 = 60;
+        // Splits require energy ≥ 2 × initial_energy, so the splitter starts
+        // with enough stockpiled energy to qualify.
+        const SPLITTER_ENERGY: u32 = 2 * INITIAL_ENERGY;
 
         fn splitter() -> Critter {
-            Critter::new(
+            let mut critter = Critter::new(
                 START_X,
                 START_Y,
                 Heading::North,
@@ -809,7 +824,9 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
-            )
+            );
+            critter.gain_energy(SPLITTER_ENERGY - INITIAL_ENERGY);
+            critter
         }
 
         #[test]
@@ -827,7 +844,7 @@ mod tests {
 
             let child = parent.tick().unwrap();
 
-            assert_eq!(child.energy(), INITIAL_ENERGY / 2);
+            assert_eq!(child.energy(), SPLITTER_ENERGY / 2);
         }
 
         #[test]
@@ -836,7 +853,7 @@ mod tests {
 
             parent.tick();
 
-            assert_eq!(parent.energy(), INITIAL_ENERGY / 2 - 1);
+            assert_eq!(parent.energy(), SPLITTER_ENERGY / 2 - 1);
         }
 
         #[test]
@@ -881,6 +898,7 @@ mod tests {
                 INITIAL_ENERGY,
                 0,
             );
+            parent.gain_energy(INITIAL_ENERGY);
 
             let child = parent.tick().unwrap();
 
@@ -903,6 +921,7 @@ mod tests {
                 INITIAL_ENERGY,
                 0,
             );
+            parent.gain_energy(INITIAL_ENERGY);
 
             let child = parent.tick().unwrap();
 
@@ -926,6 +945,7 @@ mod tests {
                 INITIAL_ENERGY,
                 0,
             );
+            parent.gain_energy(INITIAL_ENERGY);
 
             let mut child = parent.tick().unwrap();
             let initial_child_x = child.x();
@@ -999,26 +1019,6 @@ mod tests {
         }
 
         #[test]
-        fn a_split_at_one_energy_does_not_underflow() {
-            // Pre-tick energy = 1: passes the energy>0 guard, Split halves to 0,
-            // then the instruction-cost decrement must not underflow.
-            let mut parent = Critter::new(
-                START_X,
-                START_Y,
-                Heading::North,
-                vec![Instruction::Split],
-                1,
-                1,
-                1,
-                0,
-            );
-
-            parent.tick();
-
-            assert_eq!(parent.energy(), 0);
-        }
-
-        #[test]
         fn a_split_when_repeating_a_previous_split_still_returns_a_child() {
             let mut parent = Critter::new(
                 START_X,
@@ -1030,6 +1030,10 @@ mod tests {
                 INITIAL_ENERGY,
                 0,
             );
+            // Need enough energy for two splits: pre-split must be ≥ 2 × initial.
+            // After the first split, parent will have ~half — so we start with
+            // 4 × initial to leave enough for the second split.
+            parent.gain_energy(3 * INITIAL_ENERGY);
 
             parent.tick(); // first split
             let second_child = parent.tick(); // repeat → split again
@@ -1129,6 +1133,128 @@ mod tests {
 
             assert_eq!(before, START_X);
             assert_eq!(after, START_X + 1);
+        }
+    }
+
+    mod can_split {
+        use super::*;
+
+        const INITIAL_ENERGY: u32 = 60;
+
+        fn critter_with_energy(energy: u32) -> Critter {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                vec![],
+                1,
+                1,
+                INITIAL_ENERGY,
+                0,
+            );
+            if energy < INITIAL_ENERGY {
+                critter.lose_energy(INITIAL_ENERGY - energy);
+            } else if energy > INITIAL_ENERGY {
+                critter.gain_energy(energy - INITIAL_ENERGY);
+            }
+            critter
+        }
+
+        #[test]
+        fn a_critter_at_initial_energy_cannot_split() {
+            let critter = critter_with_energy(INITIAL_ENERGY);
+
+            assert!(!critter.can_split());
+        }
+
+        #[test]
+        fn a_critter_just_below_double_initial_energy_cannot_split() {
+            let critter = critter_with_energy(2 * INITIAL_ENERGY - 1);
+
+            assert!(!critter.can_split());
+        }
+
+        #[test]
+        fn a_critter_at_exactly_double_initial_energy_can_split() {
+            let critter = critter_with_energy(2 * INITIAL_ENERGY);
+
+            assert!(critter.can_split());
+        }
+
+        #[test]
+        fn a_critter_above_double_initial_energy_can_split() {
+            let critter = critter_with_energy(3 * INITIAL_ENERGY);
+
+            assert!(critter.can_split());
+        }
+    }
+
+    mod split_threshold {
+        use super::*;
+
+        const INITIAL_ENERGY: u32 = 60;
+
+        fn make_splitter(energy: u32, instructions: Vec<Instruction>) -> Critter {
+            let mut critter = Critter::new(
+                START_X,
+                START_Y,
+                Heading::North,
+                instructions,
+                1,
+                1,
+                INITIAL_ENERGY,
+                0,
+            );
+            if energy < INITIAL_ENERGY {
+                critter.lose_energy(INITIAL_ENERGY - energy);
+            } else if energy > INITIAL_ENERGY {
+                critter.gain_energy(energy - INITIAL_ENERGY);
+            }
+            critter
+        }
+
+        #[test]
+        fn a_split_below_the_threshold_returns_no_child() {
+            let mut critter = make_splitter(INITIAL_ENERGY, vec![Instruction::Split]);
+
+            let child = critter.tick();
+
+            assert!(child.is_none());
+        }
+
+        #[test]
+        fn a_split_below_the_threshold_still_costs_one_energy() {
+            // A failed Split is not a no-op: it costs the same one-energy tick
+            // as every other instruction.
+            let mut critter = make_splitter(INITIAL_ENERGY, vec![Instruction::Split]);
+
+            critter.tick();
+
+            assert_eq!(critter.energy(), INITIAL_ENERGY - 1);
+        }
+
+        #[test]
+        fn a_split_below_the_threshold_still_advances_the_instruction_pointer() {
+            // After a failed Split, the next instruction must be considered on
+            // the following tick: the pointer must have moved past Split.
+            let mut critter = make_splitter(
+                INITIAL_ENERGY,
+                vec![Instruction::Split, Instruction::MoveForward],
+            );
+
+            critter.tick(); // failed Split, pointer advances to MoveForward
+            critter.tick(); // MoveForward fires
+
+            assert_eq!(critter.y(), START_Y - 1);
+        }
+
+        #[test]
+        fn a_split_at_or_above_the_threshold_returns_a_child() {
+            let mut critter = make_splitter(2 * INITIAL_ENERGY, vec![Instruction::Split]);
+
+            let child = critter.tick();
+
+            assert!(child.is_some());
         }
     }
 }
