@@ -1,6 +1,5 @@
 use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
 
-pub const OUTLINE_COLOR: u32 = 0x00_00_FF;
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const STOLEN_FROM_COLOR: u32 = 0xFF_00_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
@@ -34,7 +33,11 @@ impl Renderer {
         let color = if critter.is_being_stolen_from() {
             STOLEN_FROM_COLOR
         } else {
-            energy_color(critter.energy(), critter.initial_energy())
+            energy_color(
+                critter.energy(),
+                critter.initial_energy(),
+                critter.genome_color(),
+            )
         };
 
         let body = Ring {
@@ -118,13 +121,13 @@ impl Renderer {
     }
 }
 
-fn energy_color(energy: u32, initial_energy: u32) -> u32 {
+fn energy_color(energy: u32, initial_energy: u32, full_energy_color: u32) -> u32 {
     let ratio = if initial_energy == 0 {
         0.0
     } else {
-        energy as f32 / initial_energy as f32
+        (energy as f32 / initial_energy as f32).clamp(0.0, 1.0)
     };
-    interpolate_color(ZERO_ENERGY_COLOR, OUTLINE_COLOR, ratio)
+    interpolate_color(ZERO_ENERGY_COLOR, full_energy_color, ratio)
 }
 
 fn interpolate_color(from: u32, to: u32, ratio: f32) -> u32 {
@@ -209,7 +212,7 @@ mod tests {
             // The outer edge: at distance radius - 1, distance² = (radius-1)² ≤ radius².
             assert_eq!(
                 pixel_at(&buffer, CENTER + RADIUS - 1, CENTER),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -237,7 +240,7 @@ mod tests {
             // One pixel further out than the inner_radius is the innermost lit pixel.
             assert_eq!(
                 pixel_at(&buffer, CENTER + RADIUS - OUTLINE_THICKNESS + 1, CENTER),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -258,7 +261,7 @@ mod tests {
 
             assert_eq!(
                 pixel_at(&buffer, CENTER, CENTER - RADIUS + FRONT_DOT_RADIUS),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -273,7 +276,7 @@ mod tests {
             let dot_center_y = CENTER - RADIUS + FRONT_DOT_RADIUS;
             assert_eq!(
                 pixel_at(&buffer, CENTER, dot_center_y + FRONT_DOT_RADIUS),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -285,7 +288,7 @@ mod tests {
 
             assert_eq!(
                 pixel_at(&buffer, CENTER + RADIUS - FRONT_DOT_RADIUS, CENTER),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -297,7 +300,7 @@ mod tests {
 
             assert_eq!(
                 pixel_at(&buffer, CENTER, CENTER + RADIUS - FRONT_DOT_RADIUS),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -309,7 +312,7 @@ mod tests {
 
             assert_eq!(
                 pixel_at(&buffer, CENTER - RADIUS + FRONT_DOT_RADIUS, CENTER),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -328,7 +331,7 @@ mod tests {
                     CENTER + DIAGONAL_DOT_OFFSET,
                     CENTER - DIAGONAL_DOT_OFFSET
                 ),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -345,7 +348,7 @@ mod tests {
                     CENTER - DIAGONAL_DOT_OFFSET,
                     CENTER + DIAGONAL_DOT_OFFSET
                 ),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -355,7 +358,7 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER, 0), OUTLINE_COLOR);
+            assert_eq!(pixel_at(&buffer, CENTER, 0), critter.genome_color());
         }
 
         #[test]
@@ -364,7 +367,7 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, 0, CENTER), OUTLINE_COLOR);
+            assert_eq!(pixel_at(&buffer, 0, CENTER), critter.genome_color());
         }
 
         #[test]
@@ -373,7 +376,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CANVAS as i32 - 1, CENTER), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CANVAS as i32 - 1, CENTER),
+                critter.genome_color()
+            );
         }
 
         #[test]
@@ -382,7 +388,10 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, CENTER, CANVAS as i32 - 1), OUTLINE_COLOR);
+            assert_eq!(
+                pixel_at(&buffer, CENTER, CANVAS as i32 - 1),
+                critter.genome_color()
+            );
         }
 
         #[test]
@@ -393,7 +402,7 @@ mod tests {
             let buffer = render(&critter);
 
             // The bottom of the ring (at distance RADIUS below center) is on-canvas.
-            assert_eq!(pixel_at(&buffer, CENTER, RADIUS), OUTLINE_COLOR);
+            assert_eq!(pixel_at(&buffer, CENTER, RADIUS), critter.genome_color());
         }
 
         #[test]
@@ -402,7 +411,7 @@ mod tests {
 
             let buffer = render(&critter);
 
-            assert_eq!(pixel_at(&buffer, RADIUS, CENTER), OUTLINE_COLOR);
+            assert_eq!(pixel_at(&buffer, RADIUS, CENTER), critter.genome_color());
         }
 
         #[test]
@@ -414,7 +423,7 @@ mod tests {
             // The left side of the ring (at distance RADIUS to the left) is on-canvas.
             assert_eq!(
                 pixel_at(&buffer, CANVAS as i32 - 1 - RADIUS, CENTER),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -426,7 +435,7 @@ mod tests {
 
             assert_eq!(
                 pixel_at(&buffer, CENTER, CANVAS as i32 - 1 - RADIUS),
-                OUTLINE_COLOR
+                critter.genome_color()
             );
         }
 
@@ -438,14 +447,14 @@ mod tests {
             const ON_RING_X_OFFSET: i32 = RADIUS - 1;
 
             #[test]
-            fn a_critter_at_full_energy_renders_in_pure_blue() {
+            fn a_critter_at_full_energy_renders_in_its_genome_color() {
                 let critter = critter_with_energy(INITIAL_ENERGY);
 
                 let buffer = render(&critter);
 
                 assert_eq!(
                     pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
-                    0x00_00_FF
+                    critter.genome_color()
                 );
             }
 
@@ -462,22 +471,23 @@ mod tests {
             }
 
             #[test]
-            fn a_critter_at_half_energy_renders_halfway_between_gray_and_blue() {
-                // Halfway between (64, 64, 64) and (0, 0, 255) is (32, 32, 160) when rounded.
+            fn a_critter_at_half_energy_renders_halfway_between_gray_and_its_genome_color() {
                 let critter = critter_with_energy(INITIAL_ENERGY / 2);
 
                 let buffer = render(&critter);
 
+                let halfway = halfway_between(0x40_40_40, critter.genome_color());
                 assert_eq!(
                     pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
-                    0x20_20_A0
+                    halfway
                 );
             }
 
             #[test]
-            fn a_critter_with_energy_above_initial_still_renders_in_pure_blue() {
+            fn a_critter_with_energy_above_initial_still_renders_in_its_genome_color() {
                 // With the cap on gain_energy removed, a critter can stockpile
-                // past its initial_energy. The color must clamp at pure blue.
+                // past its initial_energy. The color must clamp at the full
+                // genome color rather than continuing to brighten.
                 let mut critter = critter_with_energy(INITIAL_ENERGY);
                 critter.gain_energy(INITIAL_ENERGY); // total = 2 × INITIAL_ENERGY
 
@@ -485,8 +495,18 @@ mod tests {
 
                 assert_eq!(
                     pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
-                    0x00_00_FF
+                    critter.genome_color()
                 );
+            }
+
+            fn halfway_between(from: u32, to: u32) -> u32 {
+                // Match the renderer's lerp, which rounds to nearest rather
+                // than truncating, so odd-sum channels don't diverge.
+                let [_, fr, fg, fb] = from.to_be_bytes();
+                let [_, tr, tg, tb] = to.to_be_bytes();
+                let lerp_half =
+                    |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * 0.5).round() as u8 };
+                u32::from_be_bytes([0, lerp_half(fr, tr), lerp_half(fg, tg), lerp_half(fb, tb)])
             }
 
             #[test]
@@ -533,7 +553,10 @@ mod tests {
 
                 // A pixel that would be lit on the unwrapped circle's right side now
                 // appears on the left edge.
-                assert_eq!(pixel_at(&buffer, RADIUS - 2, CENTER), OUTLINE_COLOR);
+                assert_eq!(
+                    pixel_at(&buffer, RADIUS - 2, CENTER),
+                    critter.genome_color()
+                );
             }
 
             #[test]
@@ -542,7 +565,10 @@ mod tests {
 
                 let buffer = render(&critter);
 
-                assert_eq!(pixel_at(&buffer, CENTER, RADIUS - 2), OUTLINE_COLOR);
+                assert_eq!(
+                    pixel_at(&buffer, CENTER, RADIUS - 2),
+                    critter.genome_color()
+                );
             }
         }
 

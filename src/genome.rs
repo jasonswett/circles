@@ -80,6 +80,20 @@ impl Genome {
         genome
     }
 
+    /// A 24-bit color computed by hashing thirds of the genome bytes into the
+    /// red, green, and blue channels independently. Genomes with identical
+    /// bytes produce identical colors (so unmutated children look the same as
+    /// their parent), and any mutation changes the color visibly. Each channel
+    /// is brightened away from black so the critter remains visible against
+    /// the dark background.
+    pub fn digest_color(&self) -> u32 {
+        let third = TOTAL_BYTES / 3;
+        let r = brighten_channel(fnv1a_byte(&self.bytes[0..third]));
+        let g = brighten_channel(fnv1a_byte(&self.bytes[third..2 * third]));
+        let b = brighten_channel(fnv1a_byte(&self.bytes[2 * third..]));
+        u32::from_be_bytes([0, r, g, b])
+    }
+
     pub fn decode_at(&self, cursor: usize) -> Instruction {
         let position = cursor % OPCODE_COUNT;
         let bit_offset = HEADER_BITS + position * OPCODE_BITS_PER_OPCODE;
@@ -237,6 +251,31 @@ fn decode(code: u8) -> Instruction {
         0b1110 | 0b1111 => Instruction::Steal,
         _ => Instruction::Split,
     }
+}
+
+// Minimum per-channel brightness so a freshly-zero hash doesn't render fully
+// black against the background. 80 keeps the critter clearly visible.
+const MIN_CHANNEL_BRIGHTNESS: u8 = 80;
+
+fn brighten_channel(value: u8) -> u8 {
+    value.max(MIN_CHANNEL_BRIGHTNESS)
+}
+
+// FNV-1a folded into a single byte. A single-bit input change cascades through
+// the multiply step, so unrelated genomes get unrelated colors and unmutated
+// children share their parent's color exactly.
+fn fnv1a_byte(bytes: &[u8]) -> u8 {
+    const OFFSET_BASIS: u32 = 2166136261;
+    const PRIME: u32 = 16777619;
+    let mut hash = OFFSET_BASIS;
+    for &b in bytes {
+        hash ^= b as u32;
+        hash = hash.wrapping_mul(PRIME);
+    }
+    // Truncate to the low byte; equivalent to `(hash & 0xFF) as u8` but does
+    // not introduce a separate mask operation that mutation testing would
+    // flag as ambiguous.
+    hash as u8
 }
 
 fn sigmoid(z: f32) -> f32 {
@@ -569,6 +608,139 @@ mod tests {
                 .sum();
             assert!(differing_bits > 0);
             assert!(differing_bits < 8 * TOTAL_BYTES as u32);
+        }
+    }
+
+    mod digest_color {
+        use super::*;
+
+        #[test]
+        fn two_genomes_with_identical_bytes_produce_the_same_color() {
+            let a = random_genome(7);
+            let b = random_genome(7);
+
+            assert_eq!(a.digest_color(), b.digest_color());
+        }
+
+        #[test]
+        fn each_channel_hashes_six_distinct_bytes_in_position() {
+            // Construct a genome where each third has a distinct byte signature
+            // and the others are zero. Each channel's hash is then determined
+            // entirely by its own slice; if a mutation shifts the slice
+            // boundaries the channel will hash a different (or shorter) span
+            // and produce a different value.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            // First third: bytes 0..6 contain 0xAA in the last position only.
+            bytes[5] = 0xAA;
+            let red_only = Genome { bytes };
+
+            let mut bytes = [0u8; TOTAL_BYTES];
+            bytes[11] = 0xAA;
+            let green_only = Genome { bytes };
+
+            let mut bytes = [0u8; TOTAL_BYTES];
+            bytes[17] = 0xAA;
+            let blue_only = Genome { bytes };
+
+            let zero = Genome {
+                bytes: [0u8; TOTAL_BYTES],
+            };
+
+            // The signature byte sits at position [end_of_slice - 1] for each
+            // third; only the matching channel should differ from the all-zero
+            // genome's color.
+            let (zr, zg, zb) = channels(zero.digest_color());
+            let (rr, rg, rb) = channels(red_only.digest_color());
+            assert_ne!(zr, rr);
+            assert_eq!(zg, rg);
+            assert_eq!(zb, rb);
+
+            let (gr, gg, gb) = channels(green_only.digest_color());
+            assert_eq!(zr, gr);
+            assert_ne!(zg, gg);
+            assert_eq!(zb, gb);
+
+            let (br, bg, bb) = channels(blue_only.digest_color());
+            assert_eq!(zr, br);
+            assert_eq!(zg, bg);
+            assert_ne!(zb, bb);
+        }
+
+        #[test]
+        fn flipping_a_byte_in_the_first_third_changes_only_the_red_channel() {
+            // Bytes 0..6 feed the red channel; the green and blue channels
+            // must be unaffected. This pins the slice boundaries.
+            let original = random_genome(0);
+            let mut bytes = original.bytes;
+            bytes[0] ^= 0xFF;
+            let mutated = Genome { bytes };
+
+            let (or, og, ob) = channels(original.digest_color());
+            let (mr, mg, mb) = channels(mutated.digest_color());
+            assert_ne!(or, mr);
+            assert_eq!(og, mg);
+            assert_eq!(ob, mb);
+        }
+
+        #[test]
+        fn flipping_a_byte_in_the_middle_third_changes_only_the_green_channel() {
+            let original = random_genome(0);
+            let mut bytes = original.bytes;
+            bytes[TOTAL_BYTES / 3] ^= 0xFF;
+            let mutated = Genome { bytes };
+
+            let (or, og, ob) = channels(original.digest_color());
+            let (mr, mg, mb) = channels(mutated.digest_color());
+            assert_eq!(or, mr);
+            assert_ne!(og, mg);
+            assert_eq!(ob, mb);
+        }
+
+        #[test]
+        fn flipping_a_byte_in_the_last_third_changes_only_the_blue_channel() {
+            let original = random_genome(0);
+            let mut bytes = original.bytes;
+            bytes[2 * (TOTAL_BYTES / 3)] ^= 0xFF;
+            let mutated = Genome { bytes };
+
+            let (or, og, ob) = channels(original.digest_color());
+            let (mr, mg, mb) = channels(mutated.digest_color());
+            assert_eq!(or, mr);
+            assert_eq!(og, mg);
+            assert_ne!(ob, mb);
+        }
+
+        fn channels(color: u32) -> (u32, u32, u32) {
+            ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF)
+        }
+
+        #[test]
+        fn each_channel_of_the_color_is_at_least_the_minimum_brightness() {
+            // The brightening floor keeps the critter visible against a black
+            // background even if a hash happens to produce a near-zero byte.
+            let zero_genome = Genome {
+                bytes: [0u8; TOTAL_BYTES],
+            };
+            let color = zero_genome.digest_color();
+            let r = (color >> 16) & 0xFF;
+            let g = (color >> 8) & 0xFF;
+            let b = color & 0xFF;
+
+            assert!(r >= MIN_CHANNEL_BRIGHTNESS as u32);
+            assert!(g >= MIN_CHANNEL_BRIGHTNESS as u32);
+            assert!(b >= MIN_CHANNEL_BRIGHTNESS as u32);
+        }
+
+        #[test]
+        fn colors_are_distributed_over_many_seeds_rather_than_clumped() {
+            // A poor digest would map many distinct genomes to the same color.
+            // Across 100 seeds, almost every digest should be unique.
+            let mut colors = std::collections::HashSet::new();
+            for seed in 0..100 {
+                colors.insert(random_genome(seed).digest_color());
+            }
+
+            assert!(colors.len() > 90);
         }
     }
 

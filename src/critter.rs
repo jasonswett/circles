@@ -138,6 +138,13 @@ impl Critter {
         &self.genome
     }
 
+    /// A color derived from the genome bytes — identical for genomes with
+    /// identical bytes, distinct (with very high probability) for any
+    /// difference. Lets the renderer paint each lineage in its own color.
+    pub fn genome_color(&self) -> u32 {
+        self.genome.digest_color()
+    }
+
     pub fn gain_energy(&mut self, amount: u32) {
         self.energy = self.energy.saturating_add(amount).min(MAX_CRITTER_ENERGY);
     }
@@ -450,6 +457,30 @@ mod tests {
             critter.age_overlap_indicator();
 
             assert!(!critter.is_overlapping_critter());
+        }
+    }
+
+    mod genome_color {
+        use super::*;
+        use rand::rngs::SmallRng;
+        use rand::SeedableRng;
+
+        #[test]
+        fn it_matches_the_underlying_genomes_digest_color() {
+            let mut rng = SmallRng::seed_from_u64(42);
+            let genome = Genome::random(&mut rng);
+            let critter = Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                100,
+                0,
+                genome.clone(),
+            );
+
+            assert_eq!(critter.genome_color(), genome.digest_color());
         }
     }
 
