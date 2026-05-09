@@ -3,7 +3,7 @@ use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 10;
 
-const NUM_CRITTERS: usize = 500;
+const NUM_CRITTERS: usize = 100;
 const NUM_PELLETS: usize = 1000;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
