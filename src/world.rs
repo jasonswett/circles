@@ -16,6 +16,9 @@ const OVERLAP_DETECTION_BUDGET: usize = 20;
 // How many ticks a critter stays marked as overlapping after a confirmed
 // detection. Smooths out the visual flicker caused by the round-robin budget.
 const OVERLAP_INDICATOR_LINGER_TICKS: u32 = 30;
+// How many ticks a victim stays marked as "being stolen from" after a
+// successful energy transfer. Brief — theft is supposed to look like a flash.
+const STOLEN_FROM_INDICATOR_LINGER_TICKS: u32 = 10;
 
 pub struct World {
     width: usize,
@@ -100,15 +103,22 @@ impl World {
 
     pub fn tick(&mut self, allow_split: bool) {
         let mut children = Vec::new();
-        for critter in &mut self.critters {
+        let mut stealer_indices: Vec<usize> = Vec::new();
+        for (index, critter) in self.critters.iter_mut().enumerate() {
             critter.age_overlap_indicator();
-            if let Some(mut child) = critter.tick(allow_split) {
+            critter.age_being_stolen_from_indicator();
+            let outcome = critter.tick(allow_split);
+            if let Some(mut child) = outcome.child {
                 child.wrap_position(self.width as i32, self.height as i32);
                 children.push(child);
+            }
+            if outcome.attempted_steal {
+                stealer_indices.push(index);
             }
             critter.wrap_position(self.width as i32, self.height as i32);
         }
         self.critters.extend(children);
+        self.resolve_steals(&stealer_indices);
         self.consume_pellets();
         self.detect_critter_overlaps();
     }
@@ -135,6 +145,57 @@ impl World {
                     true
                 }
             });
+        }
+    }
+
+    fn resolve_steals(&mut self, stealer_indices: &[usize]) {
+        let count = self.critters.len();
+        let overlap_distance_squared = (2 * CRITTER_RADIUS) * (2 * CRITTER_RADIUS);
+        let width = self.width as i32;
+        let height = self.height as i32;
+
+        for &stealer_index in stealer_indices {
+            if stealer_index >= count {
+                continue;
+            }
+            if self.critters[stealer_index].energy() == 0 {
+                continue;
+            }
+            if self.critters[stealer_index].energy() >= crate::MAX_CRITTER_ENERGY {
+                continue;
+            }
+            for victim_index in 0..count {
+                if victim_index == stealer_index {
+                    continue;
+                }
+                if self.critters[victim_index].energy() == 0 {
+                    continue;
+                }
+                let dx = toroidal_delta(
+                    self.critters[stealer_index].x(),
+                    self.critters[victim_index].x(),
+                    width,
+                );
+                let dy = toroidal_delta(
+                    self.critters[stealer_index].y(),
+                    self.critters[victim_index].y(),
+                    height,
+                );
+                if dx * dx + dy * dy >= overlap_distance_squared {
+                    continue;
+                }
+                // The guards above (stealer below cap, victim above zero) mean
+                // gain_energy_saturating must transfer at least one unit, so
+                // marking unconditionally accurately reflects what happened.
+                let victim_energy = self.critters[victim_index].energy();
+                let gained = self.critters[stealer_index].gain_energy_saturating(victim_energy);
+                self.critters[victim_index].lose_energy(gained);
+                self.critters[victim_index]
+                    .mark_being_stolen_from_for(STOLEN_FROM_INDICATOR_LINGER_TICKS);
+                if self.critters[stealer_index].energy() >= crate::MAX_CRITTER_ENERGY {
+                    break;
+                }
+            }
         }
     }
 
@@ -360,6 +421,32 @@ mod tests {
             }
 
             assert!(!world.critters()[0].is_overlapping_critter());
+        }
+
+        #[test]
+        fn the_being_stolen_from_indicator_decays_to_off_over_enough_ticks() {
+            // A lone critter cannot be stolen from. Mark it for a few linger
+            // ticks; after enough world ticks the indicator should be gone —
+            // proving World::tick ages this indicator too.
+            let mut critter = Critter::with_genome(
+                100,
+                100,
+                Heading::North,
+                u32::MAX,
+                1,
+                100,
+                0,
+                Genome::all(Instruction::DoNothing),
+            );
+            critter.mark_being_stolen_from_for(3);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
+
+            for _ in 0..3 {
+                world.tick(true);
+            }
+
+            assert!(!world.critters()[0].is_being_stolen_from());
         }
     }
 
@@ -1293,6 +1380,276 @@ mod tests {
             world.detect_critter_overlaps();
             world.detect_critter_overlaps();
             world
+        }
+    }
+
+    mod resolve_steals {
+        use super::*;
+        use crate::{Critter, Genome, Heading, Instruction, MAX_CRITTER_ENERGY};
+
+        fn idle_critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                u32::MAX,
+                1,
+                energy,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_stealer_drains_all_energy_from_a_touching_victim() {
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50 + 80);
+            assert_eq!(world.critters()[1].energy(), 0);
+        }
+
+        #[test]
+        fn a_stealer_at_the_cap_takes_no_energy_from_a_victim() {
+            let stealer = idle_critter_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
+            assert_eq!(world.critters()[1].energy(), 80);
+        }
+
+        #[test]
+        fn a_stealer_takes_only_as_much_as_fits_under_its_cap() {
+            let stealer = idle_critter_with_energy(100, 100, MAX_CRITTER_ENERGY - 30);
+            let victim = idle_critter_with_energy(105, 100, 100);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
+            assert_eq!(world.critters()[1].energy(), 70);
+        }
+
+        #[test]
+        fn a_stealer_drains_multiple_touching_victims_in_succession() {
+            // Three critters all within overlap distance: stealer at (100, 100),
+            // victim_a at (105, 100) (dx=5), victim_b at (100, 108) (dy=8).
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let victim_a = idle_critter_with_energy(105, 100, 30);
+            let victim_b = idle_critter_with_energy(100, 108, 40);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim_a, victim_b],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50 + 30 + 40);
+            assert_eq!(world.critters()[1].energy(), 0);
+            assert_eq!(world.critters()[2].energy(), 0);
+        }
+
+        #[test]
+        fn a_stealer_does_not_take_from_a_critter_outside_the_overlap_radius() {
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            // 50 px away — well outside 2 * CRITTER_RADIUS = 20.
+            let bystander = idle_critter_with_energy(150, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, bystander],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50);
+            assert_eq!(world.critters()[1].energy(), 80);
+        }
+
+        #[test]
+        fn a_stealer_at_zero_energy_with_a_victim_in_range_does_not_drain_anything() {
+            // Resolver still runs because the steal intent was recorded last
+            // tick (when the stealer was alive) — but the stealer has died in
+            // the meantime and shouldn't move energy around.
+            let mut stealer = idle_critter_with_energy(100, 100, 1);
+            stealer.lose_energy(1);
+            assert_eq!(stealer.energy(), 0);
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 0);
+            assert_eq!(world.critters()[1].energy(), 80);
+        }
+
+        #[test]
+        fn a_stealer_skips_a_zero_energy_victim() {
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let mut victim = idle_critter_with_energy(105, 100, 1);
+            victim.lose_energy(1);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50);
+            assert_eq!(world.critters()[1].energy(), 0);
+        }
+
+        #[test]
+        fn a_stealer_does_not_steal_from_itself() {
+            // The stealer is "touching itself" trivially. With only one critter
+            // in the world, the resolver must ignore the self-pair.
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![stealer], vec![]);
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50);
+        }
+
+        #[test]
+        fn stealing_works_across_the_toroidal_wrap() {
+            // Stealer at x=2, victim at x=TEST_WIDTH-2: euclidean dx is large but
+            // toroidal dx is 4, well within overlap radius.
+            let stealer = idle_critter_with_energy(2, 100, 50);
+            let victim = idle_critter_with_energy(TEST_WIDTH as i32 - 2, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50 + 80);
+            assert_eq!(world.critters()[1].energy(), 0);
+        }
+
+        #[test]
+        fn a_drained_victim_is_marked_as_being_stolen_from() {
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert!(world.critters()[1].is_being_stolen_from());
+        }
+
+        #[test]
+        fn a_critter_outside_the_overlap_radius_is_not_marked_as_being_stolen_from() {
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let bystander = idle_critter_with_energy(150, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, bystander],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert!(!world.critters()[1].is_being_stolen_from());
+        }
+
+        #[test]
+        fn a_victim_just_inside_the_steal_radius_is_drained() {
+            // Centers 19 apart: distance² = 361 < (2 * CRITTER_RADIUS)² = 400.
+            // This sits inside the steal radius, killing threshold mutations
+            // whose squared cutoff drops well below 361.
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let victim = idle_critter_with_energy(119, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50 + 80);
+            assert_eq!(world.critters()[1].energy(), 0);
+        }
+
+        #[test]
+        fn an_asymmetric_pair_outside_the_steal_radius_is_not_drained() {
+            // dx = 10, dy = 18: distance² = 100 + 324 = 424 ≥ 400, so the pair
+            // is not within steal range. Asymmetry between the axes proves the
+            // squared-distance computation must square each component.
+            let stealer = idle_critter_with_energy(100, 100, 50);
+            let victim = idle_critter_with_energy(110, 118, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert_eq!(world.critters()[0].energy(), 50);
+            assert_eq!(world.critters()[1].energy(), 80);
+        }
+
+        #[test]
+        fn a_victim_in_range_of_a_capped_stealer_is_not_marked() {
+            // A capped stealer makes no transfer, so the victim is not being
+            // stolen from in any observable sense.
+            let stealer = idle_critter_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.resolve_steals(&[0]);
+
+            assert!(!world.critters()[1].is_being_stolen_from());
         }
     }
 

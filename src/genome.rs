@@ -1,7 +1,7 @@
 use crate::Instruction;
 use rand::Rng;
 
-const INSTRUCTION_COUNT: usize = 6;
+const INSTRUCTION_COUNT: usize = 7;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = THRESHOLD_BITS + SOFTNESS_BITS;
@@ -150,6 +150,7 @@ fn instruction_index(instruction: Instruction) -> usize {
         Instruction::DoNothing => 3,
         Instruction::RepeatPreviousMove => 4,
         Instruction::Split => 5,
+        Instruction::Steal => 6,
     }
 }
 
@@ -162,6 +163,7 @@ fn encode(instruction: Instruction) -> u8 {
         Instruction::DoNothing => 0b0110,
         Instruction::RepeatPreviousMove => 0b1000,
         Instruction::Split => 0b1010,
+        Instruction::Steal => 0b1110,
     }
 }
 
@@ -172,6 +174,7 @@ fn decode(code: u8) -> Instruction {
         0b0100 | 0b0101 => Instruction::MoveForward,
         0b0110 | 0b0111 => Instruction::DoNothing,
         0b1000 | 0b1001 => Instruction::RepeatPreviousMove,
+        0b1110 | 0b1111 => Instruction::Steal,
         _ => Instruction::Split,
     }
 }
@@ -196,13 +199,13 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 6 instructions × 14 param bits + 8 opcodes × 4 bits = 84 + 32
-            // = 116 bits = 15 bytes (rounding up). Pinning down the literal
+            // 7 instructions × 14 param bits + 8 opcodes × 4 bits = 98 + 32
+            // = 130 bits = 17 bytes (rounding up). Pinning down the literal
             // byte count catches mutations to the constants that derive from
             // HEADER_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 15);
+            assert_eq!(genome.bytes.len(), 17);
         }
 
         #[test]
@@ -256,10 +259,8 @@ mod tests {
                 (Instruction::MoveForward, &[0b0100, 0b0101]),
                 (Instruction::DoNothing, &[0b0110, 0b0111]),
                 (Instruction::RepeatPreviousMove, &[0b1000, 0b1001]),
-                (
-                    Instruction::Split,
-                    &[0b1010, 0b1011, 0b1100, 0b1101, 0b1110, 0b1111],
-                ),
+                (Instruction::Split, &[0b1010, 0b1011, 0b1100, 0b1101]),
+                (Instruction::Steal, &[0b1110, 0b1111]),
             ];
 
             for (instruction, codes) in assignments {
@@ -331,7 +332,7 @@ mod tests {
             // instruction's params returns its own value, not a neighbor's.
             let mut bytes = [0u8; TOTAL_BYTES];
             // Per-instruction thresholds (9 bits each), distinct values.
-            let thresholds: [u32; 6] = [10, 20, 30, 40, 50, 60];
+            let thresholds: [u32; 7] = [10, 20, 30, 40, 50, 60, 70];
             for (index, &threshold) in thresholds.iter().enumerate() {
                 let offset = index * PARAM_BITS_PER_INSTRUCTION;
                 write_bits(&mut bytes, offset, THRESHOLD_BITS, threshold);
@@ -344,13 +345,14 @@ mod tests {
             assert_eq!(genome.params(Instruction::DoNothing).0, 40.0);
             assert_eq!(genome.params(Instruction::RepeatPreviousMove).0, 50.0);
             assert_eq!(genome.params(Instruction::Split).0, 60.0);
+            assert_eq!(genome.params(Instruction::Steal).0, 70.0);
         }
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
             // Similar to thresholds, but populating the softness portion.
             let mut bytes = [0u8; TOTAL_BYTES];
-            let softnesses: [u32; 6] = [5, 15, 25, 35, 45, 55];
+            let softnesses: [u32; 7] = [5, 15, 25, 35, 45, 55, 65];
             for (index, &soft) in softnesses.iter().enumerate() {
                 let offset = index * PARAM_BITS_PER_INSTRUCTION + THRESHOLD_BITS;
                 write_bits(&mut bytes, offset, SOFTNESS_BITS, soft);
@@ -363,12 +365,13 @@ mod tests {
             );
             assert_eq!(genome.params(Instruction::TurnLeft).1, MIN_SOFTNESS + 15.0);
             assert_eq!(genome.params(Instruction::Split).1, MIN_SOFTNESS + 55.0);
+            assert_eq!(genome.params(Instruction::Steal).1, MIN_SOFTNESS + 65.0);
         }
 
         #[test]
         fn different_instructions_have_independent_thresholds() {
             // Different instructions read from non-overlapping 16-bit windows of
-            // the genome header. Over many seeds, all six instructions should
+            // the genome header. Over many seeds, all seven instructions should
             // produce all-distinct probabilities at least once — proving each
             // instruction has its own slot.
             for seed in 0..50 {
@@ -381,15 +384,16 @@ mod tests {
                     genome.probability_of_acting(Instruction::TurnLeft, energy),
                     genome.probability_of_acting(Instruction::TurnRight, energy),
                     genome.probability_of_acting(Instruction::Split, energy),
+                    genome.probability_of_acting(Instruction::Steal, energy),
                 ];
                 let mut sorted = probabilities.to_vec();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
                 sorted.dedup();
-                if sorted.len() == 6 {
+                if sorted.len() == 7 {
                     return;
                 }
             }
-            panic!("no seed produced six distinct per-instruction probabilities");
+            panic!("no seed produced seven distinct per-instruction probabilities");
         }
     }
 
@@ -464,6 +468,7 @@ mod tests {
                 Instruction::TurnLeft,
                 Instruction::TurnRight,
                 Instruction::Split,
+                Instruction::Steal,
             ] {
                 for energy in [0, 100, 250, 400, 500] {
                     assert_eq!(

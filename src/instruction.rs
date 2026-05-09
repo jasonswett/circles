@@ -8,18 +8,20 @@ pub enum Instruction {
     TurnLeft,
     TurnRight,
     Split,
+    Steal,
 }
 
 impl Instruction {
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        // Each common instruction has weight 10; Split has weight 1. Total 51.
-        match rng.gen_range(0..51) {
+        // Each common instruction has weight 10; Split and Steal have weight 1. Total 52.
+        match rng.gen_range(0..52) {
             0..10 => Instruction::MoveForward,
             10..20 => Instruction::RepeatPreviousMove,
             20..30 => Instruction::DoNothing,
             30..40 => Instruction::TurnLeft,
             40..50 => Instruction::TurnRight,
-            _ => Instruction::Split,
+            50 => Instruction::Split,
+            _ => Instruction::Steal,
         }
     }
 
@@ -44,20 +46,25 @@ mod tests {
             for _ in 0..1000 {
                 seen.insert(Instruction::random(&mut rng));
             }
-            assert_eq!(seen.len(), 6);
+            assert_eq!(seen.len(), 7);
         }
 
         #[test]
-        fn split_is_drawn_far_less_often_than_each_other_variant() {
-            // Split should be ~1/10 the rate of each common instruction. Asserting
-            // that every common instruction appears at least 5x more often than
-            // Split tolerates rng noise but fails decisively under a uniform draw.
+        fn split_and_steal_are_drawn_far_less_often_than_each_common_variant() {
+            // Split and Steal each have weight 1 vs weight 10 for common
+            // instructions. Each common instruction should appear at least 5x
+            // more often than either of the rare instructions — tolerating rng
+            // noise but failing decisively under a uniform draw.
             let mut rng = StdRng::seed_from_u64(0);
             let mut counts = std::collections::HashMap::new();
             for _ in 0..10_000 {
                 *counts.entry(Instruction::random(&mut rng)).or_insert(0) += 1;
             }
-            let split_count = counts.get(&Instruction::Split).copied().unwrap_or(0);
+            let rare_count = counts
+                .get(&Instruction::Split)
+                .copied()
+                .unwrap_or(0)
+                .max(counts.get(&Instruction::Steal).copied().unwrap_or(0));
             for variant in [
                 Instruction::MoveForward,
                 Instruction::RepeatPreviousMove,
@@ -67,8 +74,8 @@ mod tests {
             ] {
                 let count = counts.get(&variant).copied().unwrap_or(0);
                 assert!(
-                    count >= split_count * 5,
-                    "{variant:?} count {count} should be at least 5× Split count {split_count}"
+                    count >= rare_count * 5,
+                    "{variant:?} count {count} should be at least 5× rare-instruction count {rare_count}"
                 );
             }
         }

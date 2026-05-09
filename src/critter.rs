@@ -6,6 +6,16 @@ pub const MAX_CRITTER_ENERGY: u32 = 500;
 const MUTATION_CHANCE: f32 = 0.1;
 const BIT_FLIP_RATE: f32 = 0.01;
 
+/// What a critter's tick produced this turn. World inspects this after each
+/// critter ticks to add any newborn child to the population and to know
+/// whether the critter attempted a steal (which the world resolves later
+/// because the critter doesn't see its neighbors).
+#[derive(Default)]
+pub struct TickOutcome {
+    pub child: Option<Critter>,
+    pub attempted_steal: bool,
+}
+
 #[derive(Clone)]
 pub struct Critter {
     x: i32,
@@ -21,6 +31,7 @@ pub struct Critter {
     energy: u32,
     initial_energy: u32,
     overlap_indicator_ticks: u32,
+    being_stolen_from_indicator_ticks: u32,
     rng: SmallRng,
 }
 
@@ -97,6 +108,7 @@ impl Critter {
             energy: initial_energy,
             initial_energy,
             overlap_indicator_ticks: 0,
+            being_stolen_from_indicator_ticks: 0,
             rng,
         }
     }
@@ -130,6 +142,17 @@ impl Critter {
         self.energy = self.energy.saturating_add(amount).min(MAX_CRITTER_ENERGY);
     }
 
+    /// Adds energy up to the cap and returns how much was actually accepted.
+    /// Useful when the caller needs to know whether a top-up filled the
+    /// critter so it can move on to the next source (e.g. a stealer that
+    /// drains victims one at a time and must stop once it caps out).
+    pub fn gain_energy_saturating(&mut self, amount: u32) -> u32 {
+        let headroom = MAX_CRITTER_ENERGY.saturating_sub(self.energy);
+        let gained = headroom.min(amount);
+        self.energy += gained;
+        gained
+    }
+
     pub fn lose_energy(&mut self, amount: u32) {
         self.energy = self.energy.saturating_sub(amount);
     }
@@ -146,21 +169,34 @@ impl Critter {
         self.overlap_indicator_ticks = self.overlap_indicator_ticks.saturating_sub(1);
     }
 
+    pub fn is_being_stolen_from(&self) -> bool {
+        self.being_stolen_from_indicator_ticks > 0
+    }
+
+    pub fn mark_being_stolen_from_for(&mut self, ticks: u32) {
+        self.being_stolen_from_indicator_ticks = ticks;
+    }
+
+    pub fn age_being_stolen_from_indicator(&mut self) {
+        self.being_stolen_from_indicator_ticks =
+            self.being_stolen_from_indicator_ticks.saturating_sub(1);
+    }
+
     pub fn wrap_position(&mut self, width: i32, height: i32) {
         self.x = self.x.rem_euclid(width);
         self.y = self.y.rem_euclid(height);
     }
 
-    pub fn tick(&mut self, allow_split: bool) -> Option<Critter> {
+    pub fn tick(&mut self, allow_split: bool) -> TickOutcome {
         self.tick_counter += 1;
         if self.tick_counter < self.next_fire_threshold {
-            return None;
+            return TickOutcome::default();
         }
         self.tick_counter = 0;
         self.next_fire_threshold = jitter_threshold(&mut self.rng, self.ticks_per_instruction);
 
         if self.energy == 0 {
-            return None;
+            return TickOutcome::default();
         }
 
         let instruction = self.genome.decode_at(self.genome_cursor);
@@ -175,13 +211,13 @@ impl Critter {
         // keeps referring to whatever did execute last.
         let probability = self.genome.probability_of_acting(instruction, self.energy);
         let split_blocked = instruction == Instruction::Split && !allow_split;
-        let child = if !split_blocked && self.roll_against(probability) {
+        let outcome = if !split_blocked && self.roll_against(probability) {
             self.execute(instruction)
         } else {
-            None
+            TickOutcome::default()
         };
         self.energy = self.energy.saturating_sub(1);
-        child
+        outcome
     }
 
     // The `<` vs `<=` mutation is an equivalent mutant for our continuous f32
@@ -193,7 +229,7 @@ impl Critter {
         roll < probability
     }
 
-    fn execute(&mut self, instruction: Instruction) -> Option<Critter> {
+    fn execute(&mut self, instruction: Instruction) -> TickOutcome {
         match instruction {
             Instruction::MoveForward => {
                 let (dx, dy) = self.heading.offset();
@@ -205,34 +241,48 @@ impl Critter {
                 self.x += dx * step;
                 self.y += dy * step;
                 self.last_executed = Some(Instruction::MoveForward);
-                None
+                TickOutcome::default()
             }
             Instruction::TurnLeft => {
                 self.heading = self.heading.turn_left();
                 self.last_executed = Some(Instruction::TurnLeft);
-                None
+                TickOutcome::default()
             }
             Instruction::TurnRight => {
                 self.heading = self.heading.turn_right();
                 self.last_executed = Some(Instruction::TurnRight);
-                None
+                TickOutcome::default()
             }
             Instruction::DoNothing => {
                 self.last_executed = Some(Instruction::DoNothing);
-                None
+                TickOutcome::default()
             }
             Instruction::RepeatPreviousMove => {
                 if let Some(previous) = self.last_executed {
                     self.execute(previous)
                 } else {
-                    None
+                    TickOutcome::default()
                 }
             }
             Instruction::Split => {
                 let child = self.spawn_child();
                 self.energy /= 2;
                 self.last_executed = Some(Instruction::Split);
-                Some(child)
+                TickOutcome {
+                    child: Some(child),
+                    attempted_steal: false,
+                }
+            }
+            Instruction::Steal => {
+                // The critter doesn't see its neighbors, so it can't actually
+                // steal here; it only signals the intent. World::tick collects
+                // these intents and resolves them after every critter has
+                // ticked, so all critters draw from a consistent snapshot.
+                self.last_executed = Some(Instruction::Steal);
+                TickOutcome {
+                    child: None,
+                    attempted_steal: true,
+                }
             }
         }
     }
@@ -269,6 +319,7 @@ impl Critter {
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
             overlap_indicator_ticks: 0,
+            being_stolen_from_indicator_ticks: 0,
             rng: child_rng,
         }
     }
@@ -395,6 +446,59 @@ mod tests {
             critter.age_overlap_indicator();
 
             assert!(!critter.is_overlapping_critter());
+        }
+    }
+
+    mod being_stolen_from_indicator {
+        use super::*;
+
+        fn fresh_critter() -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_freshly_created_critter_is_not_marked_as_being_stolen_from() {
+            let critter = fresh_critter();
+
+            assert!(!critter.is_being_stolen_from());
+        }
+
+        #[test]
+        fn marking_the_critter_for_a_positive_tick_count_makes_it_report_as_being_stolen_from() {
+            let mut critter = fresh_critter();
+
+            critter.mark_being_stolen_from_for(10);
+
+            assert!(critter.is_being_stolen_from());
+        }
+
+        #[test]
+        fn aging_until_the_counter_runs_out_clears_the_being_stolen_from_state() {
+            let mut critter = fresh_critter();
+            critter.mark_being_stolen_from_for(2);
+
+            critter.age_being_stolen_from_indicator();
+            critter.age_being_stolen_from_indicator();
+
+            assert!(!critter.is_being_stolen_from());
+        }
+
+        #[test]
+        fn aging_when_already_at_zero_does_not_underflow() {
+            let mut critter = fresh_critter();
+
+            critter.age_being_stolen_from_indicator();
+
+            assert!(!critter.is_being_stolen_from());
         }
     }
 
@@ -1018,16 +1122,16 @@ mod tests {
         fn ticking_a_split_instruction_returns_a_child_critter() {
             let mut critter = splitter();
 
-            let child = critter.tick(true);
+            let outcome = critter.tick(true);
 
-            assert!(child.is_some());
+            assert!(outcome.child.is_some());
         }
 
         #[test]
         fn the_child_receives_half_of_the_parents_pre_split_energy() {
             let mut parent = splitter();
 
-            let child = parent.tick(true).unwrap();
+            let child = parent.tick(true).child.unwrap();
 
             assert_eq!(child.energy(), SPLITTER_ENERGY / 2);
         }
@@ -1045,7 +1149,7 @@ mod tests {
         fn the_child_inherits_the_parents_heading() {
             let mut parent = splitter();
 
-            let child = parent.tick(true).unwrap();
+            let child = parent.tick(true).child.unwrap();
 
             assert_eq!(child.heading(), Heading::North);
         }
@@ -1054,7 +1158,7 @@ mod tests {
         fn the_child_inherits_the_parents_initial_energy() {
             let mut parent = splitter();
 
-            let child = parent.tick(true).unwrap();
+            let child = parent.tick(true).child.unwrap();
 
             assert_eq!(child.initial_energy(), INITIAL_ENERGY);
         }
@@ -1065,7 +1169,7 @@ mod tests {
             // one pixel south, at (10, 11) — directly behind.
             let mut parent = splitter();
 
-            let child = parent.tick(true).unwrap();
+            let child = parent.tick(true).child.unwrap();
 
             assert_eq!((child.x(), child.y()), (START_X, START_Y + 1));
         }
@@ -1085,7 +1189,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let child = parent.tick(true).unwrap();
+            let child = parent.tick(true).child.unwrap();
 
             assert_eq!((child.x(), child.y()), (START_X - STEP_SIZE, START_Y));
         }
@@ -1108,7 +1212,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let child = parent.tick(true).unwrap();
+            let child = parent.tick(true).child.unwrap();
 
             assert_eq!(
                 (child.x(), child.y()),
@@ -1132,7 +1236,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let mut child = parent.tick(true).unwrap();
+            let mut child = parent.tick(true).child.unwrap();
             let initial_child_x = child.x();
             child.tick(true); // executes the second instruction (MoveForward)
 
@@ -1152,7 +1256,7 @@ mod tests {
                 Genome::all(Instruction::MoveForward),
             );
 
-            assert!(critter.tick(true).is_none());
+            assert!(critter.tick(true).child.is_none());
         }
 
         #[test]
@@ -1168,7 +1272,7 @@ mod tests {
                 Genome::all(Instruction::TurnLeft),
             );
 
-            assert!(critter.tick(true).is_none());
+            assert!(critter.tick(true).child.is_none());
         }
 
         #[test]
@@ -1184,7 +1288,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            assert!(critter.tick(true).is_none());
+            assert!(critter.tick(true).child.is_none());
         }
 
         #[test]
@@ -1200,7 +1304,7 @@ mod tests {
                 Genome::all(Instruction::Split),
             );
 
-            assert!(critter.tick(true).is_none());
+            assert!(critter.tick(true).child.is_none());
         }
 
         #[test]
@@ -1221,9 +1325,9 @@ mod tests {
             parent.gain_energy(3 * INITIAL_ENERGY);
 
             parent.tick(true); // first split
-            let second_child = parent.tick(true); // repeat → split again
+            let second_outcome = parent.tick(true); // repeat → split again
 
-            assert!(second_child.is_some());
+            assert!(second_outcome.child.is_some());
         }
     }
 
@@ -1247,7 +1351,7 @@ mod tests {
             );
             parent.gain_energy(MAX_CRITTER_ENERGY - 10);
             let parent_genome = parent.genome().clone();
-            let child = parent.tick(true).expect("parent should split");
+            let child = parent.tick(true).child.expect("parent should split");
             (parent_genome, child.genome().clone())
         }
 
@@ -1313,9 +1417,9 @@ mod tests {
         fn when_split_is_disallowed_no_child_is_produced() {
             let mut parent = ready_to_split(0);
 
-            let child = parent.tick(false);
+            let outcome = parent.tick(false);
 
-            assert!(child.is_none());
+            assert!(outcome.child.is_none());
         }
 
         #[test]
@@ -1332,9 +1436,9 @@ mod tests {
         fn when_split_is_allowed_a_child_is_still_produced() {
             let mut parent = ready_to_split(0);
 
-            let child = parent.tick(true);
+            let outcome = parent.tick(true);
 
-            assert!(child.is_some());
+            assert!(outcome.child.is_some());
         }
     }
 
@@ -1474,6 +1578,63 @@ mod tests {
             critter.gain_energy(50);
 
             assert_eq!(critter.energy(), 150);
+        }
+    }
+
+    mod gain_energy_saturating {
+        use super::*;
+
+        fn idle_critter(energy: u32) -> Critter {
+            Critter::with_genome(
+                0,
+                0,
+                Heading::North,
+                1,
+                1,
+                energy,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn well_below_the_cap_the_full_amount_is_gained() {
+            let mut critter = idle_critter(100);
+
+            let gained = critter.gain_energy_saturating(50);
+
+            assert_eq!(gained, 50);
+            assert_eq!(critter.energy(), 150);
+        }
+
+        #[test]
+        fn the_returned_amount_is_only_what_fits_under_the_cap() {
+            let mut critter = idle_critter(MAX_CRITTER_ENERGY - 10);
+
+            let gained = critter.gain_energy_saturating(100);
+
+            assert_eq!(gained, 10);
+            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY);
+        }
+
+        #[test]
+        fn at_the_cap_no_energy_is_gained() {
+            let mut critter = idle_critter(MAX_CRITTER_ENERGY);
+
+            let gained = critter.gain_energy_saturating(100);
+
+            assert_eq!(gained, 0);
+            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY);
+        }
+
+        #[test]
+        fn requesting_zero_returns_zero_and_leaves_energy_unchanged() {
+            let mut critter = idle_critter(100);
+
+            let gained = critter.gain_energy_saturating(0);
+
+            assert_eq!(gained, 0);
+            assert_eq!(critter.energy(), 100);
         }
     }
 }

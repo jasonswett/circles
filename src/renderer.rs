@@ -3,6 +3,7 @@ use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
 pub const OUTLINE_COLOR: u32 = 0x00_00_FF;
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const OVERLAP_COLOR: u32 = 0xFF_FF_00;
+pub const STOLEN_FROM_COLOR: u32 = 0xFF_00_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
 pub const FRONT_DOT_RADIUS: i32 = 4;
 
@@ -31,7 +32,9 @@ impl Renderer {
             width,
             height,
         };
-        let color = if critter.is_overlapping_critter() {
+        let color = if critter.is_being_stolen_from() {
+            STOLEN_FROM_COLOR
+        } else if critter.is_overlapping_critter() {
             OVERLAP_COLOR
         } else {
             energy_color(critter.energy(), critter.initial_energy())
@@ -499,6 +502,33 @@ mod tests {
                 assert_eq!(
                     pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
                     0xFF_FF_00
+                );
+            }
+
+            #[test]
+            fn a_critter_being_stolen_from_renders_in_red_regardless_of_energy() {
+                let mut critter = critter_with_energy(INITIAL_ENERGY);
+                critter.mark_being_stolen_from_for(10);
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0xFF_00_00
+                );
+            }
+
+            #[test]
+            fn red_takes_priority_over_yellow_when_both_indicators_are_active() {
+                let mut critter = critter_with_energy(INITIAL_ENERGY);
+                critter.mark_overlapping_critter_for(30);
+                critter.mark_being_stolen_from_for(10);
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0xFF_00_00
                 );
             }
 
