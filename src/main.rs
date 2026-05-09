@@ -1,6 +1,6 @@
 use circles::{
     format_elapsed, format_minutes_seconds, frames_until_next_replenish, text_pixels, FpsCounter,
-    Renderer, StagnationDetector, World, CRITTER_RADIUS,
+    PopulationGrowthDetector, Renderer, StagnationDetector, World, CRITTER_RADIUS,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
@@ -15,6 +15,9 @@ const TEXT_LINE_HEIGHT: usize = 36;
 const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
+// If the critter population fails to increase for this many frames while
+// any critters are still alive, reset the world. At ~60 FPS this is 10s.
+const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
 const REPLENISH_INTERVAL_FRAMES: u32 = 1800;
 // Minimum FPS at which work that grows the simulation (splitting, pellet
@@ -71,6 +74,7 @@ fn main() {
     let mut frame_counter: u32 = 0;
     let mut displayed_total_energy = world.total_energy();
     let mut stagnation = StagnationDetector::new(STAGNATION_THRESHOLD_FRAMES);
+    let mut population_growth = PopulationGrowthDetector::new(POPULATION_GROWTH_TIMEOUT_FRAMES);
     let mut fps_counter = FpsCounter::new(FPS_REFRESH_INTERVAL);
     let mut world_started_at = Instant::now();
 
@@ -79,6 +83,7 @@ fn main() {
         if window.is_key_pressed(Key::Space, KeyRepeat::No) {
             world.reset(&mut rng);
             stagnation.reset();
+            population_growth.reset();
             world_started_at = Instant::now();
         }
 
@@ -90,6 +95,7 @@ fn main() {
         if stagnation.is_stagnant() {
             world.reset(&mut rng);
             stagnation.reset();
+            population_growth.reset();
             world_started_at = Instant::now();
         }
 
@@ -102,6 +108,15 @@ fn main() {
         if world.population_too_low() {
             world.reset(&mut rng);
             stagnation.reset();
+            population_growth.reset();
+            world_started_at = Instant::now();
+        }
+        let population = world.critters().len();
+        population_growth.observe(population);
+        if population > 0 && population_growth.has_not_grown_in_too_long() {
+            world.reset(&mut rng);
+            stagnation.reset();
+            population_growth.reset();
             world_started_at = Instant::now();
         }
         if frame_counter > 0
