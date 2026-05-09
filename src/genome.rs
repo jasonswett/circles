@@ -9,7 +9,7 @@ const MIN_SOFTNESS: f32 = 1.0;
 
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
-const OPCODE_COUNT: usize = 64;
+const OPCODE_COUNT: usize = 8;
 const OPCODE_BITS: usize = OPCODE_COUNT * OPCODE_BITS_PER_OPCODE;
 const TOTAL_BITS: usize = HEADER_BITS + OPCODE_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
@@ -201,13 +201,13 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 6 instructions × 14 param bits + 64 opcodes × 4 bits = 84 + 256
-            // = 340 bits = 43 bytes (rounding up). Pinning down the literal
+            // 6 instructions × 14 param bits + 8 opcodes × 4 bits = 84 + 32
+            // = 116 bits = 15 bytes (rounding up). Pinning down the literal
             // byte count catches mutations to the constants that derive from
             // HEADER_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 43);
+            assert_eq!(genome.bytes.len(), 15);
         }
 
         #[test]
