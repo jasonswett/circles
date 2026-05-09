@@ -8,22 +8,20 @@ pub enum Instruction {
     TurnLeft,
     TurnRight,
     Split,
-    Steal,
     Eat,
 }
 
 impl Instruction {
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        // Each common instruction has weight 10; Split, Steal, and Eat have
-        // weight 1 each. Total 53.
-        match rng.gen_range(0..53) {
+        // Each common instruction has weight 10; Split and Eat have weight 1
+        // each. Total 52.
+        match rng.gen_range(0..52) {
             0..10 => Instruction::MoveForward,
             10..20 => Instruction::RepeatPreviousMove,
             20..30 => Instruction::DoNothing,
             30..40 => Instruction::TurnLeft,
             40..50 => Instruction::TurnRight,
             50 => Instruction::Split,
-            51 => Instruction::Steal,
             _ => Instruction::Eat,
         }
     }
@@ -49,12 +47,12 @@ mod tests {
             for _ in 0..2000 {
                 seen.insert(Instruction::random(&mut rng));
             }
-            assert_eq!(seen.len(), 8);
+            assert_eq!(seen.len(), 7);
         }
 
         #[test]
         fn rare_instructions_are_drawn_far_less_often_than_each_common_variant() {
-            // Split, Steal, and Eat each have weight 1 vs weight 10 for common
+            // Split and Eat each have weight 1 vs weight 10 for common
             // instructions. Each common instruction should appear at least 5x
             // more often than any rare instruction — tolerating rng noise but
             // failing decisively under a uniform draw.
@@ -63,7 +61,7 @@ mod tests {
             for _ in 0..10_000 {
                 *counts.entry(Instruction::random(&mut rng)).or_insert(0) += 1;
             }
-            let rare_count = [Instruction::Split, Instruction::Steal, Instruction::Eat]
+            let rare_count = [Instruction::Split, Instruction::Eat]
                 .into_iter()
                 .map(|v| counts.get(&v).copied().unwrap_or(0))
                 .max()
