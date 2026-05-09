@@ -20,6 +20,7 @@ pub struct Critter {
     step_size: i32,
     energy: u32,
     initial_energy: u32,
+    overlap_indicator_ticks: u32,
     rng: SmallRng,
 }
 
@@ -95,6 +96,7 @@ impl Critter {
             step_size,
             energy: initial_energy,
             initial_energy,
+            overlap_indicator_ticks: 0,
             rng,
         }
     }
@@ -130,6 +132,18 @@ impl Critter {
 
     pub fn lose_energy(&mut self, amount: u32) {
         self.energy = self.energy.saturating_sub(amount);
+    }
+
+    pub fn is_overlapping_critter(&self) -> bool {
+        self.overlap_indicator_ticks > 0
+    }
+
+    pub fn mark_overlapping_critter_for(&mut self, ticks: u32) {
+        self.overlap_indicator_ticks = ticks;
+    }
+
+    pub fn age_overlap_indicator(&mut self) {
+        self.overlap_indicator_ticks = self.overlap_indicator_ticks.saturating_sub(1);
     }
 
     pub fn wrap_position(&mut self, width: i32, height: i32) {
@@ -254,6 +268,7 @@ impl Critter {
             step_size: self.step_size,
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
+            overlap_indicator_ticks: 0,
             rng: child_rng,
         }
     }
@@ -308,6 +323,78 @@ mod tests {
             );
 
             assert_eq!(critter.heading(), Heading::North);
+        }
+    }
+
+    mod overlapping_critter_indicator {
+        use super::*;
+
+        fn fresh_critter() -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_freshly_created_critter_is_not_marked_as_overlapping_another_critter() {
+            let critter = fresh_critter();
+
+            assert!(!critter.is_overlapping_critter());
+        }
+
+        #[test]
+        fn marking_the_critter_with_a_positive_tick_count_makes_it_report_as_overlapping() {
+            let mut critter = fresh_critter();
+
+            critter.mark_overlapping_critter_for(30);
+
+            assert!(critter.is_overlapping_critter());
+        }
+
+        #[test]
+        fn marking_with_zero_ticks_leaves_the_critter_not_overlapping() {
+            let mut critter = fresh_critter();
+
+            critter.mark_overlapping_critter_for(0);
+
+            assert!(!critter.is_overlapping_critter());
+        }
+
+        #[test]
+        fn aging_decrements_the_remaining_ticks_by_one() {
+            let mut critter = fresh_critter();
+            critter.mark_overlapping_critter_for(2);
+
+            critter.age_overlap_indicator();
+
+            assert!(critter.is_overlapping_critter());
+        }
+
+        #[test]
+        fn aging_until_the_counter_runs_out_clears_the_overlapping_state() {
+            let mut critter = fresh_critter();
+            critter.mark_overlapping_critter_for(2);
+
+            critter.age_overlap_indicator();
+            critter.age_overlap_indicator();
+
+            assert!(!critter.is_overlapping_critter());
+        }
+
+        #[test]
+        fn aging_when_already_at_zero_does_not_underflow() {
+            let mut critter = fresh_critter();
+
+            critter.age_overlap_indicator();
+
+            assert!(!critter.is_overlapping_critter());
         }
     }
 

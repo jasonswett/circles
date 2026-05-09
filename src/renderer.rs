@@ -2,6 +2,7 @@ use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
 
 pub const OUTLINE_COLOR: u32 = 0x00_00_FF;
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
+pub const OVERLAP_COLOR: u32 = 0xFF_FF_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
 pub const FRONT_DOT_RADIUS: i32 = 4;
 
@@ -30,7 +31,11 @@ impl Renderer {
             width,
             height,
         };
-        let color = energy_color(critter.energy(), critter.initial_energy());
+        let color = if critter.is_overlapping_critter() {
+            OVERLAP_COLOR
+        } else {
+            energy_color(critter.energy(), critter.initial_energy())
+        };
 
         let body = Ring {
             cx,
@@ -481,6 +486,19 @@ mod tests {
                 assert_eq!(
                     pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
                     0x00_00_FF
+                );
+            }
+
+            #[test]
+            fn a_critter_overlapping_another_renders_in_yellow_regardless_of_energy() {
+                let mut critter = critter_with_energy(INITIAL_ENERGY);
+                critter.mark_overlapping_critter_for(30);
+
+                let buffer = render(&critter);
+
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    0xFF_FF_00
                 );
             }
 

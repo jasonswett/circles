@@ -9,6 +9,13 @@ pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
 const STEP_SIZE: i32 = 12;
+// How many critters to refresh per overlap-detection call. The detector cycles
+// through the population round-robin: critters not reached on a given call
+// keep their previous flag until they come up again.
+const OVERLAP_DETECTION_BUDGET: usize = 20;
+// How many ticks a critter stays marked as overlapping after a confirmed
+// detection. Smooths out the visual flicker caused by the round-robin budget.
+const OVERLAP_INDICATOR_LINGER_TICKS: u32 = 30;
 
 pub struct World {
     width: usize,
@@ -17,6 +24,7 @@ pub struct World {
     pellets: Vec<Pellet>,
     original_total_energy: u32,
     generation: u32,
+    overlap_detection_cursor: usize,
 }
 
 impl World {
@@ -35,6 +43,7 @@ impl World {
             pellets,
             original_total_energy,
             generation: 1,
+            overlap_detection_cursor: 0,
         }
     }
 
@@ -53,6 +62,7 @@ impl World {
             pellets,
             original_total_energy,
             generation: 1,
+            overlap_detection_cursor: 0,
         }
     }
 
@@ -91,6 +101,7 @@ impl World {
     pub fn tick(&mut self, allow_split: bool) {
         let mut children = Vec::new();
         for critter in &mut self.critters {
+            critter.age_overlap_indicator();
             if let Some(mut child) = critter.tick(allow_split) {
                 child.wrap_position(self.width as i32, self.height as i32);
                 children.push(child);
@@ -99,6 +110,7 @@ impl World {
         }
         self.critters.extend(children);
         self.consume_pellets();
+        self.detect_critter_overlaps();
     }
 
     fn consume_pellets(&mut self) {
@@ -124,6 +136,43 @@ impl World {
                 }
             });
         }
+    }
+
+    pub fn detect_critter_overlaps(&mut self) {
+        let count = self.critters.len();
+        if count < 2 {
+            return;
+        }
+        let overlap_distance_squared = (2 * CRITTER_RADIUS) * (2 * CRITTER_RADIUS);
+        let width = self.width as i32;
+        let height = self.height as i32;
+        let budget = OVERLAP_DETECTION_BUDGET.min(count);
+
+        for offset in 0..budget {
+            let i = (self.overlap_detection_cursor + offset) % count;
+            if self.critters[i].energy() == 0 {
+                continue;
+            }
+            for j in 0..count {
+                if i == j {
+                    continue;
+                }
+                if self.critters[j].energy() == 0 {
+                    continue;
+                }
+                let dx = toroidal_delta(self.critters[i].x(), self.critters[j].x(), width);
+                let dy = toroidal_delta(self.critters[i].y(), self.critters[j].y(), height);
+                if dx * dx + dy * dy < overlap_distance_squared {
+                    self.critters[i].mark_overlapping_critter_for(OVERLAP_INDICATOR_LINGER_TICKS);
+                    self.critters[j].mark_overlapping_critter_for(OVERLAP_INDICATOR_LINGER_TICKS);
+                }
+            }
+        }
+
+        // The inner `(cursor + offset) % count` indexing normalizes the cursor
+        // on every read, so we don't need to keep the cursor itself bounded;
+        // wrapping_add makes the eventual overflow explicit and harmless.
+        self.overlap_detection_cursor = self.overlap_detection_cursor.wrapping_add(budget);
     }
 
     pub fn reap_dead_critters(&mut self) {
@@ -264,6 +313,7 @@ mod tests {
 
     mod tick {
         use super::*;
+        use crate::{Critter, Genome, Heading, Instruction};
 
         #[test]
         fn ticking_a_world_decreases_total_critter_energy() {
@@ -284,6 +334,32 @@ mod tests {
 
             let final_total: u32 = world.critters().iter().map(|c| c.energy()).sum();
             assert!(final_total < initial_total);
+        }
+
+        #[test]
+        fn the_overlap_indicator_decays_to_off_over_enough_ticks_with_no_overlap() {
+            // A lone critter has nothing to overlap with. Mark it for a few
+            // linger ticks; after enough world ticks, the indicator should be
+            // gone — proving World::tick ages the indicator.
+            let mut critter = Critter::with_genome(
+                100,
+                100,
+                Heading::North,
+                u32::MAX,
+                1,
+                100,
+                0,
+                Genome::all(Instruction::DoNothing),
+            );
+            critter.mark_overlapping_critter_for(3);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
+
+            for _ in 0..3 {
+                world.tick(true);
+            }
+
+            assert!(!world.critters()[0].is_overlapping_critter());
         }
     }
 
@@ -1002,6 +1078,221 @@ mod tests {
             world.replenish_pellets(&mut rng);
 
             assert!(world.total_energy() >= world.original_total_energy);
+        }
+    }
+
+    mod detect_critter_overlaps {
+        use super::*;
+        use crate::{Critter, Genome, Heading, Instruction};
+
+        fn idle_critter_at(x: i32, y: i32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                u32::MAX,
+                1,
+                100,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn two_overlapping_critters_both_get_their_flag_set() {
+            let a = idle_critter_at(100, 100);
+            let b = idle_critter_at(105, 100);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(world.critters()[0].is_overlapping_critter());
+            assert!(world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn two_non_overlapping_critters_keep_their_flags_clear() {
+            // Distance 50 between centers, well outside 2 * CRITTER_RADIUS = 20.
+            let a = idle_critter_at(50, 100);
+            let b = idle_critter_at(100, 100);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(!world.critters()[0].is_overlapping_critter());
+            assert!(!world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn critters_that_touch_at_the_overlap_threshold_are_not_marked_overlapping() {
+            // Distance equals 2 * CRITTER_RADIUS = 20: tangent, not overlapping.
+            let a = idle_critter_at(100, 100);
+            let b = idle_critter_at(120, 100);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(!world.critters()[0].is_overlapping_critter());
+            assert!(!world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn an_overlap_with_a_zero_energy_critter_marks_neither_critter() {
+            let a = idle_critter_at(100, 100);
+            let mut b = idle_critter_at(105, 100);
+            b.lose_energy(b.energy());
+            assert_eq!(b.energy(), 0);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(!world.critters()[0].is_overlapping_critter());
+            assert!(!world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn two_critters_just_inside_the_overlap_threshold_are_both_marked() {
+            // Centers 19 apart: distance² = 361, strictly less than the
+            // (2 * CRITTER_RADIUS)² = 400 threshold, so the pair counts as
+            // overlapping. Sitting just inside the boundary kills threshold
+            // mutations whose squared cutoff drops well below 361.
+            let a = idle_critter_at(100, 100);
+            let b = idle_critter_at(119, 100);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(world.critters()[0].is_overlapping_critter());
+            assert!(world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn an_asymmetric_pair_outside_the_threshold_along_one_axis_is_not_marked() {
+            // dx = 10, dy = 18: distance² = 100 + 324 = 424 ≥ 400, so the pair
+            // does not overlap. Asymmetry between the axes ensures the squared-
+            // distance computation must square each component separately rather
+            // than sum, subtract, or otherwise collapse them into one value.
+            let a = idle_critter_at(100, 100);
+            let b = idle_critter_at(110, 118);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(!world.critters()[0].is_overlapping_critter());
+            assert!(!world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn an_overlapping_pair_at_indices_well_past_zero_is_still_marked() {
+            // The detector's outer cursor steps i across the population. A
+            // mutation that collapses i to a constant (e.g. `(cursor + offset)
+            // / count` instead of `% count`) would only ever look at critter
+            // zero. Hide the overlapping pair near the end of the list so the
+            // cursor must actually walk through the indices to find it.
+            let pair_first_index = OVERLAP_DETECTION_BUDGET - 2;
+            let stride: i32 = 40;
+            let per_row: usize = (TEST_WIDTH as i32 / stride) as usize;
+            let mut critters: Vec<Critter> = (0..OVERLAP_DETECTION_BUDGET)
+                .map(|i| {
+                    let col = (i % per_row) as i32;
+                    let row = (i / per_row) as i32;
+                    idle_critter_at(20 + col * stride, 20 + row * stride)
+                })
+                .collect();
+            // Place the last two critters on top of each other so they overlap.
+            let overlap_x = 100;
+            let overlap_y = 100;
+            critters[pair_first_index] = idle_critter_at(overlap_x, overlap_y);
+            critters[pair_first_index + 1] = idle_critter_at(overlap_x + 5, overlap_y);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, critters, vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(world.critters()[pair_first_index].is_overlapping_critter());
+            assert!(world.critters()[pair_first_index + 1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn the_first_detection_call_does_not_visit_critters_beyond_its_budget() {
+            // With a population larger than the budget, the first detect call
+            // can only sweep the first OVERLAP_DETECTION_BUDGET critters. An
+            // overlapping pair placed beyond that should remain unmarked.
+            let world = world_with_overlapping_pair_at(OVERLAP_DETECTION_BUDGET);
+
+            let world = run_detection_once(world);
+
+            assert!(!world.critters()[OVERLAP_DETECTION_BUDGET].is_overlapping_critter());
+            assert!(!world.critters()[OVERLAP_DETECTION_BUDGET + 1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn the_second_detection_call_visits_critters_the_first_call_did_not_reach() {
+            // After the first call the cursor advances past the initial sweep,
+            // so a second call covers the next slice — including a pair placed
+            // beyond the first budget window.
+            let world = world_with_overlapping_pair_at(OVERLAP_DETECTION_BUDGET);
+
+            let world = run_detection_twice(world);
+
+            assert!(world.critters()[OVERLAP_DETECTION_BUDGET].is_overlapping_critter());
+            assert!(world.critters()[OVERLAP_DETECTION_BUDGET + 1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn two_zero_energy_critters_overlapping_each_other_mark_neither() {
+            let mut a = idle_critter_at(100, 100);
+            a.lose_energy(a.energy());
+            let mut b = idle_critter_at(105, 100);
+            b.lose_energy(b.energy());
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert!(!world.critters()[0].is_overlapping_critter());
+            assert!(!world.critters()[1].is_overlapping_critter());
+        }
+
+        fn world_with_overlapping_pair_at(pair_first_index: usize) -> World {
+            // Build a population large enough that the pair sits beyond the
+            // first detection budget, with all other critters spaced far apart
+            // on a grid so they never overlap. The overlap pair sits at an
+            // off-grid position so no grid critter accidentally overlaps it.
+            let critter_count = pair_first_index + 2;
+            let stride: i32 = 40;
+            let per_row: usize = (TEST_WIDTH as i32 / stride) as usize;
+            let mut critters: Vec<Critter> = (0..critter_count)
+                .map(|i| {
+                    let col = (i % per_row) as i32;
+                    let row = (i / per_row) as i32;
+                    idle_critter_at(20 + col * stride, 20 + row * stride)
+                })
+                .collect();
+            // Off-grid coordinates: midpoint between four grid critters, so
+            // no grid neighbor sits within the overlap radius.
+            let overlap_x = 40;
+            let overlap_y = 40;
+            critters[pair_first_index] = idle_critter_at(overlap_x, overlap_y);
+            critters[pair_first_index + 1] = idle_critter_at(overlap_x + 5, overlap_y);
+            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, critters, vec![])
+        }
+
+        fn run_detection_once(mut world: World) -> World {
+            world.detect_critter_overlaps();
+            world
+        }
+
+        fn run_detection_twice(mut world: World) -> World {
+            world.detect_critter_overlaps();
+            world.detect_critter_overlaps();
+            world
         }
     }
 
