@@ -156,28 +156,23 @@ fn instruction_index(instruction: Instruction) -> usize {
 #[cfg(test)]
 fn encode(instruction: Instruction) -> u8 {
     match instruction {
-        Instruction::TurnRight => 0b0001,
+        Instruction::TurnRight => 0b0000,
         Instruction::TurnLeft => 0b0010,
-        Instruction::MoveForward => 0b0011,
-        Instruction::DoNothing => 0b0100,
-        Instruction::RepeatPreviousMove => 0b0101,
-        Instruction::Split => 0b0110,
+        Instruction::MoveForward => 0b0100,
+        Instruction::DoNothing => 0b0110,
+        Instruction::RepeatPreviousMove => 0b1000,
+        Instruction::Split => 0b1010,
     }
 }
 
-// The 0b0100 → DoNothing arm is equivalent to the catch-all `_ => DoNothing`.
-// Deleting it produces identical behavior, so cargo-mutants can't kill that
-// mutation. The arm is kept for symmetry with the other instruction codes.
-#[mutants::skip]
 fn decode(code: u8) -> Instruction {
     match code {
-        0b0001 => Instruction::TurnRight,
-        0b0010 => Instruction::TurnLeft,
-        0b0011 => Instruction::MoveForward,
-        0b0100 => Instruction::DoNothing,
-        0b0101 => Instruction::RepeatPreviousMove,
-        0b0110 => Instruction::Split,
-        _ => Instruction::DoNothing,
+        0b0000 | 0b0001 => Instruction::TurnRight,
+        0b0010 | 0b0011 => Instruction::TurnLeft,
+        0b0100 | 0b0101 => Instruction::MoveForward,
+        0b0110 | 0b0111 => Instruction::DoNothing,
+        0b1000 | 0b1001 => Instruction::RepeatPreviousMove,
+        _ => Instruction::Split,
     }
 }
 
@@ -251,6 +246,27 @@ mod tests {
             assert_eq!(genome.decode_at(1), Instruction::TurnRight);
             assert_eq!(genome.decode_at(2), Instruction::Split);
             assert_eq!(genome.decode_at(3), Instruction::MoveForward);
+        }
+
+        #[test]
+        fn each_instruction_decodes_from_its_assigned_codes() {
+            let assignments: &[(Instruction, &[u8])] = &[
+                (Instruction::TurnRight, &[0b0000, 0b0001]),
+                (Instruction::TurnLeft, &[0b0010, 0b0011]),
+                (Instruction::MoveForward, &[0b0100, 0b0101]),
+                (Instruction::DoNothing, &[0b0110, 0b0111]),
+                (Instruction::RepeatPreviousMove, &[0b1000, 0b1001]),
+                (
+                    Instruction::Split,
+                    &[0b1010, 0b1011, 0b1100, 0b1101, 0b1110, 0b1111],
+                ),
+            ];
+
+            for (instruction, codes) in assignments {
+                for code in *codes {
+                    assert_eq!(decode(*code), *instruction, "code {code:#06b}");
+                }
+            }
         }
     }
 
