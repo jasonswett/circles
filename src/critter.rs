@@ -8,12 +8,13 @@ const BIT_FLIP_RATE: f32 = 0.01;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
-/// whether the critter attempted a steal (which the world resolves later
-/// because the critter doesn't see its neighbors).
+/// whether the critter attempted a steal or eat (which the world resolves
+/// later because the critter doesn't see its neighbors or the pellets).
 #[derive(Default)]
 pub struct TickOutcome {
     pub child: Option<Critter>,
     pub attempted_steal: bool,
+    pub attempted_eat: bool,
 }
 
 #[derive(Clone)]
@@ -281,7 +282,7 @@ impl Critter {
                 self.last_executed = Some(Instruction::Split);
                 TickOutcome {
                     child: Some(child),
-                    attempted_steal: false,
+                    ..TickOutcome::default()
                 }
             }
             Instruction::Steal => {
@@ -291,8 +292,18 @@ impl Critter {
                 // ticked, so all critters draw from a consistent snapshot.
                 self.last_executed = Some(Instruction::Steal);
                 TickOutcome {
-                    child: None,
                     attempted_steal: true,
+                    ..TickOutcome::default()
+                }
+            }
+            Instruction::Eat => {
+                // Same shape as Steal: the critter can't see pellets, so it
+                // only signals the intent. World::tick resolves which pellet
+                // (if any) the critter is touching and consumes it.
+                self.last_executed = Some(Instruction::Eat);
+                TickOutcome {
+                    attempted_eat: true,
+                    ..TickOutcome::default()
                 }
             }
         }

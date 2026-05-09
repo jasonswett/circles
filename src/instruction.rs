@@ -9,19 +9,22 @@ pub enum Instruction {
     TurnRight,
     Split,
     Steal,
+    Eat,
 }
 
 impl Instruction {
     pub fn random<R: Rng>(rng: &mut R) -> Self {
-        // Each common instruction has weight 10; Split and Steal have weight 1. Total 52.
-        match rng.gen_range(0..52) {
+        // Each common instruction has weight 10; Split, Steal, and Eat have
+        // weight 1 each. Total 53.
+        match rng.gen_range(0..53) {
             0..10 => Instruction::MoveForward,
             10..20 => Instruction::RepeatPreviousMove,
             20..30 => Instruction::DoNothing,
             30..40 => Instruction::TurnLeft,
             40..50 => Instruction::TurnRight,
             50 => Instruction::Split,
-            _ => Instruction::Steal,
+            51 => Instruction::Steal,
+            _ => Instruction::Eat,
         }
     }
 
@@ -43,28 +46,28 @@ mod tests {
         fn over_many_draws_every_variant_appears() {
             let mut rng = StdRng::seed_from_u64(42);
             let mut seen = std::collections::HashSet::new();
-            for _ in 0..1000 {
+            for _ in 0..2000 {
                 seen.insert(Instruction::random(&mut rng));
             }
-            assert_eq!(seen.len(), 7);
+            assert_eq!(seen.len(), 8);
         }
 
         #[test]
-        fn split_and_steal_are_drawn_far_less_often_than_each_common_variant() {
-            // Split and Steal each have weight 1 vs weight 10 for common
+        fn rare_instructions_are_drawn_far_less_often_than_each_common_variant() {
+            // Split, Steal, and Eat each have weight 1 vs weight 10 for common
             // instructions. Each common instruction should appear at least 5x
-            // more often than either of the rare instructions — tolerating rng
-            // noise but failing decisively under a uniform draw.
+            // more often than any rare instruction — tolerating rng noise but
+            // failing decisively under a uniform draw.
             let mut rng = StdRng::seed_from_u64(0);
             let mut counts = std::collections::HashMap::new();
             for _ in 0..10_000 {
                 *counts.entry(Instruction::random(&mut rng)).or_insert(0) += 1;
             }
-            let rare_count = counts
-                .get(&Instruction::Split)
-                .copied()
-                .unwrap_or(0)
-                .max(counts.get(&Instruction::Steal).copied().unwrap_or(0));
+            let rare_count = [Instruction::Split, Instruction::Steal, Instruction::Eat]
+                .into_iter()
+                .map(|v| counts.get(&v).copied().unwrap_or(0))
+                .max()
+                .unwrap_or(0);
             for variant in [
                 Instruction::MoveForward,
                 Instruction::RepeatPreviousMove,

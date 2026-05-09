@@ -104,6 +104,7 @@ impl World {
     pub fn tick(&mut self, allow_split: bool) {
         let mut children = Vec::new();
         let mut stealer_indices: Vec<usize> = Vec::new();
+        let mut eater_indices: Vec<usize> = Vec::new();
         for (index, critter) in self.critters.iter_mut().enumerate() {
             critter.age_overlap_indicator();
             critter.age_being_stolen_from_indicator();
@@ -115,36 +116,43 @@ impl World {
             if outcome.attempted_steal {
                 stealer_indices.push(index);
             }
+            if outcome.attempted_eat {
+                eater_indices.push(index);
+            }
             critter.wrap_position(self.width as i32, self.height as i32);
         }
         self.critters.extend(children);
         self.resolve_steals(&stealer_indices);
-        self.consume_pellets();
+        self.resolve_eats(&eater_indices);
         self.detect_critter_overlaps();
     }
 
-    fn consume_pellets(&mut self) {
+    fn resolve_eats(&mut self, eater_indices: &[usize]) {
+        let count = self.critters.len();
         let eat_distance_squared =
             (CRITTER_RADIUS + PELLET_RADIUS) * (CRITTER_RADIUS + PELLET_RADIUS);
         let width = self.width as i32;
         let height = self.height as i32;
-        for critter in &mut self.critters {
-            if critter.energy() >= crate::MAX_CRITTER_ENERGY {
+
+        for &eater_index in eater_indices {
+            if eater_index >= count {
                 continue;
             }
-            self.pellets.retain(|pellet| {
-                if critter.energy() >= crate::MAX_CRITTER_ENERGY {
-                    return true;
-                }
-                let dx = toroidal_delta(critter.x(), pellet.x, width);
-                let dy = toroidal_delta(critter.y(), pellet.y, height);
-                if dx * dx + dy * dy < eat_distance_squared {
-                    critter.gain_energy(crate::PELLET_ENERGY);
-                    false
-                } else {
-                    true
-                }
+            if self.critters[eater_index].energy() == 0 {
+                continue;
+            }
+            // Find the first pellet within range and consume it.
+            let eater_x = self.critters[eater_index].x();
+            let eater_y = self.critters[eater_index].y();
+            let pellet_position = self.pellets.iter().position(|pellet| {
+                let dx = toroidal_delta(eater_x, pellet.x, width);
+                let dy = toroidal_delta(eater_y, pellet.y, height);
+                dx * dx + dy * dy < eat_distance_squared
             });
+            if let Some(position) = pellet_position {
+                self.pellets.swap_remove(position);
+                self.critters[eater_index].gain_energy(crate::PELLET_ENERGY);
+            }
         }
     }
 
@@ -592,12 +600,33 @@ mod tests {
         const HUNGRY_INITIAL: u32 = 200;
         const STARTING_ENERGY: u32 = 10;
 
-        fn hungry_critter(x: i32, y: i32) -> Critter {
+        // A critter whose genome decodes to Eat at every cursor and which fires
+        // an instruction every tick. Energy is set just above zero so that
+        // gaining a pellet is observable without hitting the cap.
+        fn eating_critter(x: i32, y: i32) -> Critter {
             let mut critter = Critter::with_genome(
                 x,
                 y,
                 Heading::North,
-                u32::MAX, // never executes
+                1, // fire every tick
+                1,
+                HUNGRY_INITIAL,
+                0,
+                Genome::all(Instruction::Eat),
+            );
+            critter.lose_energy(HUNGRY_INITIAL - STARTING_ENERGY);
+            critter
+        }
+
+        // A critter whose genome decodes to DoNothing at every cursor — used
+        // to confirm that critters which never execute Eat do not consume
+        // pellets, even when overlapping one.
+        fn idle_critter(x: i32, y: i32) -> Critter {
+            let mut critter = Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                1,
                 1,
                 HUNGRY_INITIAL,
                 0,
@@ -607,16 +636,13 @@ mod tests {
             critter
         }
 
+        fn world_with(critter: Critter, pellet: Pellet) -> World {
+            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![pellet])
+        }
+
         #[test]
-        fn a_critter_overlapping_a_pellet_consumes_it() {
-            let critter = hungry_critter(100, 100);
-            let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+        fn a_critter_executing_eat_while_overlapping_a_pellet_consumes_it() {
+            let mut world = world_with(eating_critter(100, 100), Pellet { x: 100, y: 100 });
 
             world.tick(true);
 
@@ -625,56 +651,44 @@ mod tests {
 
         #[test]
         fn eating_a_pellet_increases_energy_by_the_pellet_energy_amount() {
-            let critter = hungry_critter(100, 100);
-            let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            // STARTING_ENERGY then -1 for the firing tick + PELLET_ENERGY.
+            let mut world = world_with(eating_critter(100, 100), Pellet { x: 100, y: 100 });
 
             world.tick(true);
 
             assert_eq!(
                 world.critters()[0].energy(),
-                STARTING_ENERGY + PELLET_ENERGY
+                STARTING_ENERGY - 1 + PELLET_ENERGY
             );
         }
 
         #[test]
-        fn a_critter_that_does_not_overlap_a_pellet_leaves_it_alone() {
-            // Critter at (50, 100), pellet at (100, 100): dx = 50, no wrap is shorter.
-            let critter = hungry_critter(50, 100);
-            let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+        fn a_critter_that_does_not_execute_eat_leaves_an_overlapping_pellet_alone() {
+            let mut world = world_with(idle_critter(100, 100), Pellet { x: 100, y: 100 });
 
             world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
-            assert_eq!(world.critters()[0].energy(), STARTING_ENERGY);
+            assert_eq!(world.critters()[0].energy(), STARTING_ENERGY - 1);
+        }
+
+        #[test]
+        fn an_eating_critter_that_does_not_overlap_a_pellet_leaves_it_alone() {
+            let mut world = world_with(eating_critter(50, 100), Pellet { x: 100, y: 100 });
+
+            world.tick(true);
+
+            assert_eq!(world.pellets().len(), 1);
+            assert_eq!(world.critters()[0].energy(), STARTING_ENERGY - 1);
         }
 
         #[test]
         fn a_pellet_just_inside_the_eating_distance_is_consumed() {
-            // Eating distance is CRITTER_RADIUS + PELLET_RADIUS.
-            // Place pellet at distance 23 — strictly less than 24, eaten.
-            let critter = hungry_critter(100, 100);
             let pellet = Pellet {
                 x: 100 + (CRITTER_RADIUS + PELLET_RADIUS - 1),
                 y: 100,
             };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            let mut world = world_with(eating_critter(100, 100), pellet);
 
             world.tick(true);
 
@@ -683,18 +697,8 @@ mod tests {
 
         #[test]
         fn a_pellet_outside_the_eating_distance_along_a_dominant_axis_is_not_consumed() {
-            // Asymmetric placement (small dx, large dy) so both axes' squared
-            // contributions are distinguishable: the distance formula must square
-            // each component, not just sum them or treat them as identical.
-            // With dx=2, dy=15: dx² + dy² = 4 + 225 = 229 > eat_distance_squared.
-            let critter = hungry_critter(100, 100);
-            let pellet = Pellet { x: 102, y: 115 };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            // dx=2, dy=15: dx² + dy² = 229 > (CRITTER_RADIUS+PELLET_RADIUS)² = 196.
+            let mut world = world_with(eating_critter(100, 100), Pellet { x: 102, y: 115 });
 
             world.tick(true);
 
@@ -703,93 +707,49 @@ mod tests {
 
         #[test]
         fn a_pellet_at_exactly_the_eating_distance_is_not_consumed() {
-            // Distance equals CRITTER_RADIUS + PELLET_RADIUS — circles tangent, not overlapping.
-            let critter = hungry_critter(100, 100);
             let pellet = Pellet {
                 x: 100 + CRITTER_RADIUS + PELLET_RADIUS,
                 y: 100,
             };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            let mut world = world_with(eating_critter(100, 100), pellet);
 
             world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
-        }
-
-        #[test]
-        fn a_critter_at_the_energy_cap_does_not_eat_an_overlapping_pellet() {
-            let mut critter = Critter::with_genome(
-                100,
-                100,
-                Heading::North,
-                u32::MAX,
-                1,
-                100,
-                0,
-                Genome::all(Instruction::DoNothing),
-            );
-            critter.gain_energy(crate::MAX_CRITTER_ENERGY); // saturates at MAX
-            assert_eq!(critter.energy(), crate::MAX_CRITTER_ENERGY);
-            let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
-
-            world.tick(true);
-
-            assert_eq!(world.pellets().len(), 1);
-            assert_eq!(world.critters()[0].energy(), crate::MAX_CRITTER_ENERGY);
         }
 
         #[test]
         fn eating_can_push_energy_past_initial_energy() {
-            // Eating no longer caps at initial_energy: a critter can stockpile.
+            // A critter at full initial energy that successfully eats ends up
+            // above its initial — there is no cap at initial_energy, only at
+            // MAX_CRITTER_ENERGY.
             let critter = Critter::with_genome(
                 100,
                 100,
                 Heading::North,
-                u32::MAX,
+                1,
                 1,
                 HUNGRY_INITIAL,
                 0,
-                Genome::all(Instruction::DoNothing),
+                Genome::all(Instruction::Eat),
             );
-            let pellet = Pellet { x: 100, y: 100 };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            let mut world = world_with(critter, Pellet { x: 100, y: 100 });
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), HUNGRY_INITIAL + PELLET_ENERGY);
+            assert_eq!(
+                world.critters()[0].energy(),
+                HUNGRY_INITIAL - 1 + PELLET_ENERGY
+            );
         }
 
         #[test]
         fn a_critter_near_the_left_edge_can_eat_a_pellet_near_the_right_edge_via_wrap() {
-            // Critter at x=2, pellet at x=TEST_WIDTH-2: euclidean distance ≈ 196,
-            // but wrapped (toroidal) distance is just 4 — well within eating range.
-            let critter = hungry_critter(2, 100);
             let pellet = Pellet {
                 x: TEST_WIDTH as i32 - 2,
                 y: 100,
             };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            let mut world = world_with(eating_critter(2, 100), pellet);
 
             world.tick(true);
 
@@ -798,17 +758,11 @@ mod tests {
 
         #[test]
         fn a_critter_near_the_top_edge_can_eat_a_pellet_near_the_bottom_edge_via_wrap() {
-            let critter = hungry_critter(100, 2);
             let pellet = Pellet {
                 x: 100,
                 y: TEST_HEIGHT as i32 - 2,
             };
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                vec![critter],
-                vec![pellet],
-            );
+            let mut world = world_with(eating_critter(100, 2), pellet);
 
             world.tick(true);
 
@@ -1398,6 +1352,34 @@ mod tests {
                 0,
                 Genome::all(Instruction::DoNothing),
             )
+        }
+
+        #[test]
+        fn a_critter_executing_steal_during_tick_drains_a_touching_victim() {
+            // Goes through World::tick rather than calling resolve_steals
+            // directly, exercising the full path from Critter::execute setting
+            // attempted_steal through World collecting stealer indices.
+            let stealer = Critter::with_genome(
+                100,
+                100,
+                Heading::North,
+                1,
+                1,
+                50,
+                0,
+                Genome::all(Instruction::Steal),
+            );
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![stealer, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[1].energy(), 0);
         }
 
         #[test]
