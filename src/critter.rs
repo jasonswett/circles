@@ -3,7 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
-const MUTATION_CHANCE: f32 = 0.02;
+const MUTATION_CHANCE: f32 = 0.001;
 const BIT_FLIP_RATE: f32 = 0.01;
 
 /// What a critter's tick produced this turn. World inspects this after each
@@ -1414,10 +1414,11 @@ mod tests {
         fn some_children_have_a_mutated_genome() {
             // Over a large enough sample, at least one mutation event should
             // fire. The sample size is sized so that even with the current
-            // mutation rate the probability of seeing zero mutations is
-            // negligible, while still failing if mutation never fires at all.
+            // (very small) mutation rate the probability of seeing zero
+            // mutations is negligible, while still failing if mutation never
+            // fires at all.
             let mut any_differ = false;
-            for seed in 0..1000 {
+            for seed in 0..10_000 {
                 let (parent, child) = split_once(seed);
                 if parent != child {
                     any_differ = true;
@@ -1426,7 +1427,7 @@ mod tests {
             }
             assert!(
                 any_differ,
-                "expected at least one mutated child in 1000 splits"
+                "expected at least one mutated child in 10000 splits"
             );
         }
     }
