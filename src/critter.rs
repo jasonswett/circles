@@ -3,7 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
-const MUTATION_CHANCE: f32 = 0.1;
+const MUTATION_CHANCE: f32 = 0.02;
 const BIT_FLIP_RATE: f32 = 0.01;
 
 /// What a critter's tick produced this turn. World inspects this after each
@@ -1392,10 +1392,11 @@ mod tests {
 
         #[test]
         fn most_children_inherit_the_parents_genome_unchanged() {
-            // With MUTATION_CHANCE = 0.1, ~90% of children should be identical
-            // to the parent. Asserting that at least 70% match leaves wide
-            // statistical headroom while still failing if mutation_chance was
-            // accidentally raised to 1.0 or the inheritance broke.
+            // With MUTATION_CHANCE small, the vast majority of children
+            // should match their parent exactly. Asserting that at least 70%
+            // match leaves wide statistical headroom while still failing if
+            // mutation_chance was accidentally raised to 1.0 or the
+            // inheritance broke.
             let mut identical = 0;
             for seed in 0..200 {
                 let (parent, child) = split_once(seed);
@@ -1411,11 +1412,12 @@ mod tests {
 
         #[test]
         fn some_children_have_a_mutated_genome() {
-            // With MUTATION_CHANCE = 0.1 and BIT_FLIP_RATE = 0.01, over 200
-            // splits we expect roughly 20 children to be mutated. Asserting at
-            // least one child differs catches a "mutation never fires" bug.
+            // Over a large enough sample, at least one mutation event should
+            // fire. The sample size is sized so that even with the current
+            // mutation rate the probability of seeing zero mutations is
+            // negligible, while still failing if mutation never fires at all.
             let mut any_differ = false;
-            for seed in 0..200 {
+            for seed in 0..1000 {
                 let (parent, child) = split_once(seed);
                 if parent != child {
                     any_differ = true;
@@ -1424,7 +1426,7 @@ mod tests {
             }
             assert!(
                 any_differ,
-                "expected at least one mutated child in 200 splits"
+                "expected at least one mutated child in 1000 splits"
             );
         }
     }
