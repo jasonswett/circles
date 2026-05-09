@@ -209,7 +209,11 @@ impl Critter {
         // instruction's per-critter parameters. A "no" still consumes one
         // energy and `last_executed` is left untouched so RepeatPreviousMove
         // keeps referring to whatever did execute last.
-        let probability = self.genome.probability_of_acting(instruction, self.energy);
+        let probability = self.genome.probability_of_acting(
+            instruction,
+            self.energy,
+            self.is_overlapping_critter(),
+        );
         let split_blocked = instruction == Instruction::Split && !allow_split;
         let outcome = if !split_blocked && self.roll_against(probability) {
             self.execute(instruction)

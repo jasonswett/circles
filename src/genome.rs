@@ -2,10 +2,32 @@ use crate::Instruction;
 use rand::Rng;
 
 const INSTRUCTION_COUNT: usize = 7;
+// Per-instruction header window: factor mask + threshold + softness.
+// The factor mask is two bits (one per factor), and is read in the order:
+// bit 0 = energy, bit 1 = is-touching-another-critter. A bit being on means
+// the corresponding factor contributes to the sigmoid input; off means it is
+// ignored. This is the "stair-step" mechanism: a single mutation can enable
+// or disable a whole factor without disturbing the existing weights.
+const FACTOR_MASK_BITS: usize = 2;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
-const PARAM_BITS_PER_INSTRUCTION: usize = THRESHOLD_BITS + SOFTNESS_BITS;
+const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
 const MIN_SOFTNESS: f32 = 1.0;
+
+// When the touching factor is enabled, this is the value contributed to the
+// sigmoid input on the touching=true side. Comparable in magnitude to a
+// healthy critter's energy, so a touching bit can meaningfully swing a
+// decision but not entirely dominate it.
+const TOUCHING_FACTOR_SCALE: f32 = 64.0;
+
+// Within each instruction's bit window: mask occupies bits 0..2, threshold
+// occupies bits 2..9, softness occupies bits 9..16. Writes/reads use these
+// offsets directly so the layout is in one place.
+const THRESHOLD_OFFSET: usize = FACTOR_MASK_BITS;
+const SOFTNESS_OFFSET: usize = THRESHOLD_OFFSET + THRESHOLD_BITS;
+
+const ENERGY_FACTOR_BIT: u32 = 0b01;
+const TOUCHING_FACTOR_BIT: u32 = 0b10;
 
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
@@ -79,26 +101,64 @@ impl Genome {
         }
     }
 
-    pub fn probability_of_acting(&self, instruction: Instruction, energy: u32) -> f32 {
-        let (threshold, softness) = self.params(instruction);
-        sigmoid((energy as f32 - threshold) / softness)
+    pub fn probability_of_acting(
+        &self,
+        instruction: Instruction,
+        energy: u32,
+        is_touching_critter: bool,
+    ) -> f32 {
+        let (mask, threshold, softness) = self.params(instruction);
+        let energy_contribution = if mask & ENERGY_FACTOR_BIT != 0 {
+            energy as f32
+        } else {
+            0.0
+        };
+        let touching_contribution = if mask & TOUCHING_FACTOR_BIT != 0 && is_touching_critter {
+            TOUCHING_FACTOR_SCALE
+        } else {
+            0.0
+        };
+        let input = energy_contribution + touching_contribution;
+        sigmoid((input - threshold) / softness)
     }
 
-    fn params(&self, instruction: Instruction) -> (f32, f32) {
-        let bit_offset = instruction_index(instruction) * PARAM_BITS_PER_INSTRUCTION;
-        let threshold_bits = read_bits(&self.bytes, bit_offset, THRESHOLD_BITS);
-        let softness_bits = read_bits(&self.bytes, bit_offset + THRESHOLD_BITS, SOFTNESS_BITS);
-        (threshold_bits as f32, MIN_SOFTNESS + softness_bits as f32)
+    fn params(&self, instruction: Instruction) -> (u32, f32, f32) {
+        let window_offset = instruction_index(instruction) * PARAM_BITS_PER_INSTRUCTION;
+        // FACTOR_MASK_OFFSET is 0, so we read the mask at the window's start.
+        let mask = read_bits(&self.bytes, window_offset, FACTOR_MASK_BITS);
+        let threshold_bits = read_bits(
+            &self.bytes,
+            window_offset + THRESHOLD_OFFSET,
+            THRESHOLD_BITS,
+        );
+        let softness_bits = read_bits(&self.bytes, window_offset + SOFTNESS_OFFSET, SOFTNESS_BITS);
+        (
+            mask,
+            threshold_bits as f32,
+            MIN_SOFTNESS + softness_bits as f32,
+        )
     }
 
     #[cfg(test)]
     fn always_act_header() -> Self {
-        // For probability ~ 1 at any non-trivial energy, leave threshold = 0
-        // and softness bits = 0 → softness = MIN_SOFTNESS = 1. Then
-        // sigmoid((energy - 0) / 1) is very close to 1 once energy >= ~10.
-        Self {
+        // Enable just the energy factor on every instruction so the sigmoid
+        // input is the critter's energy, then leave threshold = 0 and softness
+        // bits = 0 → softness = MIN_SOFTNESS = 1. Result: sigmoid(energy) is
+        // very close to 1 once energy >= ~10. Mirrors the pre-mask behavior.
+        let mut genome = Self {
             bytes: [0u8; TOTAL_BYTES],
+        };
+        for index in 0..INSTRUCTION_COUNT {
+            let window_offset = index * PARAM_BITS_PER_INSTRUCTION;
+            // FACTOR_MASK_OFFSET is 0, so the mask sits at the window's start.
+            write_bits(
+                &mut genome.bytes,
+                window_offset,
+                FACTOR_MASK_BITS,
+                ENERGY_FACTOR_BIT,
+            );
         }
+        genome
     }
 
     #[cfg(test)]
@@ -199,13 +259,13 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 7 instructions × 14 param bits + 8 opcodes × 4 bits = 98 + 32
-            // = 130 bits = 17 bytes (rounding up). Pinning down the literal
-            // byte count catches mutations to the constants that derive from
+            // 7 instructions × 16 param bits + 8 opcodes × 4 bits = 112 + 32
+            // = 144 bits = 18 bytes. Pinning down the literal byte count
+            // catches mutations to the constants that derive from
             // HEADER_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 17);
+            assert_eq!(genome.bytes.len(), 18);
         }
 
         #[test]
@@ -279,93 +339,162 @@ mod tests {
             // With threshold=0 and softness=1, sigmoid(60) ≈ 1.0 exactly.
             let genome = Genome::all(Instruction::Split);
 
-            let probability = genome.probability_of_acting(Instruction::Split, 60);
+            let probability = genome.probability_of_acting(Instruction::Split, 60, false);
 
             assert!(probability > 0.99);
         }
 
         #[test]
         fn near_the_encoded_threshold_the_probability_is_close_to_one_half() {
-            // For some random genome, probe at the integer-truncated threshold;
-            // softness >= 1 so the rounding error stays under ~0.25 of probability.
-            let genome = random_genome(0);
-            let (threshold, _softness) = genome.params(Instruction::Split);
-            let probability = genome.probability_of_acting(Instruction::Split, threshold as u32);
-
-            assert!((probability - 0.5).abs() < 0.5);
+            // For a random genome whose Split rule has the energy factor on,
+            // probe at the integer-truncated threshold; softness >= 1 so the
+            // rounding error stays under ~0.25 of probability.
+            for seed in 0..100 {
+                let genome = random_genome(seed);
+                let (mask, threshold, _softness) = genome.params(Instruction::Split);
+                if mask & ENERGY_FACTOR_BIT == 0 {
+                    continue;
+                }
+                let probability =
+                    genome.probability_of_acting(Instruction::Split, threshold as u32, false);
+                assert!((probability - 0.5).abs() < 0.5);
+                return;
+            }
+            panic!("no seed had the energy factor enabled on Split");
         }
 
         #[test]
         fn far_above_the_threshold_the_probability_approaches_one() {
-            let genome = random_genome(0);
-            let (threshold, softness) = genome.params(Instruction::Split);
-            let energy = (threshold + 20.0 * softness) as u32;
-
-            let probability = genome.probability_of_acting(Instruction::Split, energy);
-
-            assert!(probability > 0.99);
+            for seed in 0..100 {
+                let genome = random_genome(seed);
+                let (mask, threshold, softness) = genome.params(Instruction::Split);
+                if mask & ENERGY_FACTOR_BIT == 0 {
+                    continue;
+                }
+                let energy = (threshold + 20.0 * softness) as u32;
+                let probability = genome.probability_of_acting(Instruction::Split, energy, false);
+                assert!(probability > 0.99, "seed {seed}: probability {probability}");
+                return;
+            }
+            panic!("no seed had the energy factor enabled on Split");
         }
 
         #[test]
         fn far_below_the_threshold_the_probability_approaches_zero() {
-            // Search for a seed whose Split rule sits well above zero so we
-            // have room to probe well below it. With a 9-bit threshold field
-            // (0..512) and 7-bit softness, most seeds qualify.
+            // Search for a seed whose Split rule has the energy factor on and
+            // sits well above zero so we have room to probe below it.
             for seed in 0..100 {
                 let genome = random_genome(seed);
-                let (threshold, softness) = genome.params(Instruction::Split);
+                let (mask, threshold, softness) = genome.params(Instruction::Split);
+                if mask & ENERGY_FACTOR_BIT == 0 {
+                    continue;
+                }
                 if threshold / softness < 10.0 {
                     continue;
                 }
                 let energy = (threshold - 10.0 * softness).max(0.0) as u32;
-                let probability = genome.probability_of_acting(Instruction::Split, energy);
+                let probability = genome.probability_of_acting(Instruction::Split, energy, false);
                 assert!(probability < 0.01, "seed {seed}: probability {probability}");
                 return;
             }
-            panic!("no seed produced a threshold far enough above zero");
+            panic!("no seed produced an energy-enabled threshold far enough above zero");
         }
 
         #[test]
-        fn the_threshold_for_each_instruction_is_read_from_its_own_sixteen_bit_window() {
-            // Build a genome where each instruction's 16-bit param window is
-            // populated with a unique threshold value. Verify that reading each
-            // instruction's params returns its own value, not a neighbor's.
+        fn the_threshold_for_each_instruction_is_read_from_its_own_window() {
+            // Build a genome where each instruction's window has a unique
+            // threshold value. Verify that reading each instruction's params
+            // returns its own value, not a neighbor's.
             let mut bytes = [0u8; TOTAL_BYTES];
-            // Per-instruction thresholds (9 bits each), distinct values.
             let thresholds: [u32; 7] = [10, 20, 30, 40, 50, 60, 70];
             for (index, &threshold) in thresholds.iter().enumerate() {
-                let offset = index * PARAM_BITS_PER_INSTRUCTION;
+                let offset = index * PARAM_BITS_PER_INSTRUCTION + THRESHOLD_OFFSET;
                 write_bits(&mut bytes, offset, THRESHOLD_BITS, threshold);
             }
             let genome = Genome { bytes };
 
-            assert_eq!(genome.params(Instruction::MoveForward).0, 10.0);
-            assert_eq!(genome.params(Instruction::TurnLeft).0, 20.0);
-            assert_eq!(genome.params(Instruction::TurnRight).0, 30.0);
-            assert_eq!(genome.params(Instruction::DoNothing).0, 40.0);
-            assert_eq!(genome.params(Instruction::RepeatPreviousMove).0, 50.0);
-            assert_eq!(genome.params(Instruction::Split).0, 60.0);
-            assert_eq!(genome.params(Instruction::Steal).0, 70.0);
+            assert_eq!(genome.params(Instruction::MoveForward).1, 10.0);
+            assert_eq!(genome.params(Instruction::TurnLeft).1, 20.0);
+            assert_eq!(genome.params(Instruction::TurnRight).1, 30.0);
+            assert_eq!(genome.params(Instruction::DoNothing).1, 40.0);
+            assert_eq!(genome.params(Instruction::RepeatPreviousMove).1, 50.0);
+            assert_eq!(genome.params(Instruction::Split).1, 60.0);
+            assert_eq!(genome.params(Instruction::Steal).1, 70.0);
         }
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Similar to thresholds, but populating the softness portion.
+            // Use a hard-coded offset (mask 2 bits + threshold 7 bits = 9)
+            // rather than the SOFTNESS_OFFSET constant so that mutations to
+            // the constant produce a visible mismatch between write and read.
+            const SOFTNESS_OFFSET_LITERAL: usize = 9;
             let mut bytes = [0u8; TOTAL_BYTES];
             let softnesses: [u32; 7] = [5, 15, 25, 35, 45, 55, 65];
             for (index, &soft) in softnesses.iter().enumerate() {
-                let offset = index * PARAM_BITS_PER_INSTRUCTION + THRESHOLD_BITS;
+                let offset = index * PARAM_BITS_PER_INSTRUCTION + SOFTNESS_OFFSET_LITERAL;
                 write_bits(&mut bytes, offset, SOFTNESS_BITS, soft);
             }
             let genome = Genome { bytes };
 
             assert_eq!(
-                genome.params(Instruction::MoveForward).1,
+                genome.params(Instruction::MoveForward).2,
                 MIN_SOFTNESS + 5.0
             );
-            assert_eq!(genome.params(Instruction::TurnLeft).1, MIN_SOFTNESS + 15.0);
-            assert_eq!(genome.params(Instruction::Split).1, MIN_SOFTNESS + 55.0);
-            assert_eq!(genome.params(Instruction::Steal).1, MIN_SOFTNESS + 65.0);
+            assert_eq!(genome.params(Instruction::TurnLeft).2, MIN_SOFTNESS + 15.0);
+            assert_eq!(genome.params(Instruction::Split).2, MIN_SOFTNESS + 55.0);
+            assert_eq!(genome.params(Instruction::Steal).2, MIN_SOFTNESS + 65.0);
+        }
+
+        #[test]
+        fn with_no_factors_enabled_the_probability_does_not_depend_on_energy_or_touching() {
+            let genome = genome_with_mask_for_split(0b00);
+
+            let p_low = genome.probability_of_acting(Instruction::Split, 0, false);
+            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true);
+
+            assert_eq!(p_low, p_high_energy);
+            assert_eq!(p_low, p_touching);
+        }
+
+        #[test]
+        fn with_only_the_energy_factor_enabled_touching_does_not_change_the_probability() {
+            let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
+
+            let p_not_touching = genome.probability_of_acting(Instruction::Split, 100, false);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 100, true);
+
+            assert_eq!(p_not_touching, p_touching);
+        }
+
+        #[test]
+        fn with_only_the_touching_factor_enabled_energy_does_not_change_the_probability() {
+            let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
+
+            let p_low_energy = genome.probability_of_acting(Instruction::Split, 0, false);
+            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false);
+
+            assert_eq!(p_low_energy, p_high_energy);
+        }
+
+        #[test]
+        fn with_only_the_touching_factor_enabled_touching_increases_the_probability() {
+            // With softness = 1 and threshold = 0, touching adds 64 to the
+            // input — sigmoid(64) is essentially 1, sigmoid(0) is 0.5.
+            let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
+
+            let p_not_touching = genome.probability_of_acting(Instruction::Split, 0, false);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true);
+
+            assert!(p_not_touching < p_touching);
+        }
+
+        fn genome_with_mask_for_split(mask: u32) -> Genome {
+            // Threshold = 0, softness = 1 (raw bits 0). Just the mask varies.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            let split_window = instruction_index(Instruction::Split) * PARAM_BITS_PER_INSTRUCTION;
+            write_bits(&mut bytes, split_window, FACTOR_MASK_BITS, mask);
+            Genome { bytes }
         }
 
         #[test]
@@ -378,13 +507,13 @@ mod tests {
                 let genome = random_genome(seed);
                 let energy = 250;
                 let probabilities = [
-                    genome.probability_of_acting(Instruction::MoveForward, energy),
-                    genome.probability_of_acting(Instruction::RepeatPreviousMove, energy),
-                    genome.probability_of_acting(Instruction::DoNothing, energy),
-                    genome.probability_of_acting(Instruction::TurnLeft, energy),
-                    genome.probability_of_acting(Instruction::TurnRight, energy),
-                    genome.probability_of_acting(Instruction::Split, energy),
-                    genome.probability_of_acting(Instruction::Steal, energy),
+                    genome.probability_of_acting(Instruction::MoveForward, energy, false),
+                    genome.probability_of_acting(Instruction::RepeatPreviousMove, energy, false),
+                    genome.probability_of_acting(Instruction::DoNothing, energy, false),
+                    genome.probability_of_acting(Instruction::TurnLeft, energy, false),
+                    genome.probability_of_acting(Instruction::TurnRight, energy, false),
+                    genome.probability_of_acting(Instruction::Split, energy, false),
+                    genome.probability_of_acting(Instruction::Steal, energy, false),
                 ];
                 let mut sorted = probabilities.to_vec();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -472,8 +601,8 @@ mod tests {
             ] {
                 for energy in [0, 100, 250, 400, 500] {
                     assert_eq!(
-                        original.probability_of_acting(instruction, energy),
-                        cloned.probability_of_acting(instruction, energy),
+                        original.probability_of_acting(instruction, energy, false),
+                        cloned.probability_of_acting(instruction, energy, false),
                     );
                 }
             }
