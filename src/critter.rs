@@ -32,6 +32,7 @@ pub struct Critter {
     initial_energy: u32,
     overlap_indicator_ticks: u32,
     being_stolen_from_indicator_ticks: u32,
+    most_recent_overlap_color: Option<u32>,
     rng: SmallRng,
 }
 
@@ -109,6 +110,7 @@ impl Critter {
             initial_energy,
             overlap_indicator_ticks: 0,
             being_stolen_from_indicator_ticks: 0,
+            most_recent_overlap_color: None,
             rng,
         }
     }
@@ -189,6 +191,20 @@ impl Critter {
             self.being_stolen_from_indicator_ticks.saturating_sub(1);
     }
 
+    /// The genome color of the most recently detected overlapping critter,
+    /// or None if no overlap has ever been seen. The world updates this each
+    /// time it confirms an overlap. The genome can use it to compute a
+    /// dissimilarity factor against `genome_color()`, letting evolution
+    /// discover behaviors like "treat closely related critters differently
+    /// from strangers."
+    pub fn most_recent_overlap_color(&self) -> Option<u32> {
+        self.most_recent_overlap_color
+    }
+
+    pub fn record_overlap_color(&mut self, color: u32) {
+        self.most_recent_overlap_color = Some(color);
+    }
+
     pub fn wrap_position(&mut self, width: i32, height: i32) {
         self.x = self.x.rem_euclid(width);
         self.y = self.y.rem_euclid(height);
@@ -216,10 +232,15 @@ impl Critter {
         // instruction's per-critter parameters. A "no" still consumes one
         // energy and `last_executed` is left untouched so RepeatPreviousMove
         // keeps referring to whatever did execute last.
+        let dissimilarity = match self.most_recent_overlap_color {
+            Some(other) => crate::genome::color_dissimilarity(self.genome.digest_color(), other),
+            None => 0.0,
+        };
         let probability = self.genome.probability_of_acting(
             instruction,
             self.energy,
             self.is_overlapping_critter(),
+            dissimilarity,
         );
         let split_blocked = instruction == Instruction::Split && !allow_split;
         let outcome = if !split_blocked && self.roll_against(probability) {
@@ -330,6 +351,7 @@ impl Critter {
             initial_energy: self.initial_energy,
             overlap_indicator_ticks: 0,
             being_stolen_from_indicator_ticks: 0,
+            most_recent_overlap_color: None,
             rng: child_rng,
         }
     }
@@ -480,6 +502,49 @@ mod tests {
             );
 
             assert_eq!(critter.genome_color(), genome.digest_color());
+        }
+    }
+
+    mod most_recent_overlap_color {
+        use super::*;
+
+        fn fresh_critter() -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                100,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_freshly_created_critter_has_no_recorded_overlap_color() {
+            let critter = fresh_critter();
+
+            assert!(critter.most_recent_overlap_color().is_none());
+        }
+
+        #[test]
+        fn recording_an_overlap_color_makes_it_retrievable() {
+            let mut critter = fresh_critter();
+
+            critter.record_overlap_color(0xAB_CD_EF);
+
+            assert_eq!(critter.most_recent_overlap_color(), Some(0xAB_CD_EF));
+        }
+
+        #[test]
+        fn a_later_recording_overwrites_an_earlier_one() {
+            let mut critter = fresh_critter();
+            critter.record_overlap_color(0x11_22_33);
+
+            critter.record_overlap_color(0xAA_BB_CC);
+
+            assert_eq!(critter.most_recent_overlap_color(), Some(0xAA_BB_CC));
         }
     }
 

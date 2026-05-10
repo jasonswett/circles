@@ -201,8 +201,12 @@ impl World {
                 let dx = toroidal_delta(self.critters[i].x(), self.critters[j].x(), width);
                 let dy = toroidal_delta(self.critters[i].y(), self.critters[j].y(), height);
                 if dx * dx + dy * dy < overlap_distance_squared {
+                    let i_color = self.critters[i].genome_color();
+                    let j_color = self.critters[j].genome_color();
                     self.critters[i].mark_overlapping_critter_for(OVERLAP_INDICATOR_LINGER_TICKS);
+                    self.critters[i].record_overlap_color(j_color);
                     self.critters[j].mark_overlapping_critter_for(OVERLAP_INDICATOR_LINGER_TICKS);
+                    self.critters[j].record_overlap_color(i_color);
                 }
             }
         }
@@ -1119,6 +1123,28 @@ mod tests {
 
             assert!(world.critters()[0].is_overlapping_critter());
             assert!(world.critters()[1].is_overlapping_critter());
+        }
+
+        #[test]
+        fn each_critter_records_the_genome_color_of_the_critter_it_overlaps() {
+            // The two idle critters share the same DoNothing genome and so
+            // share the same genome color. Each ends up recording that color.
+            let a = idle_critter_at(100, 100);
+            let b = idle_critter_at(105, 100);
+            let expected_color = a.genome_color();
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
+
+            world.detect_critter_overlaps();
+
+            assert_eq!(
+                world.critters()[0].most_recent_overlap_color(),
+                Some(expected_color)
+            );
+            assert_eq!(
+                world.critters()[1].most_recent_overlap_color(),
+                Some(expected_color)
+            );
         }
 
         #[test]

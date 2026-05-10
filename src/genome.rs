@@ -3,12 +3,13 @@ use rand::Rng;
 
 const INSTRUCTION_COUNT: usize = 7;
 // Per-instruction header window: factor mask + threshold + softness.
-// The factor mask is two bits (one per factor), and is read in the order:
-// bit 0 = energy, bit 1 = is-touching-another-critter. A bit being on means
-// the corresponding factor contributes to the sigmoid input; off means it is
-// ignored. This is the "stair-step" mechanism: a single mutation can enable
-// or disable a whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 2;
+// The factor mask is three bits (one per factor), read in the order:
+// bit 0 = energy, bit 1 = is-touching-another-critter, bit 2 = the touched
+// critter's color is dissimilar to mine. A bit on means the corresponding
+// factor contributes to the sigmoid input; off means it is ignored. This is
+// the "stair-step" mechanism: a single mutation can enable or disable a
+// whole factor without disturbing the existing weights.
+const FACTOR_MASK_BITS: usize = 3;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -20,14 +21,20 @@ const MIN_SOFTNESS: f32 = 1.0;
 // decision but not entirely dominate it.
 const TOUCHING_FACTOR_SCALE: f32 = 64.0;
 
-// Within each instruction's bit window: mask occupies bits 0..2, threshold
-// occupies bits 2..9, softness occupies bits 9..16. Writes/reads use these
-// offsets directly so the layout is in one place.
+// When the color-dissimilarity factor is enabled, the contribution scales
+// from 0 (touched critter has the same color) up to this value (touched
+// critter is the maximally distant color in RGB space). Same scale as
+// TOUCHING_FACTOR_SCALE so the two factors are directly comparable.
+const COLOR_DISSIMILARITY_FACTOR_SCALE: f32 = 64.0;
+
+// Within each instruction's bit window: mask occupies bits 0..3, threshold
+// occupies bits 3..10, softness occupies bits 10..17.
 const THRESHOLD_OFFSET: usize = FACTOR_MASK_BITS;
 const SOFTNESS_OFFSET: usize = THRESHOLD_OFFSET + THRESHOLD_BITS;
 
-const ENERGY_FACTOR_BIT: u32 = 0b01;
-const TOUCHING_FACTOR_BIT: u32 = 0b10;
+const ENERGY_FACTOR_BIT: u32 = 0b001;
+const TOUCHING_FACTOR_BIT: u32 = 0b010;
+const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b100;
 
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
@@ -120,6 +127,7 @@ impl Genome {
         instruction: Instruction,
         energy: u32,
         is_touching_critter: bool,
+        touched_color_dissimilarity: f32,
     ) -> f32 {
         let (mask, threshold, softness) = self.params(instruction);
         let energy_contribution = if mask & ENERGY_FACTOR_BIT != 0 {
@@ -132,7 +140,12 @@ impl Genome {
         } else {
             0.0
         };
-        let input = energy_contribution + touching_contribution;
+        let color_contribution = if mask & COLOR_DISSIMILARITY_FACTOR_BIT != 0 {
+            COLOR_DISSIMILARITY_FACTOR_SCALE * touched_color_dissimilarity.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let input = energy_contribution + touching_contribution + color_contribution;
         sigmoid((input - threshold) / softness)
     }
 
@@ -282,6 +295,21 @@ fn sigmoid(z: f32) -> f32 {
     1.0 / (1.0 + (-z).exp())
 }
 
+/// Returns a value in [0, 1] expressing how different two 24-bit RGB colors
+/// are. 0 means identical; 1 means maximally distant (black vs white). The
+/// computation is the euclidean distance between the colors as 3-vectors,
+/// normalized by sqrt(3 * 255^2).
+pub fn color_dissimilarity(a: u32, b: u32) -> f32 {
+    let max_distance: f32 = (3.0_f32 * 255.0 * 255.0).sqrt();
+    let [_, ar, ag, ab] = a.to_be_bytes();
+    let [_, br, bg, bb] = b.to_be_bytes();
+    let dr = ar as f32 - br as f32;
+    let dg = ag as f32 - bg as f32;
+    let db = ab as f32 - bb as f32;
+    let distance = (dr * dr + dg * dg + db * db).sqrt();
+    (distance / max_distance).clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,13 +326,13 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 7 instructions × 16 param bits + 8 opcodes × 4 bits = 112 + 32
-            // = 144 bits = 18 bytes. Pinning down the literal byte count
-            // catches mutations to the constants that derive from
+            // 7 instructions × 17 param bits + 8 opcodes × 4 bits = 119 + 32
+            // = 151 bits = 19 bytes (rounding up). Pinning down the literal
+            // byte count catches mutations to the constants that derive from
             // HEADER_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 18);
+            assert_eq!(genome.bytes.len(), 19);
         }
 
         #[test]
@@ -378,7 +406,7 @@ mod tests {
             // With threshold=0 and softness=1, sigmoid(60) ≈ 1.0 exactly.
             let genome = Genome::all(Instruction::Split);
 
-            let probability = genome.probability_of_acting(Instruction::Split, 60, false);
+            let probability = genome.probability_of_acting(Instruction::Split, 60, false, 0.0);
 
             assert!(probability > 0.99);
         }
@@ -395,7 +423,7 @@ mod tests {
                     continue;
                 }
                 let probability =
-                    genome.probability_of_acting(Instruction::Split, threshold as u32, false);
+                    genome.probability_of_acting(Instruction::Split, threshold as u32, false, 0.0);
                 assert!((probability - 0.5).abs() < 0.5);
                 return;
             }
@@ -411,7 +439,8 @@ mod tests {
                     continue;
                 }
                 let energy = (threshold + 20.0 * softness) as u32;
-                let probability = genome.probability_of_acting(Instruction::Split, energy, false);
+                let probability =
+                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0);
                 assert!(probability > 0.99, "seed {seed}: probability {probability}");
                 return;
             }
@@ -432,7 +461,8 @@ mod tests {
                     continue;
                 }
                 let energy = (threshold - 10.0 * softness).max(0.0) as u32;
-                let probability = genome.probability_of_acting(Instruction::Split, energy, false);
+                let probability =
+                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0);
                 assert!(probability < 0.01, "seed {seed}: probability {probability}");
                 return;
             }
@@ -463,10 +493,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 2 bits + threshold 7 bits = 9)
+            // Use a hard-coded offset (mask 3 bits + threshold 7 bits = 10)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 9;
+            const SOFTNESS_OFFSET_LITERAL: usize = 10;
             let mut bytes = [0u8; TOTAL_BYTES];
             let softnesses: [u32; 7] = [5, 15, 25, 35, 45, 55, 65];
             for (index, &soft) in softnesses.iter().enumerate() {
@@ -488,9 +518,9 @@ mod tests {
         fn with_no_factors_enabled_the_probability_does_not_depend_on_energy_or_touching() {
             let genome = genome_with_mask_for_split(0b00);
 
-            let p_low = genome.probability_of_acting(Instruction::Split, 0, false);
-            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true);
+            let p_low = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
+            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false, 0.0);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0);
 
             assert_eq!(p_low, p_high_energy);
             assert_eq!(p_low, p_touching);
@@ -500,8 +530,8 @@ mod tests {
         fn with_only_the_energy_factor_enabled_touching_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
 
-            let p_not_touching = genome.probability_of_acting(Instruction::Split, 100, false);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 100, true);
+            let p_not_touching = genome.probability_of_acting(Instruction::Split, 100, false, 0.0);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 100, true, 0.0);
 
             assert_eq!(p_not_touching, p_touching);
         }
@@ -510,8 +540,8 @@ mod tests {
         fn with_only_the_touching_factor_enabled_energy_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
 
-            let p_low_energy = genome.probability_of_acting(Instruction::Split, 0, false);
-            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false);
+            let p_low_energy = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
+            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false, 0.0);
 
             assert_eq!(p_low_energy, p_high_energy);
         }
@@ -522,10 +552,45 @@ mod tests {
             // input — sigmoid(64) is essentially 1, sigmoid(0) is 0.5.
             let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
 
-            let p_not_touching = genome.probability_of_acting(Instruction::Split, 0, false);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true);
+            let p_not_touching = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0);
 
             assert!(p_not_touching < p_touching);
+        }
+
+        #[test]
+        fn with_no_color_factor_dissimilarity_does_not_change_the_probability() {
+            let genome = genome_with_mask_for_split(0b000);
+
+            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
+            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0);
+
+            assert_eq!(p_similar, p_dissimilar);
+        }
+
+        #[test]
+        fn with_only_the_color_factor_enabled_dissimilarity_increases_the_probability() {
+            // Softness = 1, threshold = 0. Dissimilarity = 1 adds 64 to input;
+            // dissimilarity = 0 leaves input at 0. sigmoid(64) ≈ 1, sigmoid(0) = 0.5.
+            let genome = genome_with_mask_for_split(COLOR_DISSIMILARITY_FACTOR_BIT);
+
+            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
+            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0);
+
+            assert!(p_similar < p_dissimilar);
+        }
+
+        #[test]
+        fn with_only_the_color_factor_enabled_neither_energy_nor_touching_changes_the_probability()
+        {
+            let genome = genome_with_mask_for_split(COLOR_DISSIMILARITY_FACTOR_BIT);
+
+            let baseline = genome.probability_of_acting(Instruction::Split, 0, false, 0.5);
+            let varied_energy = genome.probability_of_acting(Instruction::Split, 500, false, 0.5);
+            let varied_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.5);
+
+            assert_eq!(baseline, varied_energy);
+            assert_eq!(baseline, varied_touching);
         }
 
         fn genome_with_mask_for_split(mask: u32) -> Genome {
@@ -546,13 +611,18 @@ mod tests {
                 let genome = random_genome(seed);
                 let energy = 250;
                 let probabilities = [
-                    genome.probability_of_acting(Instruction::MoveForward, energy, false),
-                    genome.probability_of_acting(Instruction::RepeatPreviousMove, energy, false),
-                    genome.probability_of_acting(Instruction::DoNothing, energy, false),
-                    genome.probability_of_acting(Instruction::TurnLeft, energy, false),
-                    genome.probability_of_acting(Instruction::TurnRight, energy, false),
-                    genome.probability_of_acting(Instruction::Split, energy, false),
-                    genome.probability_of_acting(Instruction::Eat, energy, false),
+                    genome.probability_of_acting(Instruction::MoveForward, energy, false, 0.0),
+                    genome.probability_of_acting(
+                        Instruction::RepeatPreviousMove,
+                        energy,
+                        false,
+                        0.0,
+                    ),
+                    genome.probability_of_acting(Instruction::DoNothing, energy, false, 0.0),
+                    genome.probability_of_acting(Instruction::TurnLeft, energy, false, 0.0),
+                    genome.probability_of_acting(Instruction::TurnRight, energy, false, 0.0),
+                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0),
+                    genome.probability_of_acting(Instruction::Eat, energy, false, 0.0),
                 ];
                 let mut sorted = probabilities.to_vec();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -608,6 +678,73 @@ mod tests {
                 .sum();
             assert!(differing_bits > 0);
             assert!(differing_bits < 8 * TOTAL_BYTES as u32);
+        }
+    }
+
+    mod color_dissimilarity {
+        use super::*;
+
+        #[test]
+        fn identical_colors_have_zero_dissimilarity() {
+            assert_eq!(color_dissimilarity(0xAB_CD_EF, 0xAB_CD_EF), 0.0);
+        }
+
+        #[test]
+        fn black_and_white_have_maximum_dissimilarity() {
+            assert!((color_dissimilarity(0x00_00_00, 0xFF_FF_FF) - 1.0).abs() < 1e-6);
+        }
+
+        #[test]
+        fn dissimilarity_is_symmetric() {
+            let a = 0x12_34_56;
+            let b = 0xAB_CD_EF;
+
+            assert_eq!(color_dissimilarity(a, b), color_dissimilarity(b, a));
+        }
+
+        #[test]
+        fn closer_colors_are_less_dissimilar_than_more_distant_ones() {
+            let close = color_dissimilarity(0x10_10_10, 0x20_20_20);
+            let far = color_dissimilarity(0x10_10_10, 0xF0_F0_F0);
+
+            assert!(close < far);
+        }
+
+        #[test]
+        fn an_asymmetric_channel_delta_produces_a_known_intermediate_dissimilarity() {
+            // dr = 10, dg = 20, db = 30 → distance² = 100 + 400 + 900 = 1400.
+            // distance ≈ 37.417, max ≈ 441.673, ratio ≈ 0.0847. The exact
+            // numeric assertion catches mutations that scramble either the
+            // squared-distance sum or the normalizer.
+            let a = 0x00_00_00;
+            let b = 0x0A_14_1E;
+            let expected = (1400.0_f32).sqrt() / (3.0_f32 * 255.0 * 255.0).sqrt();
+
+            let actual = color_dissimilarity(a, b);
+
+            assert!((actual - expected).abs() < 1e-6, "{actual} vs {expected}");
+        }
+
+        #[test]
+        fn a_mid_gray_pair_produces_a_known_intermediate_dissimilarity() {
+            // 0x40_40_40 vs 0x80_80_80: dr = dg = db = 64.
+            // distance² = 3 * 64² = 12288, distance = 64*sqrt(3),
+            // ratio = 64*sqrt(3) / (255*sqrt(3)) = 64/255.
+            let actual = color_dissimilarity(0x40_40_40, 0x80_80_80);
+            let expected = 64.0 / 255.0;
+
+            assert!((actual - expected).abs() < 1e-6, "{actual} vs {expected}");
+        }
+
+        #[test]
+        fn the_dissimilarity_of_any_pair_lies_in_the_unit_interval() {
+            for seed in 0..50 {
+                let a = random_genome(seed).digest_color();
+                let b = random_genome(seed + 100).digest_color();
+                let d = color_dissimilarity(a, b);
+
+                assert!((0.0..=1.0).contains(&d), "{d}");
+            }
         }
     }
 
@@ -773,8 +910,8 @@ mod tests {
             ] {
                 for energy in [0, 100, 250, 400, 500] {
                     assert_eq!(
-                        original.probability_of_acting(instruction, energy, false),
-                        cloned.probability_of_acting(instruction, energy, false),
+                        original.probability_of_acting(instruction, energy, false, 0.0),
+                        cloned.probability_of_acting(instruction, energy, false, 0.0),
                     );
                 }
             }
