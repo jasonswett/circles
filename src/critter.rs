@@ -5,6 +5,12 @@ use rand::{Rng, SeedableRng};
 pub const MAX_CRITTER_ENERGY: u32 = 500;
 const MUTATION_CHANCE: f32 = 0.001;
 const BIT_FLIP_RATE: f32 = 0.01;
+// Energy charged when a critter actually fires Split, regardless of whether
+// the action succeeds (insufficient energy to halve, blocked by allow_split,
+// etc.). Stops the "split, eat baby, repeat" exploit by making each
+// reproduction attempt cost something the parent can't recover by eating
+// the child.
+pub const SPLIT_ATTEMPT_COST: u32 = 5;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -297,6 +303,7 @@ impl Critter {
                 }
             }
             Instruction::Split => {
+                self.energy = self.energy.saturating_sub(SPLIT_ATTEMPT_COST);
                 let child = self.spawn_child();
                 self.energy /= 2;
                 self.last_executed = Some(Instruction::Split);
@@ -1198,9 +1205,12 @@ mod tests {
         use crate::Genome;
 
         const INITIAL_ENERGY: u32 = 60;
-        // Pre-split energy is the parent's energy at the moment of splitting; the
-        // child gets half and the parent retains half (minus the instruction cost).
+        // Pre-split energy is the parent's energy at the moment of splitting.
+        // The split flow: pay SPLIT_ATTEMPT_COST, give the child half of what
+        // remains, retain the other half. The base 1-energy tick cost is then
+        // deducted from the parent.
         const SPLITTER_ENERGY: u32 = 2 * INITIAL_ENERGY;
+        const POST_ATTEMPT_ENERGY: u32 = SPLITTER_ENERGY - SPLIT_ATTEMPT_COST;
 
         fn splitter() -> Critter {
             let mut critter = Critter::with_genome(
@@ -1227,21 +1237,36 @@ mod tests {
         }
 
         #[test]
-        fn the_child_receives_half_of_the_parents_pre_split_energy() {
+        fn the_child_receives_half_of_the_parents_post_attempt_energy() {
             let mut parent = splitter();
 
             let child = parent.tick(true).child.unwrap();
 
-            assert_eq!(child.energy(), SPLITTER_ENERGY / 2);
+            assert_eq!(child.energy(), POST_ATTEMPT_ENERGY / 2);
         }
 
         #[test]
-        fn the_parent_keeps_half_of_its_pre_split_energy_minus_the_instruction_cost() {
+        fn the_parent_keeps_half_of_its_post_attempt_energy_minus_the_instruction_cost() {
             let mut parent = splitter();
 
             parent.tick(true);
 
-            assert_eq!(parent.energy(), SPLITTER_ENERGY / 2 - 1);
+            assert_eq!(parent.energy(), POST_ATTEMPT_ENERGY / 2 - 1);
+        }
+
+        #[test]
+        fn splitting_costs_at_least_the_split_attempt_cost_total_energy() {
+            // Total energy across parent and child after a split is bounded
+            // above by pre-split energy minus the attempt cost. This is the
+            // friction that keeps "split, eat baby, repeat" from being free.
+            let mut parent = splitter();
+            let parent_before = parent.energy();
+
+            let outcome = parent.tick(true);
+            let child_energy = outcome.child.unwrap().energy();
+            let parent_after = parent.energy();
+
+            assert!(parent_after + child_energy <= parent_before - SPLIT_ATTEMPT_COST);
         }
 
         #[test]
