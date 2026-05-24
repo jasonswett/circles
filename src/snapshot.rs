@@ -1,11 +1,22 @@
-use crate::Genome;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::{format_elapsed, Genome};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// Formats a snapshot block: timestamp line, the genome's bit string, and a
-/// trailing blank line so consecutive blocks are visually separated. The
-/// caller is responsible for printing to stdout.
-pub fn format_block(timestamp: SystemTime, genome: &Genome) -> String {
-    format!("{}\n{}\n\n", format_timestamp(timestamp), genome.to_bits(),)
+/// Formats a snapshot block: a UTC timestamp, the world's generation
+/// counter, how long this world has been running, the genome's bit string,
+/// and a trailing blank line so consecutive blocks are visually separated.
+/// Each fact gets its own line — same shape the on-screen overlay uses.
+pub fn format_block(
+    timestamp: SystemTime,
+    world_number: u32,
+    world_elapsed: Duration,
+    genome: &Genome,
+) -> String {
+    format!(
+        "{}\nWorld: {world_number}\nTime: {elapsed}\n{bits}\n\n",
+        format_timestamp(timestamp),
+        elapsed = format_elapsed(world_elapsed),
+        bits = genome.to_bits(),
+    )
 }
 
 /// Renders a `SystemTime` as a fixed-width "YYYY-MM-DD HH:MM:SS UTC" string.
@@ -62,15 +73,18 @@ mod tests {
     }
 
     #[test]
-    fn the_block_is_timestamp_then_bit_string_then_blank_line() {
+    fn the_block_has_timestamp_world_time_and_bits_each_on_their_own_line() {
         let genome = Genome::all(Instruction::Split);
         // 2026-05-24 00:00:00 UTC. Chosen to match the project's "today" so
         // the assertion reads obviously.
         let timestamp = instant_at(1779580800);
 
-        let block = format_block(timestamp, &genome);
+        let block = format_block(timestamp, 3, Duration::from_secs(83), &genome);
 
-        let expected = format!("2026-05-24 00:00:00 UTC\n{}\n\n", genome.to_bits());
+        let expected = format!(
+            "2026-05-24 00:00:00 UTC\nWorld: 3\nTime: 0:01:23\n{}\n\n",
+            genome.to_bits(),
+        );
         assert_eq!(block, expected);
     }
 
@@ -78,7 +92,7 @@ mod tests {
     fn the_block_ends_with_two_newlines_so_consecutive_blocks_are_separated() {
         let genome = Genome::all(Instruction::Split);
 
-        let block = format_block(instant_at(0), &genome);
+        let block = format_block(instant_at(0), 1, Duration::from_secs(0), &genome);
 
         assert!(block.ends_with("\n\n"));
     }
@@ -87,7 +101,7 @@ mod tests {
     fn the_timestamp_renders_unix_epoch_zero_as_1970_01_01() {
         let genome = Genome::all(Instruction::Split);
 
-        let block = format_block(instant_at(0), &genome);
+        let block = format_block(instant_at(0), 1, Duration::from_secs(0), &genome);
 
         assert!(
             block.starts_with("1970-01-01 00:00:00 UTC\n"),
@@ -102,11 +116,38 @@ mod tests {
         // bugs in the civil-from-unix conversion.
         let timestamp = instant_at(1709210096);
 
-        let block = format_block(timestamp, &genome);
+        let block = format_block(timestamp, 1, Duration::from_secs(0), &genome);
 
         assert!(
             block.starts_with("2024-02-29 12:34:56 UTC\n"),
             "unexpected block start: {block}",
+        );
+    }
+
+    #[test]
+    fn the_world_number_appears_on_its_own_line() {
+        let genome = Genome::all(Instruction::Split);
+
+        let block = format_block(instant_at(0), 42, Duration::from_secs(0), &genome);
+
+        assert!(block.contains("\nWorld: 42\n"), "unexpected block: {block}",);
+    }
+
+    #[test]
+    fn the_elapsed_time_appears_on_its_own_line_using_the_shared_formatter() {
+        let genome = Genome::all(Instruction::Split);
+
+        let block = format_block(
+            instant_at(0),
+            1,
+            Duration::from_secs(3 * 3600 + 605),
+            &genome,
+        );
+
+        // 3*3600 + 605 = 10805s = 3:10:05 via format_elapsed.
+        assert!(
+            block.contains("\nTime: 3:10:05\n"),
+            "unexpected block: {block}",
         );
     }
 }

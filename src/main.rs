@@ -141,7 +141,15 @@ fn main() {
         }
         if last_snapshot_at.elapsed() >= SNAPSHOT_INTERVAL {
             if let Some(genome) = world.dominant_genome() {
-                print!("{}", format_snapshot_block(SystemTime::now(), genome));
+                print!(
+                    "{}",
+                    format_snapshot_block(
+                        SystemTime::now(),
+                        world.generation(),
+                        world_started_at.elapsed(),
+                        genome,
+                    )
+                );
             }
             last_snapshot_at = Instant::now();
         }
