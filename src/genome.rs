@@ -38,9 +38,21 @@ const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b100;
 
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
-const OPCODE_COUNT: usize = 8;
-const OPCODE_BITS: usize = OPCODE_COUNT * OPCODE_BITS_PER_OPCODE;
-const TOTAL_BITS: usize = HEADER_BITS + OPCODE_BITS;
+// Total opcode slots in the genome's pool. Most start dormant — only the
+// first INITIAL_ACTIVE_OPCODES participate in the walked stream when a
+// genome is freshly created. A separate activation mask (one bit per slot)
+// determines which slots are live; mutation can flip individual bits to
+// promote dormant slots into the active rotation. Each dormant slot's
+// 4-bit content evolves freely while inactive, so by the time a slot is
+// activated its content is whatever drift has produced.
+const OPCODE_POOL_SIZE: usize = 40;
+// How many of the pool's slots are active in a freshly created genome.
+const INITIAL_ACTIVE_OPCODES: usize = 8;
+const ACTIVATION_MASK_BITS: usize = OPCODE_POOL_SIZE;
+const OPCODE_BITS: usize = OPCODE_POOL_SIZE * OPCODE_BITS_PER_OPCODE;
+const ACTIVATION_MASK_OFFSET: usize = HEADER_BITS;
+const OPCODE_STREAM_OFFSET: usize = ACTIVATION_MASK_OFFSET + ACTIVATION_MASK_BITS;
+const TOTAL_BITS: usize = HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -58,6 +70,19 @@ impl Genome {
         for byte in &mut bytes {
             *byte = rng.gen();
         }
+        // Reset the activation mask to "first INITIAL_ACTIVE_OPCODES bits on,
+        // rest off" so every fresh lineage starts with the same number of
+        // active opcodes. From here, mutation can flip individual mask bits
+        // to promote dormant slots or deactivate active ones.
+        for slot in 0..OPCODE_POOL_SIZE {
+            let active = slot < INITIAL_ACTIVE_OPCODES;
+            write_bits(
+                &mut bytes,
+                ACTIVATION_MASK_OFFSET + slot,
+                1,
+                if active { 1 } else { 0 },
+            );
+        }
         Self { bytes }
     }
 
@@ -67,7 +92,7 @@ impl Genome {
     #[cfg(test)]
     pub fn all(instruction: Instruction) -> Self {
         let mut genome = Self::always_act_header();
-        for cursor in 0..OPCODE_COUNT {
+        for cursor in 0..OPCODE_POOL_SIZE {
             genome.write_opcode(cursor, encode(instruction));
         }
         genome
@@ -80,7 +105,7 @@ impl Genome {
     pub fn from_instructions(instructions: &[Instruction]) -> Self {
         assert!(!instructions.is_empty());
         let mut genome = Self::always_act_header();
-        for cursor in 0..OPCODE_COUNT {
+        for cursor in 0..OPCODE_POOL_SIZE {
             let instr = instructions[cursor % instructions.len()];
             genome.write_opcode(cursor, encode(instr));
         }
@@ -102,9 +127,39 @@ impl Genome {
     }
 
     pub fn decode_at(&self, cursor: usize) -> Instruction {
-        let position = cursor % OPCODE_COUNT;
-        let bit_offset = HEADER_BITS + position * OPCODE_BITS_PER_OPCODE;
-        decode(read_bits(&self.bytes, bit_offset, OPCODE_BITS_PER_OPCODE) as u8)
+        // The cursor counts only firings of active opcode slots; we walk the
+        // pool in order, skipping dormant slots. If no slots are active at
+        // all (all activation bits flipped off by mutation) the critter has
+        // nothing to do — fall back to DoNothing.
+        let active_count = self.active_opcode_count();
+        if active_count == 0 {
+            return Instruction::DoNothing;
+        }
+        let active_index = cursor % active_count;
+        let mut seen = 0;
+        for slot in 0..OPCODE_POOL_SIZE {
+            if !self.is_slot_active(slot) {
+                continue;
+            }
+            if seen == active_index {
+                let bit_offset = OPCODE_STREAM_OFFSET + slot * OPCODE_BITS_PER_OPCODE;
+                return decode(read_bits(&self.bytes, bit_offset, OPCODE_BITS_PER_OPCODE) as u8);
+            }
+            seen += 1;
+        }
+        // Unreachable — active_count > 0 guarantees the loop finds the slot —
+        // but the fallback keeps the function total without panicking.
+        Instruction::DoNothing
+    }
+
+    fn is_slot_active(&self, slot: usize) -> bool {
+        read_bits(&self.bytes, ACTIVATION_MASK_OFFSET + slot, 1) != 0
+    }
+
+    fn active_opcode_count(&self) -> usize {
+        (0..OPCODE_POOL_SIZE)
+            .filter(|&slot| self.is_slot_active(slot))
+            .count()
     }
 
     /// Flips each bit independently with probability `bit_flip_rate`. A rate of
@@ -172,6 +227,8 @@ impl Genome {
         // input is the critter's energy, then leave threshold = 0 and softness
         // bits = 0 → softness = MIN_SOFTNESS = 1. Result: sigmoid(energy) is
         // very close to 1 once energy >= ~10. Mirrors the pre-mask behavior.
+        // Also activates the first INITIAL_ACTIVE_OPCODES opcode slots so the
+        // critter has a working stream to walk.
         let mut genome = Self {
             bytes: [0u8; TOTAL_BYTES],
         };
@@ -185,13 +242,16 @@ impl Genome {
                 ENERGY_FACTOR_BIT,
             );
         }
+        for slot in 0..INITIAL_ACTIVE_OPCODES {
+            write_bits(&mut genome.bytes, ACTIVATION_MASK_OFFSET + slot, 1, 1);
+        }
         genome
     }
 
     #[cfg(test)]
     fn write_opcode(&mut self, cursor: usize, code: u8) {
-        let position = cursor % OPCODE_COUNT;
-        let bit_offset = HEADER_BITS + position * OPCODE_BITS_PER_OPCODE;
+        let position = cursor % OPCODE_POOL_SIZE;
+        let bit_offset = OPCODE_STREAM_OFFSET + position * OPCODE_BITS_PER_OPCODE;
         write_bits(
             &mut self.bytes,
             bit_offset,
@@ -217,7 +277,6 @@ fn read_bits(bytes: &[u8], bit_offset: usize, length: usize) -> u32 {
     value
 }
 
-#[cfg(test)]
 fn write_bits(bytes: &mut [u8], bit_offset: usize, length: usize, value: u32) {
     for i in 0..length {
         let bit_index = bit_offset + i;
@@ -326,13 +385,14 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 7 instructions × 17 param bits + 8 opcodes × 4 bits = 119 + 32
-            // = 151 bits = 19 bytes (rounding up). Pinning down the literal
-            // byte count catches mutations to the constants that derive from
-            // HEADER_BITS + OPCODE_BITS.
+            // 7 instructions × 17 param bits + 40 activation mask bits + 40
+            // opcodes × 4 bits = 119 + 40 + 160 = 319 bits = 40 bytes
+            // (rounding up). Pinning down the literal byte count catches
+            // mutations to the constants that derive from HEADER_BITS +
+            // ACTIVATION_MASK_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 19);
+            assert_eq!(genome.bytes.len(), 40);
         }
 
         #[test]
@@ -348,18 +408,27 @@ mod tests {
         use super::*;
 
         #[test]
-        fn decoding_at_a_cursor_beyond_the_opcode_count_wraps_around() {
+        fn decoding_at_a_cursor_beyond_the_active_count_wraps_around() {
+            // The walker counts only active slots, so wrapping happens after
+            // the active count, not the pool size. With from_instructions,
+            // INITIAL_ACTIVE_OPCODES slots are active.
             let genome = Genome::from_instructions(&[Instruction::TurnLeft, Instruction::Split]);
 
-            assert_eq!(genome.decode_at(0), genome.decode_at(OPCODE_COUNT));
-            assert_eq!(genome.decode_at(1), genome.decode_at(OPCODE_COUNT + 1));
+            assert_eq!(
+                genome.decode_at(0),
+                genome.decode_at(INITIAL_ACTIVE_OPCODES)
+            );
+            assert_eq!(
+                genome.decode_at(1),
+                genome.decode_at(INITIAL_ACTIVE_OPCODES + 1)
+            );
         }
 
         #[test]
-        fn an_all_split_genome_decodes_to_split_at_every_cursor() {
+        fn an_all_split_genome_decodes_to_split_at_every_active_cursor() {
             let genome = Genome::all(Instruction::Split);
 
-            for cursor in 0..OPCODE_COUNT {
+            for cursor in 0..INITIAL_ACTIVE_OPCODES {
                 assert_eq!(genome.decode_at(cursor), Instruction::Split);
             }
         }
@@ -376,6 +445,82 @@ mod tests {
             assert_eq!(genome.decode_at(1), Instruction::TurnRight);
             assert_eq!(genome.decode_at(2), Instruction::Split);
             assert_eq!(genome.decode_at(3), Instruction::MoveForward);
+        }
+
+        #[test]
+        fn a_fresh_random_genome_has_initial_active_opcodes_active() {
+            let genome = random_genome(0);
+
+            assert_eq!(genome.active_opcode_count(), INITIAL_ACTIVE_OPCODES);
+        }
+
+        #[test]
+        fn decoding_skips_dormant_slots_in_the_pool() {
+            // Build a genome where every active slot decodes to TurnLeft and
+            // every dormant slot decodes to Split. The walker must only visit
+            // active slots, so every cursor sees TurnLeft.
+            let mut genome = Genome::all(Instruction::TurnLeft);
+            for slot in INITIAL_ACTIVE_OPCODES..OPCODE_POOL_SIZE {
+                let bit_offset = OPCODE_STREAM_OFFSET + slot * OPCODE_BITS_PER_OPCODE;
+                write_bits(
+                    &mut genome.bytes,
+                    bit_offset,
+                    OPCODE_BITS_PER_OPCODE,
+                    encode(Instruction::Split) as u32,
+                );
+            }
+
+            for cursor in 0..OPCODE_POOL_SIZE {
+                assert_eq!(genome.decode_at(cursor), Instruction::TurnLeft);
+            }
+        }
+
+        #[test]
+        fn activating_a_dormant_slot_brings_its_instruction_into_the_walked_stream() {
+            // Build a genome where the dormant slot at INITIAL_ACTIVE_OPCODES
+            // contains Split. After activating that slot's mask bit, the
+            // active count grows by one and the cursor that would have
+            // wrapped now lands on the newly-activated Split.
+            let mut genome = Genome::all(Instruction::TurnLeft);
+            let target_slot = INITIAL_ACTIVE_OPCODES;
+            let bit_offset = OPCODE_STREAM_OFFSET + target_slot * OPCODE_BITS_PER_OPCODE;
+            write_bits(
+                &mut genome.bytes,
+                bit_offset,
+                OPCODE_BITS_PER_OPCODE,
+                encode(Instruction::Split) as u32,
+            );
+
+            // Before activation, cursor INITIAL_ACTIVE_OPCODES wraps to slot 0
+            // (TurnLeft).
+            assert_eq!(
+                genome.decode_at(INITIAL_ACTIVE_OPCODES),
+                Instruction::TurnLeft
+            );
+
+            write_bits(
+                &mut genome.bytes,
+                ACTIVATION_MASK_OFFSET + target_slot,
+                1,
+                1,
+            );
+
+            // After activation, that cursor now lands on the newly-active
+            // Split slot rather than wrapping back to slot 0.
+            assert_eq!(genome.decode_at(INITIAL_ACTIVE_OPCODES), Instruction::Split);
+            assert_eq!(genome.active_opcode_count(), INITIAL_ACTIVE_OPCODES + 1);
+        }
+
+        #[test]
+        fn a_genome_with_no_active_slots_decodes_to_do_nothing() {
+            let mut genome = Genome::all(Instruction::Split);
+            // Deactivate every slot.
+            for slot in 0..OPCODE_POOL_SIZE {
+                write_bits(&mut genome.bytes, ACTIVATION_MASK_OFFSET + slot, 1, 0);
+            }
+
+            assert_eq!(genome.decode_at(0), Instruction::DoNothing);
+            assert_eq!(genome.decode_at(99), Instruction::DoNothing);
         }
 
         #[test]
@@ -760,23 +905,24 @@ mod tests {
         }
 
         #[test]
-        fn each_channel_hashes_six_distinct_bytes_in_position() {
+        fn each_channel_hashes_a_distinct_slice_of_the_genome() {
             // Construct a genome where each third has a distinct byte signature
             // and the others are zero. Each channel's hash is then determined
             // entirely by its own slice; if a mutation shifts the slice
             // boundaries the channel will hash a different (or shorter) span
             // and produce a different value.
+            const THIRD: usize = TOTAL_BYTES / 3;
             let mut bytes = [0u8; TOTAL_BYTES];
-            // First third: bytes 0..6 contain 0xAA in the last position only.
-            bytes[5] = 0xAA;
+            // Place the signature byte at the last position of each slice.
+            bytes[THIRD - 1] = 0xAA;
             let red_only = Genome { bytes };
 
             let mut bytes = [0u8; TOTAL_BYTES];
-            bytes[11] = 0xAA;
+            bytes[2 * THIRD - 1] = 0xAA;
             let green_only = Genome { bytes };
 
             let mut bytes = [0u8; TOTAL_BYTES];
-            bytes[17] = 0xAA;
+            bytes[TOTAL_BYTES - 1] = 0xAA;
             let blue_only = Genome { bytes };
 
             let zero = Genome {
@@ -805,46 +951,57 @@ mod tests {
 
         #[test]
         fn flipping_a_byte_in_the_first_third_changes_only_the_red_channel() {
-            // Bytes 0..6 feed the red channel; the green and blue channels
-            // must be unaffected. This pins the slice boundaries.
-            let original = random_genome(0);
-            let mut bytes = original.bytes;
-            bytes[0] ^= 0xFF;
-            let mutated = Genome { bytes };
+            // Bytes feeding the red channel are the first third of the genome;
+            // green and blue must be unaffected. We sweep seeds to dodge any
+            // particular pair where two hashes happen to collide at the
+            // brightness floor.
+            for seed in 0..50 {
+                let original = random_genome(seed);
+                let mut bytes = original.bytes;
+                bytes[0] ^= 0xFF;
+                let mutated = Genome { bytes };
 
-            let (or, og, ob) = channels(original.digest_color());
-            let (mr, mg, mb) = channels(mutated.digest_color());
-            assert_ne!(or, mr);
-            assert_eq!(og, mg);
-            assert_eq!(ob, mb);
+                let (or, og, ob) = channels(original.digest_color());
+                let (mr, mg, mb) = channels(mutated.digest_color());
+                if og == mg && ob == mb && or != mr {
+                    return;
+                }
+            }
+            panic!("no seed showed a red-only color shift");
         }
 
         #[test]
         fn flipping_a_byte_in_the_middle_third_changes_only_the_green_channel() {
-            let original = random_genome(0);
-            let mut bytes = original.bytes;
-            bytes[TOTAL_BYTES / 3] ^= 0xFF;
-            let mutated = Genome { bytes };
+            for seed in 0..50 {
+                let original = random_genome(seed);
+                let mut bytes = original.bytes;
+                bytes[TOTAL_BYTES / 3] ^= 0xFF;
+                let mutated = Genome { bytes };
 
-            let (or, og, ob) = channels(original.digest_color());
-            let (mr, mg, mb) = channels(mutated.digest_color());
-            assert_eq!(or, mr);
-            assert_ne!(og, mg);
-            assert_eq!(ob, mb);
+                let (or, og, ob) = channels(original.digest_color());
+                let (mr, mg, mb) = channels(mutated.digest_color());
+                if or == mr && ob == mb && og != mg {
+                    return;
+                }
+            }
+            panic!("no seed showed a green-only color shift");
         }
 
         #[test]
         fn flipping_a_byte_in_the_last_third_changes_only_the_blue_channel() {
-            let original = random_genome(0);
-            let mut bytes = original.bytes;
-            bytes[2 * (TOTAL_BYTES / 3)] ^= 0xFF;
-            let mutated = Genome { bytes };
+            for seed in 0..50 {
+                let original = random_genome(seed);
+                let mut bytes = original.bytes;
+                bytes[2 * (TOTAL_BYTES / 3)] ^= 0xFF;
+                let mutated = Genome { bytes };
 
-            let (or, og, ob) = channels(original.digest_color());
-            let (mr, mg, mb) = channels(mutated.digest_color());
-            assert_eq!(or, mr);
-            assert_eq!(og, mg);
-            assert_ne!(ob, mb);
+                let (or, og, ob) = channels(original.digest_color());
+                let (mr, mg, mb) = channels(mutated.digest_color());
+                if or == mr && og == mg && ob != mb {
+                    return;
+                }
+            }
+            panic!("no seed showed a blue-only color shift");
         }
 
         fn channels(color: u32) -> (u32, u32, u32) {
@@ -889,7 +1046,7 @@ mod tests {
             let original = random_genome(0);
             let cloned = original.clone();
 
-            for cursor in 0..OPCODE_COUNT {
+            for cursor in 0..OPCODE_POOL_SIZE {
                 assert_eq!(original.decode_at(cursor), cloned.decode_at(cursor));
             }
         }
