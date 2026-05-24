@@ -1,10 +1,11 @@
 use circles::{
-    format_elapsed, format_minutes_seconds, frames_until_next_replenish, text_pixels, FpsCounter,
-    PopulationGrowthDetector, Renderer, StagnationDetector, World, CRITTER_RADIUS,
+    format_elapsed, format_minutes_seconds, format_snapshot_block, frames_until_next_replenish,
+    parse_cli, text_pixels, FpsCounter, PopulationGrowthDetector, Renderer, StagnationDetector,
+    Startup, World, CRITTER_RADIUS,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
 const TARGET_FPS: u32 = 60;
@@ -25,6 +26,7 @@ const REPLENISH_INTERVAL_FRAMES: u32 = 1800;
 // growth so it can recover.
 const MIN_FPS_FOR_GROWTH: u32 = 40;
 const FPS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
+const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(30);
 
 #[repr(C)]
 struct CGSize {
@@ -46,6 +48,14 @@ unsafe extern "C" {
 }
 
 fn main() {
+    let startup = match parse_cli(std::env::args().skip(1)) {
+        Ok(startup) => startup,
+        Err(error) => {
+            eprintln!("circles: {error}");
+            std::process::exit(2);
+        }
+    };
+
     let (width, height) = unsafe {
         let display = CGMainDisplayID();
         let bounds = CGDisplayBounds(display);
@@ -69,7 +79,10 @@ fn main() {
     )));
 
     let mut rng = thread_rng();
-    let mut world = World::new(width, height, &mut rng);
+    let mut world = match startup {
+        Startup::Default => World::new(width, height, &mut rng),
+        Startup::SeedGenome(genome) => World::with_seed_genome(width, height, genome, &mut rng),
+    };
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
     let mut frame_counter: u32 = 0;
     let mut displayed_total_energy = world.total_energy();
@@ -77,6 +90,7 @@ fn main() {
     let mut population_growth = PopulationGrowthDetector::new(POPULATION_GROWTH_TIMEOUT_FRAMES);
     let mut fps_counter = FpsCounter::new(FPS_REFRESH_INTERVAL);
     let mut world_started_at = Instant::now();
+    let mut last_snapshot_at = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         fps_counter.observe_frame(Instant::now());
@@ -124,6 +138,12 @@ fn main() {
             && allow_growth
         {
             world.replenish_pellets(&mut rng);
+        }
+        if last_snapshot_at.elapsed() >= SNAPSHOT_INTERVAL {
+            if let Some(genome) = world.dominant_genome() {
+                print!("{}", format_snapshot_block(SystemTime::now(), genome));
+            }
+            last_snapshot_at = Instant::now();
         }
         frame_counter = frame_counter.wrapping_add(1);
 

@@ -1,4 +1,4 @@
-use crate::{Critter, Heading, Pellet, PELLET_RADIUS};
+use crate::{Critter, Genome, Heading, Pellet, PELLET_RADIUS};
 use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 10;
@@ -48,6 +48,63 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
         }
+    }
+
+    /// Build a world where every critter starts with the given seed genome
+    /// instead of a freshly randomized one. Positions, headings, and pellets
+    /// are randomized as in `new`.
+    pub fn with_seed_genome<R: Rng>(
+        width: usize,
+        height: usize,
+        seed_genome: Genome,
+        rng: &mut R,
+    ) -> Self {
+        let critters: Vec<Critter> = (0..NUM_CRITTERS)
+            .map(|_| spawn_critter_with_genome(width, height, seed_genome.clone(), rng))
+            .collect();
+        let pellets: Vec<Pellet> = (0..NUM_PELLETS)
+            .map(|_| spawn_pellet(width, height, rng))
+            .collect();
+        let original_total_energy = critter_total_energy(&critters) + pellet_total_energy(&pellets);
+        Self {
+            width,
+            height,
+            critters,
+            pellets,
+            original_total_energy,
+            generation: 1,
+            overlap_detection_cursor: 0,
+        }
+    }
+
+    /// Returns the genome with the most copies among the current critters.
+    /// Ties are broken by first-seen order in `critters()`. Returns `None` if
+    /// there are no critters.
+    pub fn dominant_genome(&self) -> Option<&Genome> {
+        // Vec<(&Genome, usize)> preserves first-seen order naturally; we walk
+        // the critters once, incrementing the count for any matching entry or
+        // appending a new one. Linear in the number of unique genomes — fine
+        // for this scale.
+        let mut tally: Vec<(&Genome, usize)> = Vec::new();
+        for critter in &self.critters {
+            let genome = critter.genome();
+            if let Some(entry) = tally.iter_mut().find(|(g, _)| *g == genome) {
+                entry.1 += 1;
+            } else {
+                tally.push((genome, 1));
+            }
+        }
+        // Manual fold instead of `max_by_key`: the standard iterator method
+        // keeps the *last* maximum on ties, but we want the first-seen
+        // winner. Walk left-to-right, replacing only on a strict increase.
+        let mut best: Option<(&Genome, usize)> = None;
+        for (genome, count) in tally {
+            match best {
+                Some((_, best_count)) if count <= best_count => {}
+                _ => best = Some((genome, count)),
+            }
+        }
+        best.map(|(genome, _)| genome)
     }
 
     #[cfg(test)]
@@ -268,6 +325,26 @@ fn spawn_critter<R: Rng>(width: usize, height: usize, rng: &mut R) -> Critter {
         STEP_SIZE,
         INITIAL_ENERGY,
         rng.gen(),
+    )
+}
+
+fn spawn_critter_with_genome<R: Rng>(
+    width: usize,
+    height: usize,
+    genome: Genome,
+    rng: &mut R,
+) -> Critter {
+    let x = rng.gen_range(CRITTER_RADIUS..(width as i32 - CRITTER_RADIUS));
+    let y = rng.gen_range(CRITTER_RADIUS..(height as i32 - CRITTER_RADIUS));
+    Critter::with_genome(
+        x,
+        y,
+        Heading::random(rng),
+        TICKS_PER_INSTRUCTION,
+        STEP_SIZE,
+        INITIAL_ENERGY,
+        rng.gen(),
+        genome,
     )
 }
 
@@ -1647,6 +1724,163 @@ mod tests {
             world.reset(&mut rng);
 
             assert_eq!(world.generation(), 4);
+        }
+    }
+
+    mod dominant_genome {
+        use super::*;
+        use crate::{Critter, Genome, Heading, Instruction};
+
+        fn critter_with(x: i32, genome: Genome) -> Critter {
+            Critter::with_genome(x, 0, Heading::East, 1, 1, 10, 0, genome)
+        }
+
+        #[test]
+        fn it_returns_none_when_the_world_has_no_critters() {
+            let world = World::with_critters_and_pellets(100, 100, Vec::new(), Vec::new());
+
+            assert!(world.dominant_genome().is_none());
+        }
+
+        #[test]
+        fn it_returns_the_genome_shared_by_the_majority() {
+            let majority = Genome::all(Instruction::TurnLeft);
+            let minority = Genome::all(Instruction::TurnRight);
+            let critters = vec![
+                critter_with(0, majority.clone()),
+                critter_with(1, minority.clone()),
+                critter_with(2, majority.clone()),
+                critter_with(3, majority.clone()),
+            ];
+            let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
+
+            assert_eq!(world.dominant_genome(), Some(&majority));
+        }
+
+        #[test]
+        fn it_picks_the_genome_with_the_higher_count_even_when_seen_later() {
+            // The minority appears first; the majority appears later. The
+            // accessor must follow the count, not the encounter order.
+            let later_majority = Genome::all(Instruction::TurnLeft);
+            let early_minority = Genome::all(Instruction::TurnRight);
+            let critters = vec![
+                critter_with(0, early_minority.clone()),
+                critter_with(1, later_majority.clone()),
+                critter_with(2, later_majority.clone()),
+                critter_with(3, later_majority.clone()),
+            ];
+            let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
+
+            assert_eq!(world.dominant_genome(), Some(&later_majority));
+        }
+
+        #[test]
+        fn it_counts_more_than_two_copies_correctly() {
+            // Three of one genome beats two of another. Catches mutations
+            // that turn the count increment into a no-op (all counts stay
+            // at 1) or that mishandle the equality check (every critter
+            // becomes its own entry with count 1).
+            let three_copy = Genome::all(Instruction::TurnLeft);
+            let two_copy = Genome::all(Instruction::TurnRight);
+            let critters = vec![
+                critter_with(0, two_copy.clone()),
+                critter_with(1, three_copy.clone()),
+                critter_with(2, two_copy.clone()),
+                critter_with(3, three_copy.clone()),
+                critter_with(4, three_copy.clone()),
+            ];
+            let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
+
+            assert_eq!(world.dominant_genome(), Some(&three_copy));
+        }
+
+        #[test]
+        fn ties_are_broken_by_first_seen_in_the_critter_list() {
+            let first = Genome::all(Instruction::TurnLeft);
+            let second = Genome::all(Instruction::TurnRight);
+            let critters = vec![
+                critter_with(0, first.clone()),
+                critter_with(1, second.clone()),
+                critter_with(2, first.clone()),
+                critter_with(3, second.clone()),
+            ];
+            let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
+
+            assert_eq!(world.dominant_genome(), Some(&first));
+        }
+    }
+
+    mod with_seed_genome {
+        use super::*;
+        use crate::{Genome, Instruction};
+
+        #[test]
+        fn every_critter_in_the_world_starts_with_the_given_genome() {
+            let seed = Genome::all(Instruction::Split);
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed.clone(), &mut rng);
+
+            assert!(!world.critters().is_empty());
+            for critter in world.critters() {
+                assert_eq!(critter.genome(), &seed);
+            }
+        }
+
+        #[test]
+        fn it_creates_the_usual_number_of_pellets() {
+            let seed = Genome::all(Instruction::Split);
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
+
+            assert_eq!(world.pellets().len(), 1000);
+        }
+
+        #[test]
+        fn every_critter_spawns_fully_inside_the_world_bounds() {
+            // Same invariant the default-spawn path enforces: positions are
+            // drawn from [CRITTER_RADIUS, width - CRITTER_RADIUS) so a
+            // critter's circle never crosses the edge.
+            let seed = Genome::all(Instruction::Split);
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
+
+            for critter in world.critters() {
+                assert!(critter.x() >= CRITTER_RADIUS);
+                assert!(critter.x() < TEST_WIDTH as i32 - CRITTER_RADIUS);
+                assert!(critter.y() >= CRITTER_RADIUS);
+                assert!(critter.y() < TEST_HEIGHT as i32 - CRITTER_RADIUS);
+            }
+        }
+
+        #[test]
+        fn critters_spread_across_the_full_world_width_and_height() {
+            // Mirrors the same invariant the default-spawn path is tested
+            // against: across many spawns, at least one critter lands in the
+            // right half and at least one in the bottom half. Pins the spawn
+            // range to the full canvas rather than a clipped corner.
+            let seed = Genome::all(Instruction::Split);
+            let mut any_right = false;
+            let mut any_bottom = false;
+            let half_width = (TEST_WIDTH as i32) / 2;
+            let half_height = (TEST_HEIGHT as i32) / 2;
+            for rng_seed in 0..50 {
+                let mut rng = StdRng::seed_from_u64(rng_seed);
+                let world =
+                    World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed.clone(), &mut rng);
+                for critter in world.critters() {
+                    if critter.x() >= half_width {
+                        any_right = true;
+                    }
+                    if critter.y() >= half_height {
+                        any_bottom = true;
+                    }
+                }
+            }
+            assert!(any_right);
+            assert!(any_bottom);
         }
     }
 }

@@ -66,8 +66,8 @@ impl Critter {
         )
     }
 
-    /// Test-only: build a critter with a specific genome.
-    #[cfg(test)]
+    /// Build a critter with a specific genome instead of a freshly randomized
+    /// one. Used by tests and by the seed-genome world constructor.
     pub fn with_genome(
         x: i32,
         y: i32,
@@ -141,7 +141,6 @@ impl Critter {
         self.initial_energy
     }
 
-    #[cfg(test)]
     pub fn genome(&self) -> &Genome {
         &self.genome
     }

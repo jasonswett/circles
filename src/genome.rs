@@ -162,6 +162,45 @@ impl Genome {
             .count()
     }
 
+    /// Renders the genome's bits as a TOTAL_BITS-length string of `'0'`/`'1'`,
+    /// MSB-first per byte. The trailing pad bit (since TOTAL_BITS doesn't
+    /// divide evenly into 8) is dropped so the output length is exactly the
+    /// number of meaningful bits.
+    pub fn to_bits(&self) -> String {
+        let mut out = String::with_capacity(TOTAL_BITS);
+        for index in 0..TOTAL_BITS {
+            let byte = self.bytes[index / 8];
+            let bit_in_byte = 7 - (index % 8);
+            let bit = (byte >> bit_in_byte) & 1;
+            out.push(if bit == 1 { '1' } else { '0' });
+        }
+        out
+    }
+
+    /// Parses a TOTAL_BITS-length string of `'0'`/`'1'` back into a genome.
+    /// Returns an error for any other length or any character outside the
+    /// binary alphabet.
+    pub fn from_bits(input: &str) -> Result<Self, GenomeParseError> {
+        if input.len() != TOTAL_BITS {
+            return Err(GenomeParseError::WrongLength {
+                expected: TOTAL_BITS,
+                actual: input.len(),
+            });
+        }
+        let mut bytes = [0u8; TOTAL_BYTES];
+        for (index, character) in input.chars().enumerate() {
+            let bit = match character {
+                '0' => 0u8,
+                '1' => 1u8,
+                _ => return Err(GenomeParseError::InvalidCharacter { index, character }),
+            };
+            let byte_index = index / 8;
+            let bit_in_byte = 7 - (index % 8);
+            bytes[byte_index] |= bit << bit_in_byte;
+        }
+        Ok(Self { bytes })
+    }
+
     /// Flips each bit independently with probability `bit_flip_rate`. A rate of
     /// 0 leaves the genome unchanged; a rate of 1 inverts every bit.
     // The `<` vs `<=` mutation on the rate comparison is equivalent for the
@@ -358,6 +397,29 @@ fn sigmoid(z: f32) -> f32 {
 /// are. 0 means identical; 1 means maximally distant (black vs white). The
 /// computation is the euclidean distance between the colors as 3-vectors,
 /// normalized by sqrt(3 * 255^2).
+#[derive(Debug, PartialEq, Eq)]
+pub enum GenomeParseError {
+    WrongLength { expected: usize, actual: usize },
+    InvalidCharacter { index: usize, character: char },
+}
+
+impl std::fmt::Display for GenomeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GenomeParseError::WrongLength { expected, actual } => write!(
+                f,
+                "genome bit string has wrong length: expected {expected}, got {actual}",
+            ),
+            GenomeParseError::InvalidCharacter { index, character } => write!(
+                f,
+                "genome bit string has invalid character '{character}' at index {index} (expected '0' or '1')",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for GenomeParseError {}
+
 pub fn color_dissimilarity(a: u32, b: u32) -> f32 {
     let max_distance: f32 = (3.0_f32 * 255.0 * 255.0).sqrt();
     let [_, ar, ag, ab] = a.to_be_bytes();
@@ -1072,6 +1134,102 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    mod bits {
+        use super::*;
+
+        #[test]
+        fn to_bits_returns_a_string_of_the_total_bit_length() {
+            let genome = random_genome(0);
+
+            let bits = genome.to_bits();
+
+            assert_eq!(bits.len(), TOTAL_BITS);
+        }
+
+        #[test]
+        fn to_bits_contains_only_zero_and_one_characters() {
+            let genome = random_genome(7);
+
+            let bits = genome.to_bits();
+
+            for character in bits.chars() {
+                assert!(
+                    character == '0' || character == '1',
+                    "unexpected character {character}",
+                );
+            }
+        }
+
+        #[test]
+        fn from_bits_round_trips_a_random_genome() {
+            let original = random_genome(123);
+
+            let parsed = Genome::from_bits(&original.to_bits()).unwrap();
+
+            assert_eq!(parsed, original);
+        }
+
+        #[test]
+        fn from_bits_rejects_a_string_of_the_wrong_length() {
+            let too_short = "0".repeat(TOTAL_BITS - 1);
+
+            let result = Genome::from_bits(&too_short);
+
+            assert!(matches!(
+                result,
+                Err(GenomeParseError::WrongLength { expected, actual })
+                    if expected == TOTAL_BITS && actual == TOTAL_BITS - 1
+            ));
+        }
+
+        #[test]
+        fn wrong_length_error_displays_the_expected_and_actual_lengths() {
+            let error = GenomeParseError::WrongLength {
+                expected: 319,
+                actual: 318,
+            };
+
+            let rendered = format!("{error}");
+
+            assert!(
+                rendered.contains("319") && rendered.contains("318"),
+                "unexpected rendering: {rendered}",
+            );
+        }
+
+        #[test]
+        fn invalid_character_error_displays_the_index_and_character() {
+            let error = GenomeParseError::InvalidCharacter {
+                index: 7,
+                character: 'Z',
+            };
+
+            let rendered = format!("{error}");
+
+            assert!(
+                rendered.contains("7") && rendered.contains('Z'),
+                "unexpected rendering: {rendered}",
+            );
+        }
+
+        #[test]
+        fn from_bits_rejects_a_string_containing_a_non_binary_character() {
+            let mut input: String = "0".repeat(TOTAL_BITS);
+            // Replace the byte at index 5 with the character '2'.
+            input.replace_range(5..6, "2");
+
+            let result = Genome::from_bits(&input);
+
+            assert!(matches!(
+                result,
+                Err(GenomeParseError::InvalidCharacter {
+                    index: 5,
+                    character: '2'
+                })
+            ));
         }
     }
 }
