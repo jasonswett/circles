@@ -11,10 +11,6 @@ const BIT_FLIP_RATE: f32 = 0.01;
 // reproduction attempt cost something the parent can't recover by eating
 // the child.
 pub const SPLIT_ATTEMPT_COST: u32 = 5;
-// Energy charged when a critter fires Eat, regardless of whether anything is
-// in range to eat. Makes indiscriminate eating — especially cannibalism —
-// a losing strategy unless it usually pays off.
-pub const EAT_ATTEMPT_COST: u32 = 5;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -318,10 +314,7 @@ impl Critter {
             Instruction::Eat => {
                 // The critter can't see its surroundings, so it only signals
                 // the intent. World::tick resolves which pellet or critter
-                // (if any) the critter is touching and consumes it. If this
-                // charge drops the critter to zero, World::resolve_eats skips
-                // it — a critter that can't afford the attempt eats nothing.
-                self.energy = self.energy.saturating_sub(EAT_ATTEMPT_COST);
+                // (if any) the critter is touching and consumes it.
                 self.last_executed = Some(Instruction::Eat);
                 TickOutcome {
                     attempted_eat: true,
@@ -1458,31 +1451,6 @@ mod tests {
             let second_outcome = parent.tick(true); // repeat → split again
 
             assert!(second_outcome.child.is_some());
-        }
-    }
-
-    mod eat {
-        use super::*;
-        use crate::Genome;
-
-        const INITIAL_ENERGY: u32 = 60;
-
-        #[test]
-        fn ticking_an_eat_instruction_charges_the_attempt_cost_plus_the_base_tick_cost() {
-            let mut critter = Critter::with_genome(
-                START_X,
-                START_Y,
-                Heading::North,
-                1,
-                1,
-                INITIAL_ENERGY,
-                0,
-                Genome::all(Instruction::Eat),
-            );
-
-            critter.tick(true);
-
-            assert_eq!(critter.energy(), INITIAL_ENERGY - EAT_ATTEMPT_COST - 1);
         }
     }
 

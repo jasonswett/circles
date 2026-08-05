@@ -645,15 +645,13 @@ mod tests {
 
     mod eating {
         use super::*;
-        use crate::{
-            Critter, Genome, Heading, Instruction, Pellet, EAT_ATTEMPT_COST, PELLET_ENERGY,
-        };
+        use crate::{Critter, Genome, Heading, Instruction, Pellet, PELLET_ENERGY};
 
         const HUNGRY_INITIAL: u32 = 200;
-        const STARTING_ENERGY: u32 = 20;
+        const STARTING_ENERGY: u32 = 10;
         // Energy after a single Eat firing tick where no pellet was found —
-        // the eat-attempt cost plus the base 1-energy tick cost.
-        const STARTING_AFTER_FAILED_EAT: u32 = STARTING_ENERGY - EAT_ATTEMPT_COST - 1;
+        // just the base 1-energy tick cost is paid since Eat itself is free.
+        const STARTING_AFTER_FAILED_EAT: u32 = STARTING_ENERGY - 1;
 
         // A critter whose genome decodes to Eat at every cursor and which fires
         // an instruction every tick. Energy is set just above zero so that
@@ -702,26 +700,6 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.pellets().len(), 0);
-        }
-
-        #[test]
-        fn an_eater_drained_to_zero_by_the_attempt_cost_eats_nothing() {
-            let critter = Critter::with_genome(
-                100,
-                100,
-                Heading::North,
-                1,
-                1,
-                EAT_ATTEMPT_COST,
-                0,
-                Genome::all(Instruction::Eat),
-            );
-            let mut world = world_with(critter, Pellet { x: 100, y: 100 });
-
-            world.tick(true);
-
-            assert_eq!(world.pellets().len(), 1);
-            assert_eq!(world.critters()[0].energy(), 0);
         }
 
         #[test]
@@ -815,7 +793,7 @@ mod tests {
 
             assert_eq!(
                 world.critters()[0].energy(),
-                HUNGRY_INITIAL - EAT_ATTEMPT_COST - 1 + PELLET_ENERGY
+                HUNGRY_INITIAL - 1 + PELLET_ENERGY
             );
         }
 
@@ -1437,15 +1415,13 @@ mod tests {
 
     mod eating_critters {
         use super::*;
-        use crate::{
-            Critter, Genome, Heading, Instruction, Pellet, EAT_ATTEMPT_COST, MAX_CRITTER_ENERGY,
-        };
+        use crate::{Critter, Genome, Heading, Instruction, Pellet, MAX_CRITTER_ENERGY};
 
         const HUNGRY_INITIAL: u32 = 200;
-        const STARTING_ENERGY: u32 = 20;
+        const STARTING_ENERGY: u32 = 10;
         // Energy after a single Eat firing tick where no transfer happened —
-        // the eat-attempt cost plus the base 1-energy tick cost.
-        const STARTING_AFTER_FAILED_EAT: u32 = STARTING_ENERGY - EAT_ATTEMPT_COST - 1;
+        // just the base 1-energy tick cost is paid since Eat itself is free.
+        const STARTING_AFTER_FAILED_EAT: u32 = STARTING_ENERGY - 1;
 
         fn eating_critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             Critter::with_genome(
@@ -1511,14 +1487,10 @@ mod tests {
 
             world.tick(true);
 
-            // Pre-resolve: eater pays the eat-attempt cost and the base
-            // 1-energy tick cost, widening its headroom below the cap.
-            // Eater caps at MAX; victim drops by exactly that headroom.
+            // Pre-resolve: eater pays the base 1-energy tick cost, so its
+            // headroom is 30 + 1 = 31. Eater caps at MAX; victim drops by 31.
             assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
-            assert_eq!(
-                world.critters()[1].energy(),
-                100 - (30 + EAT_ATTEMPT_COST + 1)
-            );
+            assert_eq!(world.critters()[1].energy(), 100 - 31);
         }
 
         #[test]
