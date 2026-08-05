@@ -15,7 +15,7 @@ mod text;
 mod world;
 
 pub use cli::{parse as parse_cli, CliError, Startup};
-pub use critter::{Critter, MAX_CRITTER_ENERGY};
+pub use critter::{Critter, EAT_ATTEMPT_COST, MAX_CRITTER_ENERGY};
 pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;
 pub use genome::{Genome, GenomeParseError};
