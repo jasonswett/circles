@@ -1231,7 +1231,7 @@ mod tests {
 
         #[test]
         fn two_non_overlapping_critters_keep_their_flags_clear() {
-            // Distance 50 between centers, well outside 2 * CRITTER_RADIUS = 20.
+            // Distance 50 between centers, well outside 2 * CRITTER_RADIUS.
             let a = idle_critter_at(50, 100);
             let b = idle_critter_at(100, 100);
             let mut world =
@@ -1245,9 +1245,10 @@ mod tests {
 
         #[test]
         fn critters_that_touch_at_the_overlap_threshold_are_not_marked_overlapping() {
-            // Distance equals 2 * CRITTER_RADIUS = 20: tangent, not overlapping.
+            // Distance equals exactly 2 * CRITTER_RADIUS: tangent, not
+            // overlapping. The strict `<` comparison must reject this pair.
             let a = idle_critter_at(100, 100);
-            let b = idle_critter_at(120, 100);
+            let b = idle_critter_at(100 + 2 * CRITTER_RADIUS, 100);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
 
@@ -1291,12 +1292,13 @@ mod tests {
 
         #[test]
         fn an_asymmetric_pair_outside_the_threshold_along_one_axis_is_not_marked() {
-            // dx = 10, dy = 18: distance² = 100 + 324 = 424 ≥ 400, so the pair
-            // does not overlap. Asymmetry between the axes ensures the squared-
-            // distance computation must square each component separately rather
-            // than sum, subtract, or otherwise collapse them into one value.
+            // dx = R, dy = 2R - 1, so distance² = R² + (2R-1)², which clears
+            // the (2R)² threshold by a hair for any radius. Asymmetry between
+            // the axes ensures the squared-distance computation must square
+            // each component separately rather than sum, subtract, or
+            // otherwise collapse them into one value.
             let a = idle_critter_at(100, 100);
-            let b = idle_critter_at(110, 118);
+            let b = idle_critter_at(100 + CRITTER_RADIUS, 100 + 2 * CRITTER_RADIUS - 1);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
 
@@ -1532,7 +1534,7 @@ mod tests {
         #[test]
         fn an_eater_does_not_drain_a_critter_outside_the_overlap_radius() {
             let eater = eating_critter(100, 100);
-            // 50 px away — well outside 2 * CRITTER_RADIUS = 20.
+            // 50 px away — well outside 2 * CRITTER_RADIUS.
             let bystander = idle_critter_with_energy(150, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -1596,10 +1598,10 @@ mod tests {
 
         #[test]
         fn a_critter_at_exactly_the_eat_distance_is_not_drained() {
-            // Distance equals 2 * CRITTER_RADIUS = 20 — circles tangent, not
-            // overlapping. The strict `<` comparison must reject this pair.
+            // Distance equals exactly 2 * CRITTER_RADIUS — circles tangent,
+            // not overlapping. The strict `<` comparison must reject this pair.
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(120, 100, 80);
+            let victim = idle_critter_with_energy(100 + 2 * CRITTER_RADIUS, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -1614,12 +1616,13 @@ mod tests {
 
         #[test]
         fn an_asymmetric_pair_outside_the_critter_eat_radius_is_not_drained() {
-            // dx = 10, dy = 18: distance² = 100 + 324 = 424 ≥ 400, so the pair
-            // is not within eat range. Asymmetry between the axes proves the
-            // squared-distance computation must square each component
-            // independently rather than summing or subtracting them.
+            // dx = R, dy = 2R - 1, so distance² = R² + (2R-1)², just past the
+            // (2R)² eat threshold for any radius. Asymmetry between the axes
+            // proves the squared-distance computation must square each
+            // component independently rather than summing or subtracting them.
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(110, 118, 80);
+            let victim =
+                idle_critter_with_energy(100 + CRITTER_RADIUS, 100 + 2 * CRITTER_RADIUS - 1, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,

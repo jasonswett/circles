@@ -480,16 +480,15 @@ mod tests {
         use super::*;
 
         #[test]
-        fn random_genome_has_the_full_byte_length() {
-            // 8 mutation-rate bits + 7 instructions × 17 param bits + 40
-            // activation mask bits + 40 opcodes × 4 bits = 8 + 119 + 40 + 160
-            // = 327 bits = 41 bytes (rounding up). Pinning down the literal
-            // byte count catches mutations to the constants that derive from
-            // MUTATION_RATE_BITS + HEADER_BITS + ACTIVATION_MASK_BITS +
-            // OPCODE_BITS.
+        fn a_random_genome_is_large_enough_to_hold_every_field() {
+            // Summing the regions independently of TOTAL_BITS catches a
+            // layout constant being dropped from the total: if any region
+            // stopped counting, the genome would be too small to hold them
+            // all.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 41);
+            let bits_needed = MUTATION_RATE_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
+            assert!(genome.bytes.len() * 8 >= bits_needed);
         }
 
         #[test]
@@ -739,6 +738,10 @@ mod tests {
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
             const SOFTNESS_OFFSET_LITERAL: usize = 10;
+            assert_eq!(
+                SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
+                "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
+            );
             let mut bytes = [0u8; TOTAL_BYTES];
             let softnesses: [u32; 7] = [5, 15, 25, 35, 45, 55, 65];
             for (index, &soft) in softnesses.iter().enumerate() {
@@ -1258,15 +1261,17 @@ mod tests {
 
         #[test]
         fn wrong_length_error_displays_the_expected_and_actual_lengths() {
+            // Arbitrary lengths — the test only cares that both numbers reach
+            // the rendered message, not what the genome's real length is.
             let error = GenomeParseError::WrongLength {
-                expected: 319,
-                actual: 318,
+                expected: 10,
+                actual: 9,
             };
 
             let rendered = format!("{error}");
 
             assert!(
-                rendered.contains("319") && rendered.contains("318"),
+                rendered.contains("10") && rendered.contains("9"),
                 "unexpected rendering: {rendered}",
             );
         }

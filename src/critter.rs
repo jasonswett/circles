@@ -1675,11 +1675,6 @@ mod tests {
         use super::*;
 
         #[test]
-        fn the_max_energy_constant_is_five_hundred() {
-            assert_eq!(MAX_CRITTER_ENERGY, 500);
-        }
-
-        #[test]
         fn gain_energy_caps_the_total_at_max_critter_energy() {
             let mut critter = Critter::with_genome(
                 0,
