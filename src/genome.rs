@@ -2,6 +2,11 @@ use crate::Instruction;
 use rand::Rng;
 
 const INSTRUCTION_COUNT: usize = 7;
+// The genome's leading field: how often this critter's splits mutate the
+// child. Evolvable like everything else — it mutates along with the rest of
+// the genome, so a lineage's mutability drifts under selection.
+pub(crate) const MUTATION_RATE_BITS: usize = 8;
+const MAX_MUTATION_CHANCE: f32 = 0.25;
 // Per-instruction header window: factor mask + threshold + softness.
 // The factor mask is three bits (one per factor), read in the order:
 // bit 0 = energy, bit 1 = is-touching-another-critter, bit 2 = the touched
@@ -36,6 +41,8 @@ const ENERGY_FACTOR_BIT: u32 = 0b001;
 const TOUCHING_FACTOR_BIT: u32 = 0b010;
 const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b100;
 
+const MUTATION_RATE_OFFSET: usize = 0;
+const HEADER_OFFSET: usize = MUTATION_RATE_BITS;
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
 // Total opcode slots in the genome's pool. Most start dormant — only the
@@ -50,9 +57,9 @@ const OPCODE_POOL_SIZE: usize = 40;
 const INITIAL_ACTIVE_OPCODES: usize = 8;
 const ACTIVATION_MASK_BITS: usize = OPCODE_POOL_SIZE;
 const OPCODE_BITS: usize = OPCODE_POOL_SIZE * OPCODE_BITS_PER_OPCODE;
-const ACTIVATION_MASK_OFFSET: usize = HEADER_BITS;
+const ACTIVATION_MASK_OFFSET: usize = HEADER_OFFSET + HEADER_BITS;
 const OPCODE_STREAM_OFFSET: usize = ACTIVATION_MASK_OFFSET + ACTIVATION_MASK_BITS;
-const TOTAL_BITS: usize = HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
+const TOTAL_BITS: usize = MUTATION_RATE_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -243,8 +250,29 @@ impl Genome {
         sigmoid((input - threshold) / softness)
     }
 
+    /// Overwrites the mutation-rate field. Test-only: in a running world the
+    /// field changes only through mutation, like any other part of the genome.
+    #[cfg(test)]
+    pub fn set_mutation_rate_bits(&mut self, bits: u32) {
+        write_bits(
+            &mut self.bytes,
+            MUTATION_RATE_OFFSET,
+            MUTATION_RATE_BITS,
+            bits,
+        );
+    }
+
+    /// How often this genome's splits mutate the child, in [0, MAX_MUTATION_CHANCE].
+    /// The field is part of the genome, so it mutates like any other region and
+    /// a lineage's mutability evolves.
+    pub fn mutation_chance(&self) -> f32 {
+        let bits = read_bits(&self.bytes, MUTATION_RATE_OFFSET, MUTATION_RATE_BITS);
+        let max_value = ((1u32 << MUTATION_RATE_BITS) - 1) as f32;
+        bits as f32 / max_value * MAX_MUTATION_CHANCE
+    }
+
     fn params(&self, instruction: Instruction) -> (u32, f32, f32) {
-        let window_offset = instruction_index(instruction) * PARAM_BITS_PER_INSTRUCTION;
+        let window_offset = header_window_offset(instruction_index(instruction));
         // FACTOR_MASK_OFFSET is 0, so we read the mask at the window's start.
         let mask = read_bits(&self.bytes, window_offset, FACTOR_MASK_BITS);
         let threshold_bits = read_bits(
@@ -272,7 +300,7 @@ impl Genome {
             bytes: [0u8; TOTAL_BYTES],
         };
         for index in 0..INSTRUCTION_COUNT {
-            let window_offset = index * PARAM_BITS_PER_INSTRUCTION;
+            let window_offset = header_window_offset(index);
             // FACTOR_MASK_OFFSET is 0, so the mask sits at the window's start.
             write_bits(
                 &mut genome.bytes,
@@ -325,6 +353,12 @@ fn write_bits(bytes: &mut [u8], bit_offset: usize, length: usize, value: u32) {
         bytes[byte_index] =
             (bytes[byte_index] & !(1 << bit_in_byte)) | ((bit as u8) << bit_in_byte);
     }
+}
+
+/// Bit offset of one instruction's parameter window, measured from the start
+/// of the genome. The header sits after the leading mutation-rate field.
+fn header_window_offset(instruction_index: usize) -> usize {
+    HEADER_OFFSET + instruction_index * PARAM_BITS_PER_INSTRUCTION
 }
 
 fn instruction_index(instruction: Instruction) -> usize {
@@ -447,14 +481,15 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 7 instructions × 17 param bits + 40 activation mask bits + 40
-            // opcodes × 4 bits = 119 + 40 + 160 = 319 bits = 40 bytes
-            // (rounding up). Pinning down the literal byte count catches
-            // mutations to the constants that derive from HEADER_BITS +
-            // ACTIVATION_MASK_BITS + OPCODE_BITS.
+            // 8 mutation-rate bits + 7 instructions × 17 param bits + 40
+            // activation mask bits + 40 opcodes × 4 bits = 8 + 119 + 40 + 160
+            // = 327 bits = 41 bytes (rounding up). Pinning down the literal
+            // byte count catches mutations to the constants that derive from
+            // MUTATION_RATE_BITS + HEADER_BITS + ACTIVATION_MASK_BITS +
+            // OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 40);
+            assert_eq!(genome.bytes.len(), 41);
         }
 
         #[test]
@@ -684,7 +719,7 @@ mod tests {
             let mut bytes = [0u8; TOTAL_BYTES];
             let thresholds: [u32; 7] = [10, 20, 30, 40, 50, 60, 70];
             for (index, &threshold) in thresholds.iter().enumerate() {
-                let offset = index * PARAM_BITS_PER_INSTRUCTION + THRESHOLD_OFFSET;
+                let offset = header_window_offset(index) + THRESHOLD_OFFSET;
                 write_bits(&mut bytes, offset, THRESHOLD_BITS, threshold);
             }
             let genome = Genome { bytes };
@@ -707,7 +742,7 @@ mod tests {
             let mut bytes = [0u8; TOTAL_BYTES];
             let softnesses: [u32; 7] = [5, 15, 25, 35, 45, 55, 65];
             for (index, &soft) in softnesses.iter().enumerate() {
-                let offset = index * PARAM_BITS_PER_INSTRUCTION + SOFTNESS_OFFSET_LITERAL;
+                let offset = header_window_offset(index) + SOFTNESS_OFFSET_LITERAL;
                 write_bits(&mut bytes, offset, SOFTNESS_BITS, soft);
             }
             let genome = Genome { bytes };
@@ -803,7 +838,7 @@ mod tests {
         fn genome_with_mask_for_split(mask: u32) -> Genome {
             // Threshold = 0, softness = 1 (raw bits 0). Just the mask varies.
             let mut bytes = [0u8; TOTAL_BYTES];
-            let split_window = instruction_index(Instruction::Split) * PARAM_BITS_PER_INSTRUCTION;
+            let split_window = header_window_offset(instruction_index(Instruction::Split));
             write_bits(&mut bytes, split_window, FACTOR_MASK_BITS, mask);
             Genome { bytes }
         }
@@ -1134,6 +1169,42 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    mod mutation_chance {
+        use super::*;
+
+        fn genome_with_rate_bits(bits: u32) -> Genome {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            genome.set_mutation_rate_bits(bits);
+            genome
+        }
+
+        const MAX_RATE_BITS: u32 = (1 << MUTATION_RATE_BITS) - 1;
+
+        #[test]
+        fn an_all_zero_mutation_rate_field_yields_a_zero_chance() {
+            let genome = genome_with_rate_bits(0);
+
+            assert_eq!(genome.mutation_chance(), 0.0);
+        }
+
+        #[test]
+        fn an_all_one_mutation_rate_field_yields_the_maximum_chance() {
+            let genome = genome_with_rate_bits(MAX_RATE_BITS);
+
+            assert_eq!(genome.mutation_chance(), MAX_MUTATION_CHANCE);
+        }
+
+        #[test]
+        fn a_half_range_mutation_rate_field_yields_half_the_maximum_chance() {
+            // Pins the shape of the mapping between its endpoints: the rate
+            // scales linearly with the field's value.
+            let genome = genome_with_rate_bits(MAX_RATE_BITS / 2);
+
+            let expected = MAX_MUTATION_CHANCE * (MAX_RATE_BITS / 2) as f32 / MAX_RATE_BITS as f32;
+            assert!((genome.mutation_chance() - expected).abs() < f32::EPSILON);
         }
     }
 

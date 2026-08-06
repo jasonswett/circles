@@ -3,7 +3,6 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
-const MUTATION_CHANCE: f32 = 0.001;
 const BIT_FLIP_RATE: f32 = 0.01;
 // Energy charged when a critter actually fires Split, regardless of whether
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
@@ -331,9 +330,10 @@ impl Critter {
         // parent immediately.
         let child_threshold = jitter_threshold(&mut child_rng, self.ticks_per_instruction);
         let mut child_genome = self.genome.clone();
-        // Each split has a small chance of mutating the child's genome; when
-        // it does, each bit independently flips with a smaller probability.
-        if self.roll_against(MUTATION_CHANCE) {
+        // How often a split mutates the child is itself encoded in the
+        // parent's genome, so mutability evolves. When a mutation does fire,
+        // each bit independently flips with a fixed probability.
+        if self.roll_against(self.genome.mutation_chance()) {
             child_genome.mutate(&mut child_rng, BIT_FLIP_RATE);
         }
         Critter {
@@ -1450,6 +1450,7 @@ mod tests {
 
     mod mutation_on_split {
         use super::*;
+        use crate::genome::MUTATION_RATE_BITS;
         use crate::Genome;
 
         // Build a parent that splits every tick, with a known starting genome
@@ -1472,44 +1473,58 @@ mod tests {
             (parent_genome, child.genome().clone())
         }
 
+        // Splits a parent whose genome carries the given mutation-rate bits,
+        // returning how many of `attempts` children differ from the parent.
+        fn mutated_children_of_rate(rate_bits: u32, attempts: u64) -> u32 {
+            (0..attempts)
+                .filter(|&seed| {
+                    let mut genome = Genome::all(Instruction::Split);
+                    genome.set_mutation_rate_bits(rate_bits);
+                    let mut parent =
+                        Critter::with_genome(10, 10, Heading::North, 1, 1, 10, seed, genome);
+                    parent.gain_energy(MAX_CRITTER_ENERGY - 10);
+                    let parent_genome = parent.genome().clone();
+                    let child = parent.tick(true).child.expect("parent should split");
+                    *child.genome() != parent_genome
+                })
+                .count() as u32
+        }
+
         #[test]
-        fn most_children_inherit_the_parents_genome_unchanged() {
-            // With MUTATION_CHANCE small, the vast majority of children
-            // should match their parent exactly. Asserting that at least 70%
-            // match leaves wide statistical headroom while still failing if
-            // mutation_chance was accidentally raised to 1.0 or the
-            // inheritance broke.
-            let mut identical = 0;
-            for seed in 0..200 {
-                let (parent, child) = split_once(seed);
-                if parent == child {
-                    identical += 1;
-                }
-            }
+        fn a_parent_whose_genome_encodes_no_mutation_produces_only_clones() {
+            assert_eq!(mutated_children_of_rate(0, 200), 0);
+        }
+
+        #[test]
+        fn a_parent_whose_genome_encodes_the_maximum_rate_mutates_far_more_often() {
+            let never = mutated_children_of_rate(0, 200);
+            let often = mutated_children_of_rate(u32::MAX >> (32 - MUTATION_RATE_BITS), 200);
+
             assert!(
-                identical > 140,
-                "expected >140/200 children to inherit unchanged, got {identical}"
+                often > never + 20,
+                "expected the max-rate parent to mutate far more than the zero-rate parent, \
+                 got {often} vs {never} out of 200"
             );
         }
 
         #[test]
-        fn some_children_have_a_mutated_genome() {
-            // Over a large enough sample, at least one mutation event should
-            // fire. The sample size is sized so that even with the current
-            // (very small) mutation rate the probability of seeing zero
-            // mutations is negligible, while still failing if mutation never
-            // fires at all.
-            let mut any_differ = false;
-            for seed in 0..10_000 {
-                let (parent, child) = split_once(seed);
-                if parent != child {
-                    any_differ = true;
-                    break;
-                }
-            }
+        fn a_child_inherits_the_parents_genome_when_no_mutation_fires() {
+            let (parent, child) = split_once(0);
+
+            assert_eq!(parent, child);
+        }
+
+        #[test]
+        fn a_parent_encoding_a_middling_rate_mutates_some_children_but_not_most() {
+            // Half the rate field's range. Mutation should fire sometimes and
+            // not most of the time, which pins the mapping from bits to
+            // probability without asserting an exact count.
+            const HALF_RATE_BITS: u32 = 1 << (MUTATION_RATE_BITS - 1);
+            let mutated = mutated_children_of_rate(HALF_RATE_BITS, 200);
+
             assert!(
-                any_differ,
-                "expected at least one mutated child in 10000 splits"
+                (1..200).contains(&mutated),
+                "expected some but not all of 200 children to mutate, got {mutated}"
             );
         }
     }
