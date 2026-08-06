@@ -1,14 +1,14 @@
 use crate::{Critter, Genome, Heading, Pellet, PELLET_RADIUS};
 use rand::Rng;
 
-pub const CRITTER_RADIUS: i32 = 10;
+pub const CRITTER_RADIUS: i32 = 6;
 
-const NUM_CRITTERS: usize = 1000;
-const NUM_PELLETS: usize = 1000;
-pub const MIN_POPULATION: usize = 20;
+const NUM_CRITTERS: usize = 4000;
+const NUM_PELLETS: usize = 4000;
+pub const MIN_POPULATION: usize = 80;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
-const STEP_SIZE: i32 = 12;
+const STEP_SIZE: i32 = 5;
 // How many critters to refresh per overlap-detection call. The detector cycles
 // through the population round-robin: critters not reached on a given call
 // keep their previous flag until they come up again.
@@ -1274,12 +1274,12 @@ mod tests {
 
         #[test]
         fn two_critters_just_inside_the_overlap_threshold_are_both_marked() {
-            // Centers 19 apart: distance² = 361, strictly less than the
-            // (2 * CRITTER_RADIUS)² = 400 threshold, so the pair counts as
-            // overlapping. Sitting just inside the boundary kills threshold
-            // mutations whose squared cutoff drops well below 361.
+            // Centers one pixel closer than the 2 * CRITTER_RADIUS threshold,
+            // so the pair counts as overlapping. Sitting just inside the
+            // boundary kills threshold mutations whose squared cutoff drops
+            // below this separation.
             let a = idle_critter_at(100, 100);
-            let b = idle_critter_at(119, 100);
+            let b = idle_critter_at(100 + 2 * CRITTER_RADIUS - 1, 100);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
 
@@ -1577,11 +1577,11 @@ mod tests {
 
         #[test]
         fn a_victim_just_inside_the_critter_eat_radius_is_drained() {
-            // Centers 19 apart: distance² = 361 < (2 * CRITTER_RADIUS)² = 400.
-            // Sits inside the eat radius; mutations that shrink the threshold
-            // below 361 would mistakenly classify the pair as out of range.
+            // Centers one pixel closer than the 2 * CRITTER_RADIUS eat radius.
+            // Mutations that shrink the threshold below this separation would
+            // mistakenly classify the pair as out of range.
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(119, 100, 80);
+            let victim = idle_critter_with_energy(100 + 2 * CRITTER_RADIUS - 1, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -1835,7 +1835,7 @@ mod tests {
 
             let world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
 
-            assert_eq!(world.pellets().len(), 1000);
+            assert_eq!(world.pellets().len(), NUM_PELLETS);
         }
 
         #[test]

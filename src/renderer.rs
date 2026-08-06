@@ -3,7 +3,7 @@ use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
-pub const FRONT_DOT_RADIUS: i32 = 4;
+pub const FRONT_DOT_RADIUS: i32 = 2;
 
 struct Ring {
     cx: i32,
@@ -319,8 +319,8 @@ mod tests {
         #[test]
         fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_northeast() {
             // For a diagonal heading, the dot's offset from center is scaled by √2/2
-            // along each axis. With (RADIUS - FRONT_DOT_RADIUS) = 16, scaled = round(11.31) = 11.
-            const DIAGONAL_DOT_OFFSET: i32 = 11;
+            // along each axis. With (RADIUS - FRONT_DOT_RADIUS) = 18, scaled = round(12.73) = 13.
+            const DIAGONAL_DOT_OFFSET: i32 = 13;
             let critter = stationary_critter(CENTER, CENTER, Heading::NorthEast);
 
             let buffer = render(&critter);
@@ -337,7 +337,7 @@ mod tests {
 
         #[test]
         fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_southwest() {
-            const DIAGONAL_DOT_OFFSET: i32 = 11;
+            const DIAGONAL_DOT_OFFSET: i32 = 13;
             let critter = stationary_critter(CENTER, CENTER, Heading::SouthWest);
 
             let buffer = render(&critter);
