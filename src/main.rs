@@ -17,8 +17,10 @@ const TEXT_MARGIN: usize = 16;
 const ENERGY_REFRESH_FRAMES: u32 = 30;
 const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 // If the critter population fails to increase for this many frames while
-// any critters are still alive, reset the world. At ~60 FPS this is 10s.
-const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 600;
+// any critters are still alive, reset the world. At ~60 FPS this is 60s.
+// Generous, because a world sitting at its carrying capacity has stopped
+// growing without having failed.
+const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
 const REPLENISH_INTERVAL_FRAMES: u32 = 1800;
 // Minimum FPS at which work that grows the simulation (splitting, pellet
