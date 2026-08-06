@@ -209,9 +209,11 @@ impl World {
                 continue;
             }
 
-            // No pellet in range — drain the first overlapping critter, if
-            // any. The eater's gain saturates at MAX_CRITTER_ENERGY; whatever
-            // doesn't fit is lost.
+            // No pellet in range — kill the first overlapping critter, if
+            // any. Eating a critter is lethal: the victim loses everything
+            // even though the eater's gain saturates at MAX_CRITTER_ENERGY;
+            // whatever doesn't fit is destroyed (replenishment later returns
+            // it to the world as pellets).
             let victim_index = (0..count).find(|&victim_index| {
                 if victim_index == eater_index {
                     return false;
@@ -225,8 +227,8 @@ impl World {
             });
             if let Some(victim_index) = victim_index {
                 let victim_energy = self.critters[victim_index].energy();
-                let gained = self.critters[eater_index].gain_energy_saturating(victim_energy);
-                self.critters[victim_index].lose_energy(gained);
+                self.critters[eater_index].gain_energy(victim_energy);
+                self.critters[victim_index].lose_energy(victim_energy);
                 self.critters[victim_index]
                     .mark_being_stolen_from_for(STOLEN_FROM_INDICATOR_LINGER_TICKS);
             }
@@ -1475,7 +1477,7 @@ mod tests {
         }
 
         #[test]
-        fn an_eater_drains_only_what_fits_under_its_cap_when_eating_a_critter() {
+        fn an_eater_that_caps_out_mid_meal_still_kills_its_victim() {
             let eater = eating_critter_with_energy(100, 100, MAX_CRITTER_ENERGY - 30);
             let victim = idle_critter_with_energy(105, 100, 100);
             let mut world = World::with_critters_and_pellets(
@@ -1487,10 +1489,10 @@ mod tests {
 
             world.tick(true);
 
-            // Pre-resolve: eater pays the base 1-energy tick cost, so its
-            // headroom is 30 + 1 = 31. Eater caps at MAX; victim drops by 31.
+            // The surplus the eater couldn't absorb is destroyed, not left
+            // with the victim.
             assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
-            assert_eq!(world.critters()[1].energy(), 100 - 31);
+            assert_eq!(world.critters()[1].energy(), 0);
         }
 
         #[test]
