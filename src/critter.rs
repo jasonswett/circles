@@ -288,11 +288,6 @@ impl Critter {
                 self.last_executed = Some(Instruction::DoNothing);
                 TickOutcome::default()
             }
-            Instruction::TurnRandom => {
-                self.heading = Heading::random(&mut self.rng);
-                self.last_executed = Some(Instruction::TurnRandom);
-                TickOutcome::default()
-            }
             Instruction::RepeatPreviousMove => {
                 if let Some(previous) = self.last_executed {
                     self.execute(previous)
@@ -1195,33 +1190,6 @@ mod tests {
             critter.wrap_position(WIDTH, HEIGHT);
 
             assert_eq!(critter.x(), 7);
-        }
-    }
-
-    mod turn_random {
-        use super::*;
-        use crate::Genome;
-
-        #[test]
-        fn firing_turn_random_repeatedly_visits_every_heading() {
-            let mut critter = Critter::with_genome(
-                START_X,
-                START_Y,
-                Heading::North,
-                1,
-                1,
-                MAX_CRITTER_ENERGY,
-                0,
-                Genome::all(Instruction::TurnRandom),
-            );
-            let mut seen = std::collections::HashSet::new();
-
-            for _ in 0..100 {
-                critter.tick(true);
-                seen.insert(critter.heading());
-            }
-
-            assert_eq!(seen.len(), 8);
         }
     }
 

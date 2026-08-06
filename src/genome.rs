@@ -1,7 +1,7 @@
 use crate::Instruction;
 use rand::Rng;
 
-const INSTRUCTION_COUNT: usize = 8;
+const INSTRUCTION_COUNT: usize = 7;
 // Per-instruction header window: factor mask + threshold + softness.
 // The factor mask is three bits (one per factor), read in the order:
 // bit 0 = energy, bit 1 = is-touching-another-critter, bit 2 = the touched
@@ -336,7 +336,6 @@ fn instruction_index(instruction: Instruction) -> usize {
         Instruction::RepeatPreviousMove => 4,
         Instruction::Split => 5,
         Instruction::Eat => 6,
-        Instruction::TurnRandom => 7,
     }
 }
 
@@ -350,7 +349,6 @@ fn encode(instruction: Instruction) -> u8 {
         Instruction::RepeatPreviousMove => 0b1000,
         Instruction::Split => 0b1010,
         Instruction::Eat => 0b1100,
-        Instruction::TurnRandom => 0b1110,
     }
 }
 
@@ -362,7 +360,6 @@ fn decode(code: u8) -> Instruction {
         0b0110 | 0b0111 => Instruction::DoNothing,
         0b1000 | 0b1001 => Instruction::RepeatPreviousMove,
         0b1010 | 0b1011 => Instruction::Split,
-        0b1110 | 0b1111 => Instruction::TurnRandom,
         _ => Instruction::Eat,
     }
 }
@@ -450,14 +447,14 @@ mod tests {
 
         #[test]
         fn random_genome_has_the_full_byte_length() {
-            // 8 instructions × 17 param bits + 40 activation mask bits + 40
-            // opcodes × 4 bits = 136 + 40 + 160 = 336 bits = 42 bytes.
-            // Pinning down the literal byte count catches mutations to the
-            // constants that derive from HEADER_BITS + ACTIVATION_MASK_BITS +
-            // OPCODE_BITS.
+            // 7 instructions × 17 param bits + 40 activation mask bits + 40
+            // opcodes × 4 bits = 119 + 40 + 160 = 319 bits = 40 bytes
+            // (rounding up). Pinning down the literal byte count catches
+            // mutations to the constants that derive from HEADER_BITS +
+            // ACTIVATION_MASK_BITS + OPCODE_BITS.
             let genome = random_genome(0);
 
-            assert_eq!(genome.bytes.len(), 42);
+            assert_eq!(genome.bytes.len(), 40);
         }
 
         #[test]
@@ -597,8 +594,7 @@ mod tests {
                 (Instruction::DoNothing, &[0b0110, 0b0111]),
                 (Instruction::RepeatPreviousMove, &[0b1000, 0b1001]),
                 (Instruction::Split, &[0b1010, 0b1011]),
-                (Instruction::Eat, &[0b1100, 0b1101]),
-                (Instruction::TurnRandom, &[0b1110, 0b1111]),
+                (Instruction::Eat, &[0b1100, 0b1101, 0b1110, 0b1111]),
             ];
 
             for (instruction, codes) in assignments {
