@@ -7,6 +7,7 @@ pub enum Instruction {
     DoNothing,
     TurnLeft,
     TurnRight,
+    TurnRandom,
     Split,
     Eat,
 }
@@ -14,14 +15,15 @@ pub enum Instruction {
 impl Instruction {
     pub fn random<R: Rng>(rng: &mut R) -> Self {
         // Each common instruction has weight 10; Split and Eat have weight 1
-        // each. Total 52.
-        match rng.gen_range(0..52) {
+        // each. Total 62.
+        match rng.gen_range(0..62) {
             0..10 => Instruction::MoveForward,
             10..20 => Instruction::RepeatPreviousMove,
             20..30 => Instruction::DoNothing,
             30..40 => Instruction::TurnLeft,
             40..50 => Instruction::TurnRight,
-            50 => Instruction::Split,
+            50..60 => Instruction::TurnRandom,
+            60 => Instruction::Split,
             _ => Instruction::Eat,
         }
     }
@@ -47,7 +49,7 @@ mod tests {
             for _ in 0..2000 {
                 seen.insert(Instruction::random(&mut rng));
             }
-            assert_eq!(seen.len(), 7);
+            assert_eq!(seen.len(), 8);
         }
 
         #[test]
@@ -72,6 +74,7 @@ mod tests {
                 Instruction::DoNothing,
                 Instruction::TurnLeft,
                 Instruction::TurnRight,
+                Instruction::TurnRandom,
             ] {
                 let count = counts.get(&variant).copied().unwrap_or(0);
                 assert!(
