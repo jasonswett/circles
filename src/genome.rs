@@ -50,9 +50,16 @@ const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
 const WEIGHT_BITS: usize = INSTRUCTION_COUNT * WEIGHT_BITS_PER_INSTRUCTION;
 
+// How many of its most recent actions a critter takes into account. Encoded
+// in unary: the window is the number of set bits, so position carries no
+// meaning and a single flip moves the window by exactly one. That keeps the
+// trait smoothly tunable by mutation, where a binary field would jump.
+pub(crate) const HISTORY_WINDOW_BITS: usize = 16;
+
 const MUTATION_RATE_OFFSET: usize = 0;
 const WEIGHTS_OFFSET: usize = MUTATION_RATE_BITS;
-const HEADER_OFFSET: usize = WEIGHTS_OFFSET + WEIGHT_BITS;
+const HISTORY_WINDOW_OFFSET: usize = WEIGHTS_OFFSET + WEIGHT_BITS;
+const HEADER_OFFSET: usize = HISTORY_WINDOW_OFFSET + HISTORY_WINDOW_BITS;
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
 // Total opcode slots in the genome's pool. Most start dormant — only the
@@ -69,8 +76,12 @@ const ACTIVATION_MASK_BITS: usize = OPCODE_POOL_SIZE;
 const OPCODE_BITS: usize = OPCODE_POOL_SIZE * OPCODE_BITS_PER_OPCODE;
 const ACTIVATION_MASK_OFFSET: usize = HEADER_OFFSET + HEADER_BITS;
 const OPCODE_STREAM_OFFSET: usize = ACTIVATION_MASK_OFFSET + ACTIVATION_MASK_BITS;
-const TOTAL_BITS: usize =
-    MUTATION_RATE_BITS + WEIGHT_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
+const TOTAL_BITS: usize = MUTATION_RATE_BITS
+    + WEIGHT_BITS
+    + HISTORY_WINDOW_BITS
+    + HEADER_BITS
+    + ACTIVATION_MASK_BITS
+    + OPCODE_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -268,6 +279,25 @@ impl Genome {
         };
         let input = energy_contribution + touching_contribution + color_contribution;
         sigmoid((input - threshold) / softness)
+    }
+
+    /// How many of its most recent actions a critter takes into account.
+    /// Encoded in unary, so this is the field's popcount: zero means history
+    /// is not consulted at all.
+    pub fn history_window(&self) -> usize {
+        read_bits(&self.bytes, HISTORY_WINDOW_OFFSET, HISTORY_WINDOW_BITS).count_ones() as usize
+    }
+
+    /// Overwrites the history-window field. Test-only: in a running world the
+    /// field changes only through mutation.
+    #[cfg(test)]
+    pub fn set_history_window_bits(&mut self, bits: u32) {
+        write_bits(
+            &mut self.bytes,
+            HISTORY_WINDOW_OFFSET,
+            HISTORY_WINDOW_BITS,
+            bits,
+        );
     }
 
     /// How much of the opcode space this genome devotes to `instruction`.
@@ -550,8 +580,12 @@ mod tests {
             // a region being dropped from the total or double-counted.
             let genome = random_genome(0);
 
-            let bits_needed =
-                MUTATION_RATE_BITS + WEIGHT_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
+            let bits_needed = MUTATION_RATE_BITS
+                + WEIGHT_BITS
+                + HISTORY_WINDOW_BITS
+                + HEADER_BITS
+                + ACTIVATION_MASK_BITS
+                + OPCODE_BITS;
             assert_eq!(genome.bytes.len(), bits_needed.div_ceil(8));
         }
 
@@ -1236,6 +1270,65 @@ mod tests {
         }
     }
 
+    mod history_window {
+        use super::*;
+
+        fn genome_with_history_bits(bits: u32) -> Genome {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            genome.set_history_window_bits(bits);
+            genome
+        }
+
+        #[test]
+        fn the_window_field_sits_between_the_weights_and_the_header() {
+            // A field that overlapped its neighbours would corrupt them, so
+            // pin both edges: it starts where the weights end and ends where
+            // the per-instruction header begins.
+            assert_eq!(HISTORY_WINDOW_OFFSET, WEIGHTS_OFFSET + WEIGHT_BITS);
+            assert_eq!(HISTORY_WINDOW_OFFSET + HISTORY_WINDOW_BITS, HEADER_OFFSET);
+        }
+
+        #[test]
+        fn setting_the_window_leaves_the_neighbouring_regions_untouched() {
+            // Writing every history bit must not bleed into the weights
+            // before it or the header after it.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            genome.set_instruction_weight_bits(Instruction::Eat, MAX_WEIGHT_BITS);
+            let weight_before = genome.instruction_weight(Instruction::Eat);
+            let params_before = genome.params(Instruction::MoveForward);
+
+            genome.set_history_window_bits(u32::MAX >> (32 - HISTORY_WINDOW_BITS));
+
+            assert_eq!(genome.instruction_weight(Instruction::Eat), weight_before);
+            assert_eq!(genome.params(Instruction::MoveForward), params_before);
+        }
+
+        #[test]
+        fn an_all_zero_field_means_no_history_is_consulted() {
+            let genome = genome_with_history_bits(0);
+
+            assert_eq!(genome.history_window(), 0);
+        }
+
+        #[test]
+        fn the_window_counts_set_bits_regardless_of_their_positions() {
+            // Two set bits mean a window of 2 wherever they sit, so the field
+            // is a dosage gene: only the count carries meaning.
+            let low = genome_with_history_bits(0b0000_0000_0000_0011);
+            let spread = genome_with_history_bits(0b1000_0000_0000_0001);
+
+            assert_eq!(low.history_window(), 2);
+            assert_eq!(spread.history_window(), 2);
+        }
+
+        #[test]
+        fn an_all_one_field_means_the_maximum_window() {
+            let genome = genome_with_history_bits(u32::MAX >> (32 - HISTORY_WINDOW_BITS));
+
+            assert_eq!(genome.history_window(), HISTORY_WINDOW_BITS);
+        }
+    }
+
     mod instruction_weights {
         use super::*;
 
@@ -1249,7 +1342,7 @@ mod tests {
                 last * WEIGHT_BITS_PER_INSTRUCTION + WEIGHT_BITS_PER_INSTRUCTION;
 
             assert_eq!(end_of_last_field, WEIGHT_BITS);
-            assert_eq!(WEIGHTS_OFFSET + WEIGHT_BITS, HEADER_OFFSET);
+            assert_eq!(WEIGHTS_OFFSET + WEIGHT_BITS, HISTORY_WINDOW_OFFSET);
         }
 
         // A genome whose opcode slots run 0, 1, 2, ... so that decoding every
