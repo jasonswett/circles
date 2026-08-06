@@ -22,7 +22,8 @@ const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 // growing without having failed.
 const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
-const REPLENISH_INTERVAL_FRAMES: u32 = 1800;
+// At ~60 FPS this is 60s between top-ups of the world's energy budget.
+const REPLENISH_INTERVAL_FRAMES: u32 = 3600;
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
