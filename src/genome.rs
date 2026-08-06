@@ -14,7 +14,7 @@ const MAX_MUTATION_CHANCE: f32 = 0.25;
 // factor contributes to the sigmoid input; off means it is ignored. This is
 // the "stair-step" mechanism: a single mutation can enable or disable a
 // whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 3;
+const FACTOR_MASK_BITS: usize = 4;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -37,9 +37,16 @@ const COLOR_DISSIMILARITY_FACTOR_SCALE: f32 = 64.0;
 const THRESHOLD_OFFSET: usize = FACTOR_MASK_BITS;
 const SOFTNESS_OFFSET: usize = THRESHOLD_OFFSET + THRESHOLD_BITS;
 
-const ENERGY_FACTOR_BIT: u32 = 0b001;
-const TOUCHING_FACTOR_BIT: u32 = 0b010;
-const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b100;
+const ENERGY_FACTOR_BIT: u32 = 0b0001;
+const TOUCHING_FACTOR_BIT: u32 = 0b0010;
+const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b0100;
+const HISTORY_FACTOR_BIT: u32 = 0b1000;
+
+// When the history factor is enabled, the contribution scales from 0 (none of
+// the remembered actions were this instruction) up to this value (all of them
+// were). Same scale as the touching and color factors so the four stay
+// directly comparable.
+const HISTORY_FACTOR_SCALE: f32 = 64.0;
 
 // Per-instruction weight: how much of the 4-bit opcode space this genome
 // devotes to each instruction. Weights are read as `bits + 1`, so the
@@ -260,6 +267,7 @@ impl Genome {
         energy: u32,
         is_touching_critter: bool,
         touched_color_dissimilarity: f32,
+        recent_repetition: f32,
     ) -> f32 {
         let (mask, threshold, softness) = self.params(instruction);
         let energy_contribution = if mask & ENERGY_FACTOR_BIT != 0 {
@@ -277,7 +285,16 @@ impl Genome {
         } else {
             0.0
         };
-        let input = energy_contribution + touching_contribution + color_contribution;
+        // `recent_repetition` is the share of the critter's remembered actions
+        // that were this instruction, so the contribution does not grow just
+        // because the window widened — only because the behavior repeated.
+        let history_contribution = if mask & HISTORY_FACTOR_BIT != 0 {
+            HISTORY_FACTOR_SCALE * recent_repetition.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let input =
+            energy_contribution + touching_contribution + color_contribution + history_contribution;
         sigmoid((input - threshold) / softness)
     }
 
@@ -742,7 +759,7 @@ mod tests {
             // With threshold=0 and softness=1, sigmoid(60) ≈ 1.0 exactly.
             let genome = Genome::all(Instruction::Split);
 
-            let probability = genome.probability_of_acting(Instruction::Split, 60, false, 0.0);
+            let probability = genome.probability_of_acting(Instruction::Split, 60, false, 0.0, 0.0);
 
             assert!(probability > 0.99);
         }
@@ -758,8 +775,13 @@ mod tests {
                 if mask & ENERGY_FACTOR_BIT == 0 {
                     continue;
                 }
-                let probability =
-                    genome.probability_of_acting(Instruction::Split, threshold as u32, false, 0.0);
+                let probability = genome.probability_of_acting(
+                    Instruction::Split,
+                    threshold as u32,
+                    false,
+                    0.0,
+                    0.0,
+                );
                 assert!((probability - 0.5).abs() < 0.5);
                 return;
             }
@@ -776,7 +798,7 @@ mod tests {
                 }
                 let energy = (threshold + 20.0 * softness) as u32;
                 let probability =
-                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0);
+                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0, 0.0);
                 assert!(probability > 0.99, "seed {seed}: probability {probability}");
                 return;
             }
@@ -798,7 +820,7 @@ mod tests {
                 }
                 let energy = (threshold - 10.0 * softness).max(0.0) as u32;
                 let probability =
-                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0);
+                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0, 0.0);
                 assert!(probability < 0.01, "seed {seed}: probability {probability}");
                 return;
             }
@@ -829,10 +851,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 3 bits + threshold 7 bits = 10)
+            // Use a hard-coded offset (mask 4 bits + threshold 7 bits = 11)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 10;
+            const SOFTNESS_OFFSET_LITERAL: usize = 11;
             assert_eq!(
                 SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
                 "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
@@ -858,9 +880,10 @@ mod tests {
         fn with_no_factors_enabled_the_probability_does_not_depend_on_energy_or_touching() {
             let genome = genome_with_mask_for_split(0b00);
 
-            let p_low = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
-            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false, 0.0);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0);
+            let p_low = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_high_energy =
+                genome.probability_of_acting(Instruction::Split, 500, false, 0.0, 0.0);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0, 0.0);
 
             assert_eq!(p_low, p_high_energy);
             assert_eq!(p_low, p_touching);
@@ -870,8 +893,9 @@ mod tests {
         fn with_only_the_energy_factor_enabled_touching_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
 
-            let p_not_touching = genome.probability_of_acting(Instruction::Split, 100, false, 0.0);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 100, true, 0.0);
+            let p_not_touching =
+                genome.probability_of_acting(Instruction::Split, 100, false, 0.0, 0.0);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 100, true, 0.0, 0.0);
 
             assert_eq!(p_not_touching, p_touching);
         }
@@ -880,8 +904,9 @@ mod tests {
         fn with_only_the_touching_factor_enabled_energy_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
 
-            let p_low_energy = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
-            let p_high_energy = genome.probability_of_acting(Instruction::Split, 500, false, 0.0);
+            let p_low_energy = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_high_energy =
+                genome.probability_of_acting(Instruction::Split, 500, false, 0.0, 0.0);
 
             assert_eq!(p_low_energy, p_high_energy);
         }
@@ -892,8 +917,9 @@ mod tests {
             // input — sigmoid(64) is essentially 1, sigmoid(0) is 0.5.
             let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
 
-            let p_not_touching = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0);
+            let p_not_touching =
+                genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0, 0.0);
 
             assert!(p_not_touching < p_touching);
         }
@@ -902,8 +928,8 @@ mod tests {
         fn with_no_color_factor_dissimilarity_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(0b000);
 
-            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
-            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0);
+            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0, 0.0);
 
             assert_eq!(p_similar, p_dissimilar);
         }
@@ -914,8 +940,8 @@ mod tests {
             // dissimilarity = 0 leaves input at 0. sigmoid(64) ≈ 1, sigmoid(0) = 0.5.
             let genome = genome_with_mask_for_split(COLOR_DISSIMILARITY_FACTOR_BIT);
 
-            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0);
-            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0);
+            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0, 0.0);
 
             assert!(p_similar < p_dissimilar);
         }
@@ -925,9 +951,11 @@ mod tests {
         {
             let genome = genome_with_mask_for_split(COLOR_DISSIMILARITY_FACTOR_BIT);
 
-            let baseline = genome.probability_of_acting(Instruction::Split, 0, false, 0.5);
-            let varied_energy = genome.probability_of_acting(Instruction::Split, 500, false, 0.5);
-            let varied_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.5);
+            let baseline = genome.probability_of_acting(Instruction::Split, 0, false, 0.5, 0.0);
+            let varied_energy =
+                genome.probability_of_acting(Instruction::Split, 500, false, 0.5, 0.0);
+            let varied_touching =
+                genome.probability_of_acting(Instruction::Split, 0, true, 0.5, 0.0);
 
             assert_eq!(baseline, varied_energy);
             assert_eq!(baseline, varied_touching);
@@ -942,6 +970,31 @@ mod tests {
         }
 
         #[test]
+        fn with_only_the_history_factor_enabled_recent_repetition_raises_the_probability() {
+            // A critter that has just done this instruction repeatedly should
+            // find it more likely than one that has not, once the history
+            // factor is switched on.
+            let mut genome = genome_with_mask_for_split(HISTORY_FACTOR_BIT);
+            genome.set_history_window_bits(0b1111);
+
+            let p_unrepeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_repeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 1.0);
+
+            assert!(p_unrepeated < p_repeated);
+        }
+
+        #[test]
+        fn with_no_history_factor_recent_repetition_does_not_change_the_probability() {
+            let mut genome = genome_with_mask_for_split(0b0000);
+            genome.set_history_window_bits(0b1111);
+
+            let p_unrepeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
+            let p_repeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 1.0);
+
+            assert_eq!(p_unrepeated, p_repeated);
+        }
+
+        #[test]
         fn different_instructions_have_independent_thresholds() {
             // Different instructions read from non-overlapping 16-bit windows of
             // the genome header. Over many seeds, all seven instructions should
@@ -951,18 +1004,19 @@ mod tests {
                 let genome = random_genome(seed);
                 let energy = 250;
                 let probabilities = [
-                    genome.probability_of_acting(Instruction::MoveForward, energy, false, 0.0),
+                    genome.probability_of_acting(Instruction::MoveForward, energy, false, 0.0, 0.0),
                     genome.probability_of_acting(
                         Instruction::RepeatPreviousMove,
                         energy,
                         false,
                         0.0,
+                        0.0,
                     ),
-                    genome.probability_of_acting(Instruction::DoNothing, energy, false, 0.0),
-                    genome.probability_of_acting(Instruction::TurnLeft, energy, false, 0.0),
-                    genome.probability_of_acting(Instruction::TurnRight, energy, false, 0.0),
-                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0),
-                    genome.probability_of_acting(Instruction::Eat, energy, false, 0.0),
+                    genome.probability_of_acting(Instruction::DoNothing, energy, false, 0.0, 0.0),
+                    genome.probability_of_acting(Instruction::TurnLeft, energy, false, 0.0, 0.0),
+                    genome.probability_of_acting(Instruction::TurnRight, energy, false, 0.0, 0.0),
+                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0, 0.0),
+                    genome.probability_of_acting(Instruction::Eat, energy, false, 0.0, 0.0),
                 ];
                 let mut sorted = probabilities.to_vec();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -1262,8 +1316,8 @@ mod tests {
             ] {
                 for energy in [0, 100, 250, 400, 500] {
                     assert_eq!(
-                        original.probability_of_acting(instruction, energy, false, 0.0),
-                        cloned.probability_of_acting(instruction, energy, false, 0.0),
+                        original.probability_of_acting(instruction, energy, false, 0.0, 0.0),
+                        cloned.probability_of_acting(instruction, energy, false, 0.0, 0.0),
                     );
                 }
             }

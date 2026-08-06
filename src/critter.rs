@@ -1,6 +1,7 @@
 use crate::{Genome, Heading, Instruction};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use std::collections::VecDeque;
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
 const BIT_FLIP_RATE: f32 = 0.01;
@@ -38,6 +39,10 @@ pub struct Critter {
     overlap_indicator_ticks: u32,
     being_eaten_indicator_ticks: u32,
     most_recent_overlap_color: Option<u32>,
+    // The instructions this critter most recently executed, newest last.
+    // Runtime state rather than genome: a child starts with no memory of its
+    // parent's actions. Trimmed to the genome's history window.
+    recent_actions: VecDeque<Instruction>,
     rng: SmallRng,
 }
 
@@ -116,6 +121,7 @@ impl Critter {
             overlap_indicator_ticks: 0,
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
+            recent_actions: VecDeque::new(),
             rng,
         }
     }
@@ -239,15 +245,50 @@ impl Critter {
             self.energy,
             self.is_overlapping_critter(),
             dissimilarity,
+            self.recent_repetition_of(instruction),
         );
         let split_blocked = instruction == Instruction::Split && !allow_split;
         let outcome = if !split_blocked && self.roll_against(probability) {
+            self.remember_action(instruction);
             self.execute(instruction)
         } else {
             TickOutcome::default()
         };
         self.energy = self.energy.saturating_sub(1);
         outcome
+    }
+
+    /// The share of the critter's remembered actions that were `instruction`,
+    /// in [0, 1]. Zero when the genome's window is zero or nothing is
+    /// remembered yet, so a critter with no memory is unaffected by history.
+    fn recent_repetition_of(&self, instruction: Instruction) -> f32 {
+        let window = self.genome.history_window();
+        if window == 0 || self.recent_actions.is_empty() {
+            return 0.0;
+        }
+        let matching = self
+            .recent_actions
+            .iter()
+            .filter(|&&remembered| remembered == instruction)
+            .count();
+        matching as f32 / self.recent_actions.len() as f32
+    }
+
+    /// Records an executed instruction, dropping whatever has aged out of the
+    /// genome's window. Only executed instructions are remembered: an
+    /// instruction whose sigmoid roll failed never happened.
+    fn remember_action(&mut self, instruction: Instruction) {
+        let window = self.genome.history_window();
+        if window == 0 {
+            self.recent_actions.clear();
+            return;
+        }
+        self.recent_actions.push_back(instruction);
+        // Drop whatever aged out. A push adds at most one, so this removes at
+        // most one — expressed as a bounded drain rather than a loop that
+        // could spin if the comparison were wrong.
+        let overflow = self.recent_actions.len().saturating_sub(window);
+        self.recent_actions.drain(..overflow);
     }
 
     // The `<` vs `<=` mutation is an equivalent mutant for our continuous f32
@@ -352,6 +393,7 @@ impl Critter {
             overlap_indicator_ticks: 0,
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
+            recent_actions: VecDeque::new(),
             rng: child_rng,
         }
     }
@@ -1190,6 +1232,104 @@ mod tests {
             critter.wrap_position(WIDTH, HEIGHT);
 
             assert_eq!(critter.x(), 7);
+        }
+    }
+
+    mod action_history {
+        use super::*;
+        use crate::Genome;
+
+        fn critter_with_window(window_bits: u32, instruction: Instruction) -> Critter {
+            let mut genome = Genome::all(instruction);
+            genome.set_history_window_bits(window_bits);
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                MAX_CRITTER_ENERGY,
+                0,
+                genome,
+            )
+        }
+
+        #[test]
+        fn a_critter_remembers_no_more_actions_than_its_window_allows() {
+            // Three set bits mean a window of three, so a critter that acts
+            // ten times still remembers only its three most recent actions.
+            let mut critter = critter_with_window(0b111, Instruction::MoveForward);
+
+            for _ in 0..10 {
+                critter.tick(true);
+            }
+
+            assert_eq!(critter.recent_actions.len(), 3);
+        }
+
+        #[test]
+        fn a_critter_whose_window_is_zero_remembers_nothing() {
+            let mut critter = critter_with_window(0, Instruction::MoveForward);
+
+            for _ in 0..10 {
+                critter.tick(true);
+            }
+
+            assert!(critter.recent_actions.is_empty());
+        }
+
+        #[test]
+        fn repetition_is_the_share_of_remembered_actions_that_match() {
+            // Two of the four remembered actions are MoveForward, so the
+            // share is one half — not a count, and not a share of the window.
+            let mut critter = critter_with_window(0b1111, Instruction::MoveForward);
+            critter.recent_actions.clear();
+            critter.recent_actions.push_back(Instruction::MoveForward);
+            critter.recent_actions.push_back(Instruction::TurnLeft);
+            critter.recent_actions.push_back(Instruction::MoveForward);
+            critter.recent_actions.push_back(Instruction::Eat);
+
+            assert_eq!(critter.recent_repetition_of(Instruction::MoveForward), 0.5);
+            assert_eq!(critter.recent_repetition_of(Instruction::TurnLeft), 0.25);
+            assert_eq!(critter.recent_repetition_of(Instruction::Split), 0.0);
+        }
+
+        #[test]
+        fn repetition_is_zero_when_nothing_is_remembered_yet() {
+            let critter = critter_with_window(0b1111, Instruction::MoveForward);
+
+            assert_eq!(critter.recent_repetition_of(Instruction::MoveForward), 0.0);
+        }
+
+        #[test]
+        fn repetition_is_zero_when_the_window_is_closed() {
+            // Even with actions in the buffer, a zero window means history is
+            // not consulted at all.
+            let mut critter = critter_with_window(0, Instruction::MoveForward);
+            critter.recent_actions.push_back(Instruction::MoveForward);
+
+            assert_eq!(critter.recent_repetition_of(Instruction::MoveForward), 0.0);
+        }
+
+        #[test]
+        fn a_full_buffer_of_one_instruction_gives_complete_repetition() {
+            let mut critter = critter_with_window(0b11, Instruction::MoveForward);
+            critter.recent_actions.push_back(Instruction::Eat);
+            critter.recent_actions.push_back(Instruction::Eat);
+
+            assert_eq!(critter.recent_repetition_of(Instruction::Eat), 1.0);
+        }
+
+        #[test]
+        fn a_child_starts_with_no_memory_of_its_parents_actions() {
+            // History is runtime state, not genome, so it is not inherited.
+            let mut parent = critter_with_window(0b1111, Instruction::Split);
+            parent.tick(true);
+            assert!(!parent.recent_actions.is_empty());
+
+            let child = parent.tick(true).child.expect("parent should split");
+
+            assert!(child.recent_actions.is_empty());
         }
     }
 
