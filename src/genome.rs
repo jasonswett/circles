@@ -41,8 +41,18 @@ const ENERGY_FACTOR_BIT: u32 = 0b001;
 const TOUCHING_FACTOR_BIT: u32 = 0b010;
 const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b100;
 
+// Per-instruction weight: how much of the 4-bit opcode space this genome
+// devotes to each instruction. Weights are read as `bits + 1`, so the
+// encoded range is 1..=16 and no instruction can be excluded outright —
+// which also means the cumulative table is never empty.
+const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
+#[cfg(test)]
+pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
+const WEIGHT_BITS: usize = INSTRUCTION_COUNT * WEIGHT_BITS_PER_INSTRUCTION;
+
 const MUTATION_RATE_OFFSET: usize = 0;
-const HEADER_OFFSET: usize = MUTATION_RATE_BITS;
+const WEIGHTS_OFFSET: usize = MUTATION_RATE_BITS;
+const HEADER_OFFSET: usize = WEIGHTS_OFFSET + WEIGHT_BITS;
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 const OPCODE_BITS_PER_OPCODE: usize = 4;
 // Total opcode slots in the genome's pool. Most start dormant — only the
@@ -59,7 +69,8 @@ const ACTIVATION_MASK_BITS: usize = OPCODE_POOL_SIZE;
 const OPCODE_BITS: usize = OPCODE_POOL_SIZE * OPCODE_BITS_PER_OPCODE;
 const ACTIVATION_MASK_OFFSET: usize = HEADER_OFFSET + HEADER_BITS;
 const OPCODE_STREAM_OFFSET: usize = ACTIVATION_MASK_OFFSET + ACTIVATION_MASK_BITS;
-const TOTAL_BITS: usize = MUTATION_RATE_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
+const TOTAL_BITS: usize =
+    MUTATION_RATE_BITS + WEIGHT_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -76,6 +87,12 @@ impl Genome {
         let mut bytes = [0u8; TOTAL_BYTES];
         for byte in &mut bytes {
             *byte = rng.gen();
+        }
+        // TOTAL_BITS need not fill the last byte. Zero the leftover pad bits:
+        // to_bits doesn't emit them, so a genome carrying random padding would
+        // not survive a to_bits/from_bits round trip.
+        for bit in TOTAL_BITS..(TOTAL_BYTES * 8) {
+            write_bits(&mut bytes, bit, 1, 0);
         }
         // Reset the activation mask to "first INITIAL_ACTIVE_OPCODES bits on,
         // rest off" so every fresh lineage starts with the same number of
@@ -100,7 +117,8 @@ impl Genome {
     pub fn all(instruction: Instruction) -> Self {
         let mut genome = Self::always_act_header();
         for cursor in 0..OPCODE_POOL_SIZE {
-            genome.write_opcode(cursor, encode(instruction));
+            let code = encode_for(&genome, instruction);
+            genome.write_opcode(cursor, code);
         }
         genome
     }
@@ -114,7 +132,8 @@ impl Genome {
         let mut genome = Self::always_act_header();
         for cursor in 0..OPCODE_POOL_SIZE {
             let instr = instructions[cursor % instructions.len()];
-            genome.write_opcode(cursor, encode(instr));
+            let code = encode_for(&genome, instr);
+            genome.write_opcode(cursor, code);
         }
         genome
     }
@@ -150,7 +169,8 @@ impl Genome {
             }
             if seen == active_index {
                 let bit_offset = OPCODE_STREAM_OFFSET + slot * OPCODE_BITS_PER_OPCODE;
-                return decode(read_bits(&self.bytes, bit_offset, OPCODE_BITS_PER_OPCODE) as u8);
+                let code = read_bits(&self.bytes, bit_offset, OPCODE_BITS_PER_OPCODE) as u8;
+                return decode_with_weights(self, code);
             }
             seen += 1;
         }
@@ -248,6 +268,21 @@ impl Genome {
         };
         let input = energy_contribution + touching_contribution + color_contribution;
         sigmoid((input - threshold) / softness)
+    }
+
+    /// How much of the opcode space this genome devotes to `instruction`.
+    /// Read as `bits + 1` so every instruction keeps a nonzero share.
+    fn instruction_weight(&self, instruction: Instruction) -> u32 {
+        let offset = WEIGHTS_OFFSET + instruction_index(instruction) * WEIGHT_BITS_PER_INSTRUCTION;
+        read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1
+    }
+
+    /// Overwrites one instruction's weight field. Test-only: in a running
+    /// world the weights change only through mutation.
+    #[cfg(test)]
+    pub fn set_instruction_weight_bits(&mut self, instruction: Instruction, bits: u32) {
+        let offset = WEIGHTS_OFFSET + instruction_index(instruction) * WEIGHT_BITS_PER_INSTRUCTION;
+        write_bits(&mut self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION, bits);
     }
 
     /// Overwrites the mutation-rate field. Test-only: in a running world the
@@ -355,6 +390,18 @@ fn write_bits(bytes: &mut [u8], bit_offset: usize, length: usize, value: u32) {
     }
 }
 
+/// Every instruction, in the order their weight fields appear in the genome.
+/// `instruction_index` gives each one's position here.
+const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
+    Instruction::MoveForward,
+    Instruction::TurnLeft,
+    Instruction::TurnRight,
+    Instruction::DoNothing,
+    Instruction::RepeatPreviousMove,
+    Instruction::Split,
+    Instruction::Eat,
+];
+
 /// Bit offset of one instruction's parameter window, measured from the start
 /// of the genome. The header sits after the leading mutation-rate field.
 fn header_window_offset(instruction_index: usize) -> usize {
@@ -373,29 +420,45 @@ fn instruction_index(instruction: Instruction) -> usize {
     }
 }
 
+/// The opcode value that `genome` decodes to `instruction`. Which bits mean
+/// which instruction depends on the genome's weights, so this searches the
+/// opcode space rather than consulting a fixed table. Every instruction keeps
+/// a nonzero weight, so a match always exists.
 #[cfg(test)]
-fn encode(instruction: Instruction) -> u8 {
-    match instruction {
-        Instruction::TurnRight => 0b0000,
-        Instruction::TurnLeft => 0b0010,
-        Instruction::MoveForward => 0b0100,
-        Instruction::DoNothing => 0b0110,
-        Instruction::RepeatPreviousMove => 0b1000,
-        Instruction::Split => 0b1010,
-        Instruction::Eat => 0b1100,
-    }
+fn encode_for(genome: &Genome, instruction: Instruction) -> u8 {
+    (0..(1u8 << OPCODE_BITS_PER_OPCODE))
+        .find(|&code| decode_with_weights(genome, code) == instruction)
+        .expect("every instruction holds a nonzero band of the opcode space")
 }
 
-fn decode(code: u8) -> Instruction {
-    match code {
-        0b0000 | 0b0001 => Instruction::TurnRight,
-        0b0010 | 0b0011 => Instruction::TurnLeft,
-        0b0100 | 0b0101 => Instruction::MoveForward,
-        0b0110 | 0b0111 => Instruction::DoNothing,
-        0b1000 | 0b1001 => Instruction::RepeatPreviousMove,
-        0b1010 | 0b1011 => Instruction::Split,
-        _ => Instruction::Eat,
-    }
+/// Maps a slot's 4-bit opcode onto an instruction using the genome's weights.
+/// Each instruction claims a band of the opcode space proportional to its
+/// weight, so a genome that up-weights an instruction has more of its stream
+/// decode to it. Deterministic: the same bits in the same genome always yield
+/// the same instruction, so the stream stays heritable and ordered.
+fn decode_with_weights(genome: &Genome, code: u8) -> Instruction {
+    let weights: Vec<u32> = ALL_INSTRUCTIONS
+        .iter()
+        .map(|&instruction| genome.instruction_weight(instruction))
+        .collect();
+    let total: u32 = weights.iter().sum();
+    // Scale the opcode into [0, total) so the whole opcode space maps across
+    // the weight bands.
+    let opcode_space = 1u32 << OPCODE_BITS_PER_OPCODE;
+    let position = (code as u32) * total / opcode_space;
+
+    // Walk the cumulative bands and take the first one the position falls in.
+    // `position < total` and the weights sum to `total`, so some band always
+    // claims it; `last()` states that total-ness without a separate fallback.
+    let mut cumulative = 0;
+    ALL_INSTRUCTIONS
+        .iter()
+        .zip(&weights)
+        .find_map(|(&instruction, &weight)| {
+            cumulative += weight;
+            (position < cumulative).then_some(instruction)
+        })
+        .unwrap_or(ALL_INSTRUCTIONS[INSTRUCTION_COUNT - 1])
 }
 
 // Minimum per-channel brightness so a freshly-zero hash doesn't render fully
@@ -480,15 +543,16 @@ mod tests {
         use super::*;
 
         #[test]
-        fn a_random_genome_is_large_enough_to_hold_every_field() {
-            // Summing the regions independently of TOTAL_BITS catches a
-            // layout constant being dropped from the total: if any region
-            // stopped counting, the genome would be too small to hold them
-            // all.
+        fn a_random_genome_is_exactly_big_enough_to_hold_every_field() {
+            // Sum the regions here rather than reusing TOTAL_BITS, so a
+            // mistake in how TOTAL_BITS combines them is visible. The match
+            // must be exact: a genome that is merely large enough would hide
+            // a region being dropped from the total or double-counted.
             let genome = random_genome(0);
 
-            let bits_needed = MUTATION_RATE_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
-            assert!(genome.bytes.len() * 8 >= bits_needed);
+            let bits_needed =
+                MUTATION_RATE_BITS + WEIGHT_BITS + HEADER_BITS + ACTIVATION_MASK_BITS + OPCODE_BITS;
+            assert_eq!(genome.bytes.len(), bits_needed.div_ceil(8));
         }
 
         #[test]
@@ -556,13 +620,14 @@ mod tests {
             // every dormant slot decodes to Split. The walker must only visit
             // active slots, so every cursor sees TurnLeft.
             let mut genome = Genome::all(Instruction::TurnLeft);
+            let split_code = encode_for(&genome, Instruction::Split) as u32;
             for slot in INITIAL_ACTIVE_OPCODES..OPCODE_POOL_SIZE {
                 let bit_offset = OPCODE_STREAM_OFFSET + slot * OPCODE_BITS_PER_OPCODE;
                 write_bits(
                     &mut genome.bytes,
                     bit_offset,
                     OPCODE_BITS_PER_OPCODE,
-                    encode(Instruction::Split) as u32,
+                    split_code,
                 );
             }
 
@@ -580,11 +645,12 @@ mod tests {
             let mut genome = Genome::all(Instruction::TurnLeft);
             let target_slot = INITIAL_ACTIVE_OPCODES;
             let bit_offset = OPCODE_STREAM_OFFSET + target_slot * OPCODE_BITS_PER_OPCODE;
+            let split_code = encode_for(&genome, Instruction::Split) as u32;
             write_bits(
                 &mut genome.bytes,
                 bit_offset,
                 OPCODE_BITS_PER_OPCODE,
-                encode(Instruction::Split) as u32,
+                split_code,
             );
 
             // Before activation, cursor INITIAL_ACTIVE_OPCODES wraps to slot 0
@@ -620,22 +686,17 @@ mod tests {
         }
 
         #[test]
-        fn each_instruction_decodes_from_its_assigned_codes() {
-            let assignments: &[(Instruction, &[u8])] = &[
-                (Instruction::TurnRight, &[0b0000, 0b0001]),
-                (Instruction::TurnLeft, &[0b0010, 0b0011]),
-                (Instruction::MoveForward, &[0b0100, 0b0101]),
-                (Instruction::DoNothing, &[0b0110, 0b0111]),
-                (Instruction::RepeatPreviousMove, &[0b1000, 0b1001]),
-                (Instruction::Split, &[0b1010, 0b1011]),
-                (Instruction::Eat, &[0b1100, 0b1101, 0b1110, 0b1111]),
-            ];
+        fn under_equal_weights_every_instruction_claims_part_of_the_opcode_space() {
+            // A zeroed genome gives every instruction the same weight, so the
+            // opcode space divides among all of them and none is unreachable.
+            let genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
 
-            for (instruction, codes) in assignments {
-                for code in *codes {
-                    assert_eq!(decode(*code), *instruction, "code {code:#06b}");
-                }
-            }
+            let decoded: std::collections::HashSet<Instruction> = (0..(1u8
+                << OPCODE_BITS_PER_OPCODE))
+                .map(|code| decode_with_weights(&genome, code))
+                .collect();
+
+            assert_eq!(decoded.len(), INSTRUCTION_COUNT);
         }
     }
 
@@ -1172,6 +1233,90 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    mod instruction_weights {
+        use super::*;
+
+        #[test]
+        fn every_instructions_weight_field_fits_inside_the_weight_region() {
+            // The last instruction's field must end at the region's edge:
+            // too small and its bits would collide with the header that
+            // follows; too large and the region wastes space it claimed.
+            let last = INSTRUCTION_COUNT - 1;
+            let end_of_last_field =
+                last * WEIGHT_BITS_PER_INSTRUCTION + WEIGHT_BITS_PER_INSTRUCTION;
+
+            assert_eq!(end_of_last_field, WEIGHT_BITS);
+            assert_eq!(WEIGHTS_OFFSET + WEIGHT_BITS, HEADER_OFFSET);
+        }
+
+        // A genome whose opcode slots run 0, 1, 2, ... so that decoding every
+        // slot samples the whole 4-bit opcode space exactly once.
+        fn genome_spanning_the_opcode_space() -> Genome {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for slot in 0..OPCODE_POOL_SIZE {
+                genome.write_opcode(slot, (slot % 16) as u8);
+            }
+            genome
+        }
+
+        fn decoded_counts(genome: &Genome) -> std::collections::HashMap<Instruction, usize> {
+            let mut counts = std::collections::HashMap::new();
+            for slot in 0..16 {
+                *counts.entry(decode_with_weights(genome, slot)).or_insert(0) += 1;
+            }
+            counts
+        }
+
+        #[test]
+        fn each_instruction_claims_opcode_values_in_proportion_to_its_weight() {
+            // Give Eat the maximum weight and leave the rest at the minimum,
+            // then count how the 16 opcode values divide. Asserting the exact
+            // split pins the scaling arithmetic and the band comparison, which
+            // a merely directional assertion leaves free.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            genome.set_instruction_weight_bits(Instruction::Eat, MAX_WEIGHT_BITS);
+
+            let counts = decoded_counts(&genome);
+
+            // Weights are bits + 1: Eat holds 16, the other six hold 1 each,
+            // totalling 22. Opcode value c maps to position floor(c * 22 / 16),
+            // so Eat takes 11 of the 16 values and five of the six
+            // minimum-weight instructions take one apiece — DoNothing's band
+            // is the one no opcode value lands in. Naming each instruction's
+            // share, rather than summing the non-Eat ones, is what pins the
+            // scaling arithmetic: formulas that shift which instructions get
+            // a slot preserve the totals but not this breakdown.
+            let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
+
+            assert_eq!(share(Instruction::Eat), 11);
+            assert_eq!(share(Instruction::MoveForward), 1);
+            assert_eq!(share(Instruction::TurnLeft), 1);
+            assert_eq!(share(Instruction::TurnRight), 1);
+            assert_eq!(share(Instruction::RepeatPreviousMove), 1);
+            assert_eq!(share(Instruction::Split), 1);
+            assert_eq!(share(Instruction::DoNothing), 0);
+        }
+
+        #[test]
+        fn raising_one_instructions_weight_gives_it_more_of_the_opcode_space() {
+            let baseline = genome_spanning_the_opcode_space();
+            let mut heavy_eater = baseline.clone();
+            heavy_eater.set_instruction_weight_bits(Instruction::Eat, MAX_WEIGHT_BITS);
+
+            let before = *decoded_counts(&baseline)
+                .get(&Instruction::Eat)
+                .unwrap_or(&0);
+            let after = *decoded_counts(&heavy_eater)
+                .get(&Instruction::Eat)
+                .unwrap_or(&0);
+
+            assert!(
+                after > before,
+                "expected Eat to claim more opcode values once up-weighted, got {after} vs {before}"
+            );
         }
     }
 
