@@ -37,7 +37,7 @@ pub struct Critter {
     energy: u32,
     initial_energy: u32,
     overlap_indicator_ticks: u32,
-    being_stolen_from_indicator_ticks: u32,
+    being_eaten_indicator_ticks: u32,
     most_recent_overlap_color: Option<u32>,
     rng: SmallRng,
 }
@@ -115,7 +115,7 @@ impl Critter {
             energy: initial_energy,
             initial_energy,
             overlap_indicator_ticks: 0,
-            being_stolen_from_indicator_ticks: 0,
+            being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
             rng,
         }
@@ -156,19 +156,14 @@ impl Critter {
         self.energy = self.energy.saturating_add(amount).min(MAX_CRITTER_ENERGY);
     }
 
-    /// Adds energy up to the cap and returns how much was actually accepted.
-    /// Useful when the caller needs to know whether a top-up filled the
-    /// critter so it can move on to the next source (e.g. a stealer that
-    /// drains victims one at a time and must stop once it caps out).
-    pub fn gain_energy_saturating(&mut self, amount: u32) -> u32 {
-        let headroom = MAX_CRITTER_ENERGY.saturating_sub(self.energy);
-        let gained = headroom.min(amount);
-        self.energy += gained;
-        gained
-    }
-
     pub fn lose_energy(&mut self, amount: u32) {
         self.energy = self.energy.saturating_sub(amount);
+    }
+
+    /// Kills the critter outright. A zero-energy critter can't act and the
+    /// reaper removes it on its next pass.
+    pub fn die(&mut self) {
+        self.energy = 0;
     }
 
     pub fn is_overlapping_critter(&self) -> bool {
@@ -183,17 +178,16 @@ impl Critter {
         self.overlap_indicator_ticks = self.overlap_indicator_ticks.saturating_sub(1);
     }
 
-    pub fn is_being_stolen_from(&self) -> bool {
-        self.being_stolen_from_indicator_ticks > 0
+    pub fn is_being_eaten(&self) -> bool {
+        self.being_eaten_indicator_ticks > 0
     }
 
-    pub fn mark_being_stolen_from_for(&mut self, ticks: u32) {
-        self.being_stolen_from_indicator_ticks = ticks;
+    pub fn mark_being_eaten_for(&mut self, ticks: u32) {
+        self.being_eaten_indicator_ticks = ticks;
     }
 
-    pub fn age_being_stolen_from_indicator(&mut self) {
-        self.being_stolen_from_indicator_ticks =
-            self.being_stolen_from_indicator_ticks.saturating_sub(1);
+    pub fn age_being_eaten_indicator(&mut self) {
+        self.being_eaten_indicator_ticks = self.being_eaten_indicator_ticks.saturating_sub(1);
     }
 
     /// The genome color of the most recently detected overlapping critter,
@@ -356,7 +350,7 @@ impl Critter {
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
             overlap_indicator_ticks: 0,
-            being_stolen_from_indicator_ticks: 0,
+            being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
             rng: child_rng,
         }
@@ -554,7 +548,7 @@ mod tests {
         }
     }
 
-    mod being_stolen_from_indicator {
+    mod being_eaten_indicator {
         use super::*;
 
         fn fresh_critter() -> Critter {
@@ -571,39 +565,39 @@ mod tests {
         }
 
         #[test]
-        fn a_freshly_created_critter_is_not_marked_as_being_stolen_from() {
+        fn a_freshly_created_critter_is_not_marked_as_being_eaten() {
             let critter = fresh_critter();
 
-            assert!(!critter.is_being_stolen_from());
+            assert!(!critter.is_being_eaten());
         }
 
         #[test]
-        fn marking_the_critter_for_a_positive_tick_count_makes_it_report_as_being_stolen_from() {
+        fn marking_the_critter_for_a_positive_tick_count_makes_it_report_as_being_eaten() {
             let mut critter = fresh_critter();
 
-            critter.mark_being_stolen_from_for(10);
+            critter.mark_being_eaten_for(10);
 
-            assert!(critter.is_being_stolen_from());
+            assert!(critter.is_being_eaten());
         }
 
         #[test]
-        fn aging_until_the_counter_runs_out_clears_the_being_stolen_from_state() {
+        fn aging_until_the_counter_runs_out_clears_the_being_eaten_state() {
             let mut critter = fresh_critter();
-            critter.mark_being_stolen_from_for(2);
+            critter.mark_being_eaten_for(2);
 
-            critter.age_being_stolen_from_indicator();
-            critter.age_being_stolen_from_indicator();
+            critter.age_being_eaten_indicator();
+            critter.age_being_eaten_indicator();
 
-            assert!(!critter.is_being_stolen_from());
+            assert!(!critter.is_being_eaten());
         }
 
         #[test]
         fn aging_when_already_at_zero_does_not_underflow() {
             let mut critter = fresh_critter();
 
-            critter.age_being_stolen_from_indicator();
+            critter.age_being_eaten_indicator();
 
-            assert!(!critter.is_being_stolen_from());
+            assert!(!critter.is_being_eaten());
         }
     }
 
@@ -1704,63 +1698,6 @@ mod tests {
             critter.gain_energy(50);
 
             assert_eq!(critter.energy(), 150);
-        }
-    }
-
-    mod gain_energy_saturating {
-        use super::*;
-
-        fn idle_critter(energy: u32) -> Critter {
-            Critter::with_genome(
-                0,
-                0,
-                Heading::North,
-                1,
-                1,
-                energy,
-                0,
-                Genome::all(Instruction::DoNothing),
-            )
-        }
-
-        #[test]
-        fn well_below_the_cap_the_full_amount_is_gained() {
-            let mut critter = idle_critter(100);
-
-            let gained = critter.gain_energy_saturating(50);
-
-            assert_eq!(gained, 50);
-            assert_eq!(critter.energy(), 150);
-        }
-
-        #[test]
-        fn the_returned_amount_is_only_what_fits_under_the_cap() {
-            let mut critter = idle_critter(MAX_CRITTER_ENERGY - 10);
-
-            let gained = critter.gain_energy_saturating(100);
-
-            assert_eq!(gained, 10);
-            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY);
-        }
-
-        #[test]
-        fn at_the_cap_no_energy_is_gained() {
-            let mut critter = idle_critter(MAX_CRITTER_ENERGY);
-
-            let gained = critter.gain_energy_saturating(100);
-
-            assert_eq!(gained, 0);
-            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY);
-        }
-
-        #[test]
-        fn requesting_zero_returns_zero_and_leaves_energy_unchanged() {
-            let mut critter = idle_critter(100);
-
-            let gained = critter.gain_energy_saturating(0);
-
-            assert_eq!(gained, 0);
-            assert_eq!(critter.energy(), 100);
         }
     }
 }

@@ -16,9 +16,9 @@ const OVERLAP_DETECTION_BUDGET: usize = 20;
 // How many ticks a critter stays marked as overlapping after a confirmed
 // detection. Smooths out the visual flicker caused by the round-robin budget.
 const OVERLAP_INDICATOR_LINGER_TICKS: u32 = 30;
-// How many ticks a victim stays marked as "being stolen from" after a
-// successful energy transfer. Brief — theft is supposed to look like a flash.
-const STOLEN_FROM_INDICATOR_LINGER_TICKS: u32 = 10;
+// How many ticks a victim stays marked as "being eaten" after it is killed.
+// Brief — the kill is supposed to look like a flash.
+const EATEN_INDICATOR_LINGER_TICKS: u32 = 10;
 
 pub struct World {
     width: usize,
@@ -163,7 +163,7 @@ impl World {
         let mut eater_indices: Vec<usize> = Vec::new();
         for (index, critter) in self.critters.iter_mut().enumerate() {
             critter.age_overlap_indicator();
-            critter.age_being_stolen_from_indicator();
+            critter.age_being_eaten_indicator();
             let outcome = critter.tick(allow_split);
             if let Some(mut child) = outcome.child {
                 child.wrap_position(self.width as i32, self.height as i32);
@@ -228,9 +228,8 @@ impl World {
             if let Some(victim_index) = victim_index {
                 let victim_energy = self.critters[victim_index].energy();
                 self.critters[eater_index].gain_energy(victim_energy);
-                self.critters[victim_index].lose_energy(victim_energy);
-                self.critters[victim_index]
-                    .mark_being_stolen_from_for(STOLEN_FROM_INDICATOR_LINGER_TICKS);
+                self.critters[victim_index].die();
+                self.critters[victim_index].mark_being_eaten_for(EATEN_INDICATOR_LINGER_TICKS);
             }
         }
     }
@@ -484,8 +483,8 @@ mod tests {
         }
 
         #[test]
-        fn the_being_stolen_from_indicator_decays_to_off_over_enough_ticks() {
-            // A lone critter cannot be stolen from. Mark it for a few linger
+        fn the_being_eaten_indicator_decays_to_off_over_enough_ticks() {
+            // A lone critter cannot be eaten. Mark it for a few linger
             // ticks; after enough world ticks the indicator should be gone —
             // proving World::tick ages this indicator too.
             let mut critter = Critter::with_genome(
@@ -498,7 +497,7 @@ mod tests {
                 0,
                 Genome::all(Instruction::DoNothing),
             );
-            critter.mark_being_stolen_from_for(3);
+            critter.mark_being_eaten_for(3);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
 
@@ -506,7 +505,7 @@ mod tests {
                 world.tick(true);
             }
 
-            assert!(!world.critters()[0].is_being_stolen_from());
+            assert!(!world.critters()[0].is_being_eaten());
         }
     }
 
@@ -1496,7 +1495,7 @@ mod tests {
         }
 
         #[test]
-        fn a_drained_victim_is_marked_as_being_stolen_from() {
+        fn an_eaten_victim_is_marked_as_being_eaten() {
             let eater = eating_critter(100, 100);
             let victim = idle_critter_with_energy(105, 100, 80);
             let mut world = World::with_critters_and_pellets(
@@ -1508,7 +1507,7 @@ mod tests {
 
             world.tick(true);
 
-            assert!(world.critters()[1].is_being_stolen_from());
+            assert!(world.critters()[1].is_being_eaten());
         }
 
         #[test]
