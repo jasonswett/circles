@@ -336,7 +336,7 @@ fn instruction_index(instruction: Instruction) -> usize {
         Instruction::RepeatPreviousMove => 4,
         Instruction::Split => 5,
         Instruction::Eat => 6,
-        Instruction::MoveRandom => 7,
+        Instruction::TurnRandom => 7,
     }
 }
 
@@ -350,7 +350,7 @@ fn encode(instruction: Instruction) -> u8 {
         Instruction::RepeatPreviousMove => 0b1000,
         Instruction::Split => 0b1010,
         Instruction::Eat => 0b1100,
-        Instruction::MoveRandom => 0b1110,
+        Instruction::TurnRandom => 0b1110,
     }
 }
 
@@ -362,7 +362,7 @@ fn decode(code: u8) -> Instruction {
         0b0110 | 0b0111 => Instruction::DoNothing,
         0b1000 | 0b1001 => Instruction::RepeatPreviousMove,
         0b1010 | 0b1011 => Instruction::Split,
-        0b1110 | 0b1111 => Instruction::MoveRandom,
+        0b1110 | 0b1111 => Instruction::TurnRandom,
         _ => Instruction::Eat,
     }
 }
@@ -598,7 +598,7 @@ mod tests {
                 (Instruction::RepeatPreviousMove, &[0b1000, 0b1001]),
                 (Instruction::Split, &[0b1010, 0b1011]),
                 (Instruction::Eat, &[0b1100, 0b1101]),
-                (Instruction::MoveRandom, &[0b1110, 0b1111]),
+                (Instruction::TurnRandom, &[0b1110, 0b1111]),
             ];
 
             for (instruction, codes) in assignments {

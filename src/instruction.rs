@@ -7,7 +7,7 @@ pub enum Instruction {
     DoNothing,
     TurnLeft,
     TurnRight,
-    MoveRandom,
+    TurnRandom,
     Split,
     Eat,
 }
@@ -22,7 +22,7 @@ impl Instruction {
             20..30 => Instruction::DoNothing,
             30..40 => Instruction::TurnLeft,
             40..50 => Instruction::TurnRight,
-            50..60 => Instruction::MoveRandom,
+            50..60 => Instruction::TurnRandom,
             60 => Instruction::Split,
             _ => Instruction::Eat,
         }
@@ -74,7 +74,7 @@ mod tests {
                 Instruction::DoNothing,
                 Instruction::TurnLeft,
                 Instruction::TurnRight,
-                Instruction::MoveRandom,
+                Instruction::TurnRandom,
             ] {
                 let count = counts.get(&variant).copied().unwrap_or(0);
                 assert!(
