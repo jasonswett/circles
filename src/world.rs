@@ -16,6 +16,13 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
+// A feeding run never lasts longer than this, whether or not the larder ever
+// fills. Without the cap a world whose critters outeat the feed rate would
+// pour food in forever and never rest. At ~60 FPS this is three seconds.
+const FEEDING_RUN_FRAMES: u32 = 180;
+// How long a world waits after a feeding run before the next one, also three
+// seconds, so food arrives as regular deliveries with even gaps.
+const FEEDING_WAIT_FRAMES: u32 = 180;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
@@ -34,10 +41,10 @@ const EATEN_INDICATOR_LINGER_TICKS: u32 = 10;
 /// What the world is doing about food right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeedingState {
-    /// Below its energy budget and taking food on.
-    Filling,
-    /// Holding all the energy its budget allows.
-    Stocked,
+    /// Taking food on, with this many frames left in the run.
+    Filling(u32),
+    /// Between deliveries, with this many frames until the next.
+    Waiting(u32),
 }
 
 pub struct World {
@@ -48,6 +55,8 @@ pub struct World {
     original_total_energy: u32,
     generation: u32,
     overlap_detection_cursor: usize,
+    /// Where this world sits in its feed-then-wait cycle.
+    feeding_frame: u32,
     /// The genome new critters are seeded with, if this world was started
     /// from one. None means each newcomer gets a fresh random genome.
     seed_genome: Option<Genome>,
@@ -70,6 +79,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            feeding_frame: 0,
             seed_genome: None,
         }
     }
@@ -95,6 +105,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            feeding_frame: 0,
             seed_genome: Some(seed_genome),
         }
     }
@@ -145,6 +156,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            feeding_frame: 0,
             seed_genome: None,
         }
     }
@@ -162,19 +174,25 @@ impl World {
         self.pellets.len() < NUM_PELLETS
     }
 
-    /// Where the world stands on food: still taking it on, or stocked.
+    /// Where the world stands on food: taking it on with frames left in the
+    /// run, or waiting with frames until the next delivery.
     pub fn feeding_state(&self) -> FeedingState {
-        if self.needs_more_food() {
-            FeedingState::Filling
+        let cycle = self.feeding_frame % (FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES);
+        if cycle < FEEDING_RUN_FRAMES {
+            FeedingState::Filling(FEEDING_RUN_FRAMES - cycle)
         } else {
-            FeedingState::Stocked
+            FeedingState::Waiting(FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES - cycle)
         }
     }
 
-    /// Takes on food for this frame. A hungry world fills continuously
-    /// until its energy budget is met, then takes on nothing.
+    /// Takes on food for this frame. A world fills until its larder is full
+    /// or its feeding run has run out of time, whichever comes first.
     pub fn feed<R: Rng>(&mut self, rng: &mut R) {
-        self.replenish_pellets(PELLET_BATCH_SIZE, rng);
+        let cycle = self.feeding_frame % (FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES);
+        self.feeding_frame = self.feeding_frame.wrapping_add(1);
+        if cycle < FEEDING_RUN_FRAMES {
+            self.replenish_pellets(PELLET_BATCH_SIZE, rng);
+        }
     }
 
     /// Adds up to `count` pellets, stopping early once the world's energy
@@ -364,6 +382,7 @@ impl World {
             .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
         self.pellets.clear();
+        self.feeding_frame = 0;
         self.generation += 1;
     }
 }
@@ -458,7 +477,10 @@ mod tests {
     // Feeds a world until it holds a full larder, the way the main loop
     // does. Bounded so a broken feed fails the test rather than hanging it.
     fn feed_until_stocked<R: Rng>(world: &mut World, rng: &mut R) {
-        for _ in 0..(NUM_PELLETS / PELLET_BATCH_SIZE + 2) {
+        // Runs alternate with waits, so allow for both phases.
+        let feeding_frames = NUM_PELLETS / PELLET_BATCH_SIZE + 2;
+        let cycle = (FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES) as usize;
+        for _ in 0..(feeding_frames * cycle / FEEDING_RUN_FRAMES as usize + cycle) {
             world.feed(rng);
         }
     }
@@ -915,10 +937,8 @@ mod tests {
 
             feed_until_stocked(&mut world, &mut rng);
 
-            // At least a full larder. Not "exactly NUM_PELLETS": the budget
-            // also covers critters the world has yet to breed, so food keeps
-            // arriving past a full larder until that shortfall is met too.
-            assert!(world.pellets().len() >= NUM_PELLETS);
+            // Deliveries recur, so repeated runs do fill the larder.
+            assert_eq!(world.pellets().len(), NUM_PELLETS);
         }
 
         #[test]
@@ -970,7 +990,7 @@ mod tests {
             assert!(world.pellets().is_empty());
 
             feed_until_stocked(&mut world, &mut rng);
-            assert!(world.pellets().len() >= NUM_PELLETS);
+            assert_eq!(world.pellets().len(), NUM_PELLETS);
             assert_ne!(world.pellets(), original.as_slice());
         }
     }
@@ -1212,10 +1232,58 @@ mod tests {
         }
 
         #[test]
-        fn a_world_with_a_full_larder_reports_itself_stocked() {
-            let world = stocked_world();
+        fn a_world_reports_the_time_left_in_its_feeding_run() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
 
-            assert_eq!(world.feeding_state(), FeedingState::Stocked);
+            assert_eq!(
+                world.feeding_state(),
+                FeedingState::Filling(FEEDING_RUN_FRAMES)
+            );
+
+            // Partway in, the figure has counted down. Checking mid-run as
+            // well as at the boundary pins the arithmetic, which endpoints
+            // alone leave free.
+            for _ in 0..10 {
+                world.feed(&mut rng);
+            }
+            assert_eq!(
+                world.feeding_state(),
+                FeedingState::Filling(FEEDING_RUN_FRAMES - 10)
+            );
+        }
+
+        #[test]
+        fn a_waiting_world_counts_down_toward_its_next_run() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..(FEEDING_RUN_FRAMES + 10) {
+                world.feed(&mut rng);
+            }
+
+            assert_eq!(
+                world.feeding_state(),
+                FeedingState::Waiting(FEEDING_WAIT_FRAMES - 10)
+            );
+        }
+
+        #[test]
+        fn the_feed_and_wait_pattern_repeats_beyond_one_cycle() {
+            // Runs past a full cycle so the wrap is exercised: a cycle length
+            // that is too long would feed once and then wait forever.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            let cycle = FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES;
+
+            let mut filling = 0;
+            for _ in 0..(cycle * 2) {
+                if matches!(world.feeding_state(), FeedingState::Filling(_)) {
+                    filling += 1;
+                }
+                world.feed(&mut rng);
+            }
+
+            assert_eq!(filling, FEEDING_RUN_FRAMES * 2);
         }
 
         #[test]
@@ -1229,6 +1297,85 @@ mod tests {
             }
 
             assert_eq!(world.pellets().len(), before);
+        }
+
+        #[test]
+        fn a_feeding_run_lasts_no_longer_than_its_limit() {
+            // A world whose critters outeat the feed rate would otherwise
+            // fill forever, so a run is bounded by time as well as by target.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+
+            // Through the run and its following wait: the wait adds nothing,
+            // so the run's own limit is what the count reflects.
+            for _ in 0..(FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES) {
+                world.feed(&mut rng);
+            }
+
+            assert_eq!(
+                world.pellets().len(),
+                FEEDING_RUN_FRAMES as usize * PELLET_BATCH_SIZE
+            );
+        }
+
+        #[test]
+        fn a_finished_feeding_run_gives_way_to_a_wait() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..FEEDING_RUN_FRAMES {
+                world.feed(&mut rng);
+            }
+            let after_run = world.pellets().len();
+
+            world.feed(&mut rng);
+
+            assert_eq!(world.pellets().len(), after_run);
+            // One wait frame has already elapsed with that call.
+            assert_eq!(
+                world.feeding_state(),
+                FeedingState::Waiting(FEEDING_WAIT_FRAMES - 1)
+            );
+        }
+
+        #[test]
+        fn a_wait_gives_way_to_another_feeding_run() {
+            // Deliveries recur, so a world whose critters outeat one run gets
+            // another rather than starving after the first.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..(FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES) {
+                world.feed(&mut rng);
+            }
+            let after_first = world.pellets().len();
+
+            // Eat the larder down so the second run has room to show.
+            world.pellets.clear();
+
+            for _ in 0..FEEDING_RUN_FRAMES {
+                world.feed(&mut rng);
+            }
+
+            assert!(after_first > 0);
+            assert_eq!(
+                world.pellets().len(),
+                FEEDING_RUN_FRAMES as usize * PELLET_BATCH_SIZE
+            );
+        }
+
+        #[test]
+        fn a_reset_world_may_feed_again() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..(FEEDING_RUN_FRAMES * 2) {
+                world.feed(&mut rng);
+            }
+            let after_run = world.pellets().len();
+
+            world.reset(&mut rng);
+            world.feed(&mut rng);
+
+            assert!(!world.pellets().is_empty());
+            assert!(after_run > 0);
         }
 
         #[test]
@@ -2263,14 +2410,14 @@ mod tests {
         }
 
         #[test]
-        fn it_feeds_itself_a_full_larder() {
+        fn it_feeds_itself_like_any_other_world() {
             let seed = Genome::all(Instruction::Split);
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
 
             feed_until_stocked(&mut world, &mut rng);
 
-            assert!(world.pellets().len() >= NUM_PELLETS);
+            assert_eq!(world.pellets().len(), NUM_PELLETS);
         }
 
         #[test]
