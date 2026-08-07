@@ -21,8 +21,8 @@ pub const PELLET_BATCH_SIZE: usize = 10;
 // pour food in forever and never rest. At ~60 FPS this is one second.
 const FEEDING_RUN_FRAMES: u32 = 60;
 // How long a world waits after a feeding run before the next one. At ~60 FPS
-// this is five seconds, so food arrives as brief, well-spaced deliveries.
-const FEEDING_WAIT_FRAMES: u32 = 300;
+// this is ten seconds, so food arrives as brief, widely spaced deliveries.
+const FEEDING_WAIT_FRAMES: u32 = 600;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
