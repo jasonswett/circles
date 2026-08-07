@@ -1,4 +1,4 @@
-use crate::{Critter, Genome, Heading, Pellet, PELLET_RADIUS};
+use crate::{Critter, Genome, Heading, Pellet, PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS};
 use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 6;
@@ -191,6 +191,10 @@ impl World {
             critter.wrap_position(self.width as i32, self.height as i32);
         }
         self.critters.extend(children);
+        let (width, height) = (self.width as f32, self.height as f32);
+        for pellet in &mut self.pellets {
+            pellet.drift(width, height);
+        }
         self.resolve_eats(&eater_indices);
         self.detect_critter_overlaps();
     }
@@ -215,8 +219,8 @@ impl World {
 
             // Look for an overlapping pellet first; eat it if found.
             let pellet_position = self.pellets.iter().position(|pellet| {
-                let dx = toroidal_delta(eater_x, pellet.x, width);
-                let dy = toroidal_delta(eater_y, pellet.y, height);
+                let dx = toroidal_delta(eater_x, pellet.x.round() as i32, width);
+                let dy = toroidal_delta(eater_y, pellet.y.round() as i32, height);
                 dx * dx + dy * dy < pellet_eat_distance_squared
             });
             if let Some(position) = pellet_position {
@@ -395,10 +399,17 @@ fn spawn_critter_with_genome<R: Rng>(
     )
 }
 
+/// Emits a pellet from the world's center on a random heading. Food streams
+/// outward from one source rather than appearing evenly across the world, so
+/// where a critter forages matters.
 fn spawn_pellet<R: Rng>(width: usize, height: usize, rng: &mut R) -> Pellet {
+    let angle = rng.gen_range(0.0..std::f32::consts::TAU);
+    let speed = rng.gen_range(PELLET_MIN_DRIFT..=PELLET_MAX_DRIFT);
     Pellet {
-        x: rng.gen_range(PELLET_RADIUS..(width as i32 - PELLET_RADIUS)),
-        y: rng.gen_range(PELLET_RADIUS..(height as i32 - PELLET_RADIUS)),
+        x: width as f32 / 2.0,
+        y: height as f32 / 2.0,
+        dx: angle.cos() * speed,
+        dy: angle.sin() * speed,
     }
 }
 
@@ -733,7 +744,7 @@ mod tests {
 
         #[test]
         fn a_critter_executing_eat_while_overlapping_a_pellet_consumes_it() {
-            let mut world = world_with(eating_critter(100, 100), Pellet { x: 100, y: 100 });
+            let mut world = world_with(eating_critter(100, 100), Pellet::at(100, 100));
 
             world.tick(true);
 
@@ -744,7 +755,7 @@ mod tests {
         fn eating_a_pellet_increases_energy_by_the_pellet_energy_amount() {
             // Start, minus eat-attempt cost, minus the base tick cost, plus
             // the pellet's energy.
-            let mut world = world_with(eating_critter(100, 100), Pellet { x: 100, y: 100 });
+            let mut world = world_with(eating_critter(100, 100), Pellet::at(100, 100));
 
             world.tick(true);
 
@@ -756,7 +767,7 @@ mod tests {
 
         #[test]
         fn a_critter_that_does_not_execute_eat_leaves_an_overlapping_pellet_alone() {
-            let mut world = world_with(idle_critter(100, 100), Pellet { x: 100, y: 100 });
+            let mut world = world_with(idle_critter(100, 100), Pellet::at(100, 100));
 
             world.tick(true);
 
@@ -766,7 +777,7 @@ mod tests {
 
         #[test]
         fn an_eating_critter_that_does_not_overlap_a_pellet_leaves_it_alone() {
-            let mut world = world_with(eating_critter(50, 100), Pellet { x: 100, y: 100 });
+            let mut world = world_with(eating_critter(50, 100), Pellet::at(100, 100));
 
             world.tick(true);
 
@@ -776,10 +787,7 @@ mod tests {
 
         #[test]
         fn a_pellet_just_inside_the_eating_distance_is_consumed() {
-            let pellet = Pellet {
-                x: 100 + (CRITTER_RADIUS + PELLET_RADIUS - 1),
-                y: 100,
-            };
+            let pellet = Pellet::at(100 + (CRITTER_RADIUS + PELLET_RADIUS - 1), 100);
             let mut world = world_with(eating_critter(100, 100), pellet);
 
             world.tick(true);
@@ -790,7 +798,7 @@ mod tests {
         #[test]
         fn a_pellet_outside_the_eating_distance_along_a_dominant_axis_is_not_consumed() {
             // dx=2, dy=15: dx² + dy² = 229 > (CRITTER_RADIUS+PELLET_RADIUS)² = 196.
-            let mut world = world_with(eating_critter(100, 100), Pellet { x: 102, y: 115 });
+            let mut world = world_with(eating_critter(100, 100), Pellet::at(102, 115));
 
             world.tick(true);
 
@@ -799,10 +807,7 @@ mod tests {
 
         #[test]
         fn a_pellet_at_exactly_the_eating_distance_is_not_consumed() {
-            let pellet = Pellet {
-                x: 100 + CRITTER_RADIUS + PELLET_RADIUS,
-                y: 100,
-            };
+            let pellet = Pellet::at(100 + CRITTER_RADIUS + PELLET_RADIUS, 100);
             let mut world = world_with(eating_critter(100, 100), pellet);
 
             world.tick(true);
@@ -825,7 +830,7 @@ mod tests {
                 0,
                 Genome::all(Instruction::Eat),
             );
-            let mut world = world_with(critter, Pellet { x: 100, y: 100 });
+            let mut world = world_with(critter, Pellet::at(100, 100));
 
             world.tick(true);
 
@@ -837,10 +842,7 @@ mod tests {
 
         #[test]
         fn a_critter_near_the_left_edge_can_eat_a_pellet_near_the_right_edge_via_wrap() {
-            let pellet = Pellet {
-                x: TEST_WIDTH as i32 - 2,
-                y: 100,
-            };
+            let pellet = Pellet::at(TEST_WIDTH as i32 - 2, 100);
             let mut world = world_with(eating_critter(2, 100), pellet);
 
             world.tick(true);
@@ -850,10 +852,7 @@ mod tests {
 
         #[test]
         fn a_critter_near_the_top_edge_can_eat_a_pellet_near_the_bottom_edge_via_wrap() {
-            let pellet = Pellet {
-                x: 100,
-                y: TEST_HEIGHT as i32 - 2,
-            };
+            let pellet = Pellet::at(100, TEST_HEIGHT as i32 - 2);
             let mut world = world_with(eating_critter(100, 2), pellet);
 
             world.tick(true);
@@ -864,7 +863,6 @@ mod tests {
 
     mod pellets {
         use super::*;
-        use crate::PELLET_RADIUS;
 
         #[test]
         fn the_world_scatters_the_configured_number_of_pellets_on_creation() {
@@ -876,48 +874,44 @@ mod tests {
         }
 
         #[test]
-        fn every_pellet_spawns_fully_inside_the_world_bounds() {
-            // Use multiple seeds so we exhaust the rng range and reliably catch
-            // boundary-mutation bugs in the spawn rectangle.
-            for seed in 0..50 {
+        fn every_pellet_stays_inside_the_world_as_it_drifts() {
+            // Pellets are emitted at the center and wrap at the edges, so no
+            // amount of drifting should carry one outside the world.
+            for seed in 0..20 {
                 let mut rng = StdRng::seed_from_u64(seed);
-                let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+                let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+                for _ in 0..200 {
+                    world.tick(true);
+                }
                 for pellet in world.pellets() {
-                    assert!(pellet.x >= PELLET_RADIUS);
-                    assert!(pellet.x < TEST_WIDTH as i32 - PELLET_RADIUS);
-                    assert!(pellet.y >= PELLET_RADIUS);
-                    assert!(pellet.y < TEST_HEIGHT as i32 - PELLET_RADIUS);
+                    assert!(pellet.x >= 0.0 && pellet.x < TEST_WIDTH as f32);
+                    assert!(pellet.y >= 0.0 && pellet.y < TEST_HEIGHT as f32);
                 }
             }
         }
 
         #[test]
-        fn pellets_spread_across_the_full_world_width_and_height() {
-            // Across many spawn batches, at least one pellet must land in the right
-            // half and at least one in the bottom half — proving the spawn range
-            // is the full canvas, not a clipped corner.
-            let mut any_right = false;
-            let mut any_bottom = false;
-            let half_width = (TEST_WIDTH as i32) / 2;
-            let half_height = (TEST_HEIGHT as i32) / 2;
-            for seed in 0..50 {
-                let mut rng = StdRng::seed_from_u64(seed);
-                let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-                for pellet in world.pellets() {
-                    if pellet.x >= half_width {
-                        any_right = true;
-                    }
-                    if pellet.y >= half_height {
-                        any_bottom = true;
-                    }
-                }
+        fn drifting_pellets_spread_away_from_the_emitter_in_every_direction() {
+            // Given time to travel, the batch should reach all four quadrants
+            // rather than streaming off in one direction.
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            let (cx, cy) = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+
+            for _ in 0..100 {
+                world.tick(true);
             }
-            assert!(any_right);
-            assert!(any_bottom);
+
+            let quadrants: std::collections::HashSet<(bool, bool)> = world
+                .pellets()
+                .iter()
+                .map(|pellet| (pellet.x > cx, pellet.y > cy))
+                .collect();
+            assert_eq!(quadrants.len(), 4);
         }
 
         #[test]
-        fn reset_re_scatters_the_pellets() {
+        fn reset_re_emits_the_pellets_on_fresh_headings() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
             let original: Vec<_> = world.pellets().to_vec();
@@ -974,11 +968,7 @@ mod tests {
 
         #[test]
         fn total_energy_counts_each_pellet_at_pellet_energy_value() {
-            let pellets = vec![
-                Pellet { x: 10, y: 10 },
-                Pellet { x: 20, y: 20 },
-                Pellet { x: 30, y: 30 },
-            ];
+            let pellets = vec![Pellet::at(10, 10), Pellet::at(20, 20), Pellet::at(30, 30)];
             let world = World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], pellets);
 
             assert_eq!(world.total_energy(), 3 * PELLET_ENERGY);
@@ -996,7 +986,7 @@ mod tests {
                 0,
                 Genome::all(Instruction::DoNothing),
             );
-            let pellet = Pellet { x: 20, y: 20 };
+            let pellet = Pellet::at(20, 20);
             let world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -1070,7 +1060,7 @@ mod tests {
         #[test]
         fn it_does_not_remove_pellets() {
             let dead = critter_with_energy(50, 50, 0);
-            let pellet = Pellet { x: 30, y: 30 };
+            let pellet = Pellet::at(30, 30);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![dead], vec![pellet]);
 
@@ -1175,7 +1165,9 @@ mod tests {
         }
 
         #[test]
-        fn replenished_pellets_land_inside_the_world_bounds() {
+        fn replenished_pellets_emerge_from_the_emitter() {
+            // Replenishment uses the same emitter as the initial batch, so new
+            // food arrives from the center rather than appearing underfoot.
             let mut world = empty_world();
             world.original_total_energy = 50 * PELLET_ENERGY;
             for seed in 0..20 {
@@ -1183,10 +1175,8 @@ mod tests {
                 world.pellets.clear();
                 world.replenish_pellets(&mut rng);
                 for pellet in world.pellets() {
-                    assert!(pellet.x >= PELLET_RADIUS);
-                    assert!(pellet.x < TEST_WIDTH as i32 - PELLET_RADIUS);
-                    assert!(pellet.y >= PELLET_RADIUS);
-                    assert!(pellet.y < TEST_HEIGHT as i32 - PELLET_RADIUS);
+                    assert_eq!(pellet.x, TEST_WIDTH as f32 / 2.0);
+                    assert_eq!(pellet.y, TEST_HEIGHT as f32 / 2.0);
                 }
             }
         }
@@ -1556,7 +1546,7 @@ mod tests {
         fn an_eater_prefers_a_pellet_over_a_touching_critter_when_both_are_in_range() {
             let eater = eating_critter(100, 100);
             let victim = idle_critter_with_energy(105, 100, 80);
-            let pellet = Pellet { x: 100, y: 100 };
+            let pellet = Pellet::at(100, 100);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -1689,6 +1679,91 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.critters()[1].energy(), 0);
+        }
+    }
+
+    mod emanating_pellets {
+        use super::*;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        #[test]
+        fn a_spawned_pellet_starts_at_the_center_of_the_world() {
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let pellet = spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            assert_eq!(pellet.x.round() as i32, TEST_WIDTH as i32 / 2);
+            assert_eq!(pellet.y.round() as i32, TEST_HEIGHT as i32 / 2);
+        }
+
+        #[test]
+        fn spawned_pellets_head_off_in_a_range_of_directions() {
+            // Every pellet leaves the emitter on its own heading, so a batch
+            // spreads rather than travelling as one clump.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let headings: Vec<(i32, i32)> = (0..20)
+                .map(|_| {
+                    let pellet = spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+                    // Scale up so distinct slow velocities do not round together.
+                    ((pellet.dx * 1000.0) as i32, (pellet.dy * 1000.0) as i32)
+                })
+                .collect();
+
+            let distinct: std::collections::HashSet<(i32, i32)> =
+                headings.iter().copied().collect();
+            assert!(
+                distinct.len() > 10,
+                "expected varied headings, got {} distinct out of 20",
+                distinct.len()
+            );
+        }
+
+        #[test]
+        fn a_spawned_pellet_drifts_slowly() {
+            // Slow enough that pellets linger near the emitter rather than
+            // shooting to the edge in a moment.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..20 {
+                let pellet = spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+                let speed = (pellet.dx * pellet.dx + pellet.dy * pellet.dy).sqrt();
+                assert!(
+                    speed > 0.0 && speed <= PELLET_MAX_DRIFT,
+                    "speed {speed} outside the expected drift range"
+                );
+            }
+        }
+
+        #[test]
+        fn ticking_moves_a_pellet_along_its_heading() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            let before = world.pellets()[0];
+
+            world.tick(true);
+
+            let after = world.pellets()[0];
+            assert_eq!(after.x, before.x + before.dx);
+            assert_eq!(after.y, before.y + before.dy);
+        }
+
+        #[test]
+        fn a_drifting_pellet_wraps_around_the_world_edge() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.pellets[0] = Pellet {
+                x: TEST_WIDTH as f32 - 0.5,
+                y: 10.0,
+                dx: 1.0,
+                dy: 0.0,
+            };
+
+            world.tick(true);
+
+            assert!(world.pellets()[0].x < 1.0);
         }
     }
 

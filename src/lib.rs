@@ -21,7 +21,10 @@ pub use fps_counter::FpsCounter;
 pub use genome::{Genome, GenomeParseError};
 pub use heading::Heading;
 pub use instruction::Instruction;
-pub use pellet::{Pellet, PELLET_COLOR, PELLET_ENERGY, PELLET_RADIUS};
+pub use pellet::{
+    Pellet, EMITTER_COLOR, EMITTER_RADIUS, PELLET_COLOR, PELLET_ENERGY, PELLET_MAX_DRIFT,
+    PELLET_MIN_DRIFT, PELLET_RADIUS,
+};
 pub use population_growth_detector::PopulationGrowthDetector;
 pub use renderer::Renderer;
 pub use replenish_countdown::{format_minutes_seconds, frames_until_next_replenish};
