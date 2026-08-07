@@ -1,4 +1,7 @@
-use crate::{Critter, Genome, Heading, Pellet, PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS};
+use crate::{
+    Critter, Genome, Heading, Pellet, PELLETS_PER_POISON, PELLET_MAX_DRIFT, PELLET_MIN_DRIFT,
+    PELLET_RADIUS,
+};
 use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 6;
@@ -55,6 +58,9 @@ pub struct World {
     original_total_energy: u32,
     generation: u32,
     overlap_detection_cursor: usize,
+    /// How many pellets this world has emitted, so every PELLETS_PER_POISON
+    /// of them can be poison.
+    pellets_emitted: usize,
     /// Where this world sits in its feed-then-wait cycle.
     feeding_frame: u32,
     /// The genome new critters are seeded with, if this world was started
@@ -79,6 +85,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            pellets_emitted: 0,
             feeding_frame: 0,
             seed_genome: None,
         }
@@ -105,6 +112,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            pellets_emitted: 0,
             feeding_frame: 0,
             seed_genome: Some(seed_genome),
         }
@@ -156,6 +164,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            pellets_emitted: 0,
             feeding_frame: 0,
             seed_genome: None,
         }
@@ -203,8 +212,49 @@ impl World {
             if !self.needs_more_food() {
                 return;
             }
-            self.pellets
-                .push(spawn_pellet(self.width, self.height, rng));
+            self.pellets_emitted += 1;
+            let poisonous = self.pellets_emitted.is_multiple_of(PELLETS_PER_POISON);
+            self.pellets.push(spawn_pellet_of_kind(
+                self.width,
+                self.height,
+                poisonous,
+                rng,
+            ));
+        }
+    }
+
+    /// Kills any critter touching poison, and consumes the poison with it.
+    /// Contact alone is fatal: a critter need not be trying to eat, and
+    /// nothing in its sensorium warns it.
+    fn resolve_poison(&mut self) {
+        let touch_distance_squared =
+            (CRITTER_RADIUS + PELLET_RADIUS) * (CRITTER_RADIUS + PELLET_RADIUS);
+        let (width, height) = (self.width as i32, self.height as i32);
+        let mut spent: Vec<usize> = Vec::new();
+
+        for critter in &mut self.critters {
+            if critter.energy() == 0 {
+                continue;
+            }
+            let touched = self.pellets.iter().position(|pellet| {
+                if !pellet.poisonous {
+                    return false;
+                }
+                let dx = toroidal_delta(critter.x(), pellet.x.round() as i32, width);
+                let dy = toroidal_delta(critter.y(), pellet.y.round() as i32, height);
+                dx * dx + dy * dy < touch_distance_squared
+            });
+            if let Some(index) = touched {
+                critter.die();
+                if !spent.contains(&index) {
+                    spent.push(index);
+                }
+            }
+        }
+
+        spent.sort_unstable_by(|a, b| b.cmp(a));
+        for index in spent {
+            self.pellets.swap_remove(index);
         }
     }
 
@@ -243,6 +293,7 @@ impl World {
         for pellet in &mut self.pellets {
             pellet.drift(width, height);
         }
+        self.resolve_poison();
         self.resolve_eats(&eater_indices);
         self.detect_critter_overlaps();
     }
@@ -457,7 +508,17 @@ fn spawn_critter_with_genome<R: Rng>(
 /// Emits a pellet from the world's center on a random heading. Food streams
 /// outward from one source rather than appearing evenly across the world, so
 /// where a critter forages matters.
+#[cfg(test)]
 fn spawn_pellet<R: Rng>(width: usize, height: usize, rng: &mut R) -> Pellet {
+    spawn_pellet_of_kind(width, height, false, rng)
+}
+
+fn spawn_pellet_of_kind<R: Rng>(
+    width: usize,
+    height: usize,
+    poisonous: bool,
+    rng: &mut R,
+) -> Pellet {
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
     let speed = rng.gen_range(PELLET_MIN_DRIFT..=PELLET_MAX_DRIFT);
     Pellet {
@@ -465,6 +526,7 @@ fn spawn_pellet<R: Rng>(width: usize, height: usize, rng: &mut R) -> Pellet {
         y: height as f32 / 2.0,
         dx: angle.cos() * speed,
         dy: angle.sin() * speed,
+        poisonous,
     }
 }
 
@@ -2056,6 +2118,164 @@ mod tests {
         }
     }
 
+    mod poison {
+        use super::*;
+        use crate::{Critter, Genome, Heading, Instruction, PELLETS_PER_POISON};
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        fn critter_at(x: i32, y: i32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                u32::MAX, // never fires, so any death is from contact alone
+                1,
+                60,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn one_pellet_in_every_hundred_is_poison() {
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
+            let mut rng = StdRng::seed_from_u64(0);
+
+            world.replenish_pellets(PELLETS_PER_POISON * 3, &mut rng);
+
+            let poison = world.pellets().iter().filter(|p| p.poisonous).count();
+            assert_eq!(poison, 3);
+        }
+
+        #[test]
+        fn a_critter_touching_poison_dies() {
+            // No eating involved: the critter never fires an instruction.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 0);
+        }
+
+        #[test]
+        fn touching_poison_consumes_it() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(world.pellets().is_empty());
+        }
+
+        #[test]
+        fn poison_just_inside_the_touch_radius_kills() {
+            // One pixel closer than the boundary. Pins where the radius
+            // falls, which a poison pellet sitting on the critter does not.
+            let touch = CRITTER_RADIUS + PELLET_RADIUS;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100 + touch - 1, 100)],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 0);
+        }
+
+        #[test]
+        fn poison_at_exactly_the_touch_radius_does_not_kill() {
+            // Tangent, not overlapping: the comparison is strict.
+            let touch = CRITTER_RADIUS + PELLET_RADIUS;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100 + touch, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+        }
+
+        #[test]
+        fn poison_offset_on_both_axes_is_measured_by_true_distance() {
+            // dx = dy = touch - 1 puts the poison well beyond the radius
+            // diagonally even though each axis alone is inside it. Squaring
+            // and summing both axes is what tells them apart.
+            let touch = CRITTER_RADIUS + PELLET_RADIUS;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100 + touch - 1, 100 + touch - 1)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+        }
+
+        #[test]
+        fn poison_kills_across_the_toroidal_wrap() {
+            // The critter sits against the left edge, the poison against the
+            // right: they touch the short way round.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(1, 100)],
+                vec![Pellet::poison_at(TEST_WIDTH as i32 - 2, 100)],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 0);
+        }
+
+        #[test]
+        fn a_critter_clear_of_poison_lives() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(160, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+            assert_eq!(world.pellets().len(), 1);
+        }
+
+        #[test]
+        fn ordinary_food_is_harmless_to_touch() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+            assert_eq!(world.pellets().len(), 1);
+        }
+    }
+
     mod emanating_pellets {
         use super::*;
 
@@ -2136,6 +2356,7 @@ mod tests {
                 y: 10.0,
                 dx: 1.0,
                 dy: 0.0,
+                poisonous: false,
             };
 
             world.tick(true);

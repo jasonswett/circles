@@ -1,4 +1,4 @@
-use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
+use crate::{Critter, Pellet, PELLET_RADIUS};
 
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
@@ -77,7 +77,7 @@ impl Renderer {
             radius: PELLET_RADIUS,
             inner_squared: -1,
         };
-        Self::fill_ring_with_wrap(&disc, &mut canvas, PELLET_COLOR);
+        Self::fill_ring_with_wrap(&disc, &mut canvas, pellet.color());
     }
 
     // The `+` mutations on the offset additions below are equivalent: the loops
@@ -575,6 +575,14 @@ mod tests {
         mod pellet {
             use super::*;
             use crate::{Pellet, PELLET_COLOR, PELLET_RADIUS};
+
+            #[test]
+            fn a_poison_pellet_is_drawn_in_poison_color() {
+                let pellet = Pellet::poison_at(CENTER, CENTER);
+                let buffer = render_pellet(&pellet);
+
+                assert_eq!(pixel_at(&buffer, CENTER, CENTER), crate::POISON_COLOR);
+            }
 
             #[test]
             fn the_center_of_a_pellet_is_drawn_in_pellet_color() {
