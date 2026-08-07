@@ -25,11 +25,11 @@ const REAPER_INTERVAL_FRAMES: u32 = 60;
 // At ~60 FPS this is 60s between top-ups of the world's energy budget.
 const REPLENISH_INTERVAL_FRAMES: u32 = 3600;
 // A world ramps up to its target population instead of spawning it all at
-// once: this many critters are added per second, and only while the frame
-// rate is holding, so a machine that cannot keep up simply settles at a
-// smaller population.
+// once: this many critters are added every SEED_INTERVAL_FRAMES (~100ms at
+// 60 FPS), and only while the frame rate is holding, so a machine that
+// cannot keep up simply settles at a smaller population.
 const SEED_BATCH_SIZE: usize = 100;
-const SEED_INTERVAL_FRAMES: u32 = 60;
+const SEED_INTERVAL_FRAMES: u32 = 6;
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
