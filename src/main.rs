@@ -30,6 +30,11 @@ const REPLENISH_INTERVAL_FRAMES: u32 = 3600;
 // cannot keep up simply settles at a smaller population.
 const SEED_BATCH_SIZE: usize = 100;
 const SEED_INTERVAL_FRAMES: u32 = 6;
+// Seeding stops once a world is this old, whether or not it reached the
+// target. Past this point the population is whatever the world grew or bred
+// on its own, so a slow machine ends up with a smaller world rather than one
+// that keeps topping itself up indefinitely.
+const SEED_WINDOW: Duration = Duration::from_secs(5);
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
@@ -152,6 +157,7 @@ fn main() {
             && frame_counter.is_multiple_of(SEED_INTERVAL_FRAMES)
             && allow_growth
             && !world.is_fully_seeded()
+            && world_started_at.elapsed() < SEED_WINDOW
         {
             world.seed_more_critters(SEED_BATCH_SIZE, &mut rng);
         }
