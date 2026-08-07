@@ -11,6 +11,11 @@ const BIT_FLIP_RATE: f32 = 0.01;
 // reproduction attempt cost something the parent can't recover by eating
 // the child.
 pub const SPLIT_ATTEMPT_COST: u32 = 5;
+// How long a division takes. A critter that fires Split is committed for this
+// many ticks: it cannot act, so it cannot feed, but it still burns energy.
+// Reproduction is therefore a gamble rather than a free action -- a critter
+// that starves partway through dies with nothing to show for it.
+pub const SPLIT_DURATION_TICKS: u32 = 60;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -43,6 +48,8 @@ pub struct Critter {
     // Runtime state rather than genome: a child starts with no memory of its
     // parent's actions. Trimmed to the genome's history window.
     recent_actions: VecDeque<Instruction>,
+    /// Ticks left in an in-progress division, or zero when not dividing.
+    dividing_ticks_remaining: u32,
     rng: SmallRng,
 }
 
@@ -122,6 +129,7 @@ impl Critter {
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
             recent_actions: VecDeque::new(),
+            dividing_ticks_remaining: 0,
             rng,
         }
     }
@@ -169,6 +177,12 @@ impl Critter {
     /// reaper removes it on its next pass.
     pub fn die(&mut self) {
         self.energy = 0;
+    }
+
+    /// Whether the critter is partway through a division, and so committed:
+    /// it fires no instructions until the division finishes or it dies.
+    pub fn is_dividing(&self) -> bool {
+        self.dividing_ticks_remaining > 0
     }
 
     pub fn is_overlapping_critter(&self) -> bool {
@@ -224,6 +238,10 @@ impl Critter {
 
         if self.energy == 0 {
             return TickOutcome::default();
+        }
+
+        if self.is_dividing() {
+            return self.continue_dividing();
         }
 
         let instruction = self.genome.decode_at(self.genome_cursor);
@@ -337,13 +355,9 @@ impl Critter {
             }
             Instruction::Split => {
                 self.energy = self.energy.saturating_sub(SPLIT_ATTEMPT_COST);
-                let child = self.spawn_child();
-                self.energy /= 2;
+                self.dividing_ticks_remaining = SPLIT_DURATION_TICKS;
                 self.last_executed = Some(Instruction::Split);
-                TickOutcome {
-                    child: Some(child),
-                    ..TickOutcome::default()
-                }
+                TickOutcome::default()
             }
             Instruction::Eat => {
                 // The critter can't see its surroundings, so it only signals
@@ -355,6 +369,23 @@ impl Critter {
                     ..TickOutcome::default()
                 }
             }
+        }
+    }
+
+    /// Advances an in-progress division by one tick, yielding the child on
+    /// the tick it completes. The energy cost of the tick is charged either
+    /// way, so a critter can starve mid-division.
+    fn continue_dividing(&mut self) -> TickOutcome {
+        self.dividing_ticks_remaining -= 1;
+        self.energy = self.energy.saturating_sub(1);
+        if self.is_dividing() || self.energy == 0 {
+            return TickOutcome::default();
+        }
+        let child = self.spawn_child();
+        self.energy /= 2;
+        TickOutcome {
+            child: Some(child),
+            ..TickOutcome::default()
         }
     }
 
@@ -394,6 +425,7 @@ impl Critter {
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
             recent_actions: VecDeque::new(),
+            dividing_ticks_remaining: 0,
             rng: child_rng,
         }
     }
@@ -410,6 +442,17 @@ fn jitter_threshold<R: Rng>(rng: &mut R, base: u32) -> u32 {
 mod tests {
     use super::*;
     use crate::{Heading, Instruction};
+
+    // Fires Split and runs the division out, returning the child. Since
+    // division takes time, a single tick no longer yields one.
+    fn divide_fully(critter: &mut Critter) -> Critter {
+        for _ in 0..=SPLIT_DURATION_TICKS {
+            if let Some(child) = critter.tick(true).child {
+                return child;
+            }
+        }
+        panic!("division never finished");
+    }
 
     const START_X: i32 = 10;
     const START_Y: i32 = 10;
@@ -1327,7 +1370,7 @@ mod tests {
             parent.tick(true);
             assert!(!parent.recent_actions.is_empty());
 
-            let child = parent.tick(true).child.expect("parent should split");
+            let child = divide_fully(&mut parent);
 
             assert!(child.recent_actions.is_empty());
         }
@@ -1338,12 +1381,12 @@ mod tests {
         use crate::Genome;
 
         const INITIAL_ENERGY: u32 = 60;
-        // Pre-split energy is the parent's energy at the moment of splitting.
-        // The split flow: pay SPLIT_ATTEMPT_COST, give the child half of what
-        // remains, retain the other half. The base 1-energy tick cost is then
-        // deducted from the parent.
+        // The split flow: pay SPLIT_ATTEMPT_COST and the firing tick's own
+        // energy, then burn one energy for each tick of the division, and
+        // finally halve what remains between parent and child.
         const SPLITTER_ENERGY: u32 = 2 * INITIAL_ENERGY;
-        const POST_ATTEMPT_ENERGY: u32 = SPLITTER_ENERGY - SPLIT_ATTEMPT_COST;
+        const ENERGY_AT_DIVISION_END: u32 =
+            SPLITTER_ENERGY - SPLIT_ATTEMPT_COST - 1 - SPLIT_DURATION_TICKS;
 
         fn splitter() -> Critter {
             let mut critter = Critter::with_genome(
@@ -1361,30 +1404,108 @@ mod tests {
         }
 
         #[test]
-        fn ticking_a_split_instruction_returns_a_child_critter() {
+        fn firing_split_yields_no_child_that_tick() {
+            // Division takes time: firing Split commits the critter to it
+            // rather than producing a child on the spot.
             let mut critter = splitter();
 
             let outcome = critter.tick(true);
 
-            assert!(outcome.child.is_some());
+            assert!(outcome.child.is_none());
+            assert!(critter.is_dividing());
+        }
+
+        #[test]
+        fn a_child_arrives_once_the_division_has_run_its_course() {
+            let mut critter = splitter();
+            critter.tick(true);
+
+            let child = (0..SPLIT_DURATION_TICKS)
+                .find_map(|_| critter.tick(true).child)
+                .expect("division should finish");
+
+            assert!(!critter.is_dividing());
+            assert!(child.energy() > 0);
+        }
+
+        #[test]
+        fn a_dividing_critter_does_not_act() {
+            // It is committed: no moving, so no foraging either.
+            let mut critter = splitter();
+            critter.tick(true);
+            let (x, y) = (critter.x(), critter.y());
+
+            for _ in 0..(SPLIT_DURATION_TICKS - 1) {
+                critter.tick(true);
+            }
+
+            assert!(critter.is_dividing());
+            assert_eq!((critter.x(), critter.y()), (x, y));
+        }
+
+        #[test]
+        fn a_dividing_critter_still_burns_energy() {
+            let mut critter = splitter();
+            critter.tick(true);
+            let before = critter.energy();
+
+            critter.tick(true);
+
+            assert!(critter.energy() < before);
+        }
+
+        #[test]
+        fn a_critter_that_starves_mid_division_produces_no_child() {
+            // The gamble is real: energy spent dividing is lost if the
+            // critter cannot see it through.
+            let mut critter = splitter();
+            critter.tick(true);
+            critter.lose_energy(critter.energy() - 1);
+
+            let children: Vec<_> = (0..(SPLIT_DURATION_TICKS * 2))
+                .filter_map(|_| critter.tick(true).child)
+                .collect();
+
+            assert!(children.is_empty());
+            assert_eq!(critter.energy(), 0);
+        }
+
+        #[test]
+        fn dividing_to_completion_returns_a_child_critter() {
+            let mut critter = splitter();
+
+            let child = divide_fully(&mut critter);
+
+            assert!(child.energy() > 0);
         }
 
         #[test]
         fn the_child_receives_half_of_the_parents_post_attempt_energy() {
             let mut parent = splitter();
 
-            let child = parent.tick(true).child.unwrap();
+            let child = divide_fully(&mut parent);
 
-            assert_eq!(child.energy(), POST_ATTEMPT_ENERGY / 2);
+            assert_eq!(child.energy(), ENERGY_AT_DIVISION_END / 2);
         }
 
         #[test]
-        fn the_parent_keeps_half_of_its_post_attempt_energy_minus_the_instruction_cost() {
+        fn firing_split_charges_the_attempt_cost_without_halving_yet() {
+            // The halving waits for the division to finish; firing only
+            // commits the critter and charges the attempt.
             let mut parent = splitter();
 
             parent.tick(true);
 
-            assert_eq!(parent.energy(), POST_ATTEMPT_ENERGY / 2 - 1);
+            assert_eq!(parent.energy(), SPLITTER_ENERGY - SPLIT_ATTEMPT_COST - 1);
+        }
+
+        #[test]
+        fn the_parent_keeps_half_of_what_survives_the_division() {
+            let mut parent = splitter();
+
+            divide_fully(&mut parent);
+
+            assert_eq!(parent.energy(), ENERGY_AT_DIVISION_END / 2);
         }
 
         #[test]
@@ -1395,8 +1516,7 @@ mod tests {
             let mut parent = splitter();
             let parent_before = parent.energy();
 
-            let outcome = parent.tick(true);
-            let child_energy = outcome.child.unwrap().energy();
+            let child_energy = divide_fully(&mut parent).energy();
             let parent_after = parent.energy();
 
             assert!(parent_after + child_energy <= parent_before - SPLIT_ATTEMPT_COST);
@@ -1406,7 +1526,7 @@ mod tests {
         fn the_child_inherits_the_parents_heading() {
             let mut parent = splitter();
 
-            let child = parent.tick(true).child.unwrap();
+            let child = divide_fully(&mut parent);
 
             assert_eq!(child.heading(), Heading::North);
         }
@@ -1415,7 +1535,7 @@ mod tests {
         fn the_child_inherits_the_parents_initial_energy() {
             let mut parent = splitter();
 
-            let child = parent.tick(true).child.unwrap();
+            let child = divide_fully(&mut parent);
 
             assert_eq!(child.initial_energy(), INITIAL_ENERGY);
         }
@@ -1426,7 +1546,7 @@ mod tests {
             // one pixel south, at (10, 11) — directly behind.
             let mut parent = splitter();
 
-            let child = parent.tick(true).child.unwrap();
+            let child = divide_fully(&mut parent);
 
             assert_eq!((child.x(), child.y()), (START_X, START_Y + 1));
         }
@@ -1446,7 +1566,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let child = parent.tick(true).child.unwrap();
+            let child = divide_fully(&mut parent);
 
             assert_eq!((child.x(), child.y()), (START_X - STEP_SIZE, START_Y));
         }
@@ -1469,7 +1589,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let child = parent.tick(true).child.unwrap();
+            let child = divide_fully(&mut parent);
 
             assert_eq!(
                 (child.x(), child.y()),
@@ -1493,7 +1613,7 @@ mod tests {
             );
             parent.gain_energy(INITIAL_ENERGY);
 
-            let mut child = parent.tick(true).child.unwrap();
+            let mut child = divide_fully(&mut parent);
             let initial_child_x = child.x();
             child.tick(true); // executes the second instruction (MoveForward)
 
@@ -1581,10 +1701,10 @@ mod tests {
             // 4 × initial to leave enough for the second split.
             parent.gain_energy(3 * INITIAL_ENERGY);
 
-            parent.tick(true); // first split
-            let second_outcome = parent.tick(true); // repeat → split again
+            divide_fully(&mut parent); // first split
+            let second_child = divide_fully(&mut parent); // repeat → split again
 
-            assert!(second_outcome.child.is_some());
+            assert!(second_child.energy() > 0);
         }
     }
 
@@ -1609,7 +1729,7 @@ mod tests {
             );
             parent.gain_energy(MAX_CRITTER_ENERGY - 10);
             let parent_genome = parent.genome().clone();
-            let child = parent.tick(true).child.expect("parent should split");
+            let child = divide_fully(&mut parent);
             (parent_genome, child.genome().clone())
         }
 
@@ -1624,7 +1744,7 @@ mod tests {
                         Critter::with_genome(10, 10, Heading::North, 1, 1, 10, seed, genome);
                     parent.gain_energy(MAX_CRITTER_ENERGY - 10);
                     let parent_genome = parent.genome().clone();
-                    let child = parent.tick(true).child.expect("parent should split");
+                    let child = divide_fully(&mut parent);
                     *child.genome() != parent_genome
                 })
                 .count() as u32
@@ -1711,9 +1831,9 @@ mod tests {
         fn when_split_is_allowed_a_child_is_still_produced() {
             let mut parent = ready_to_split(0);
 
-            let outcome = parent.tick(true);
+            let child = divide_fully(&mut parent);
 
-            assert!(outcome.child.is_some());
+            assert!(child.energy() > 0);
         }
     }
 

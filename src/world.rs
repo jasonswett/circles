@@ -693,21 +693,27 @@ mod tests {
         use crate::{Critter, Genome, Heading, Instruction};
 
         #[test]
-        fn a_critter_that_splits_appears_twice_in_the_critter_list_after_a_tick() {
+        fn a_critter_that_splits_appears_twice_once_its_division_finishes() {
+            // Well fed: a division costs the attempt plus one energy per
+            // tick of its duration, so a critter needs reserves to see one
+            // through.
             let splitter = Critter::with_genome(
                 100,
                 100,
                 Heading::North,
                 1,
                 1,
-                60,
+                crate::MAX_CRITTER_ENERGY,
                 0,
                 Genome::all(Instruction::Split),
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![splitter], vec![]);
 
-            world.tick(true);
+            // Division takes time, so the child arrives some ticks later.
+            for _ in 0..=crate::SPLIT_DURATION_TICKS {
+                world.tick(true);
+            }
 
             assert_eq!(world.critters().len(), 2);
         }
