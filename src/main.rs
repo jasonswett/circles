@@ -185,6 +185,7 @@ fn main() {
             Renderer::draw(critter, CRITTER_RADIUS, &mut frame_pixels, width, height);
         }
         let energy_text = format!("Energy: {displayed_total_energy}");
+        let max_energy_text = format!("Max energy: {}", world.original_total_energy());
         let fps_text = format!("FPS: {}", fps_counter.current_fps());
         let population_text = format!("Population: {}", world.critters().len());
         let pellets_text = format!("Pellets: {displayed_pellet_count}");
@@ -205,13 +206,14 @@ fn main() {
             }
         };
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
-        draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
-        draw_text_top_right(&population_text, 2, &mut frame_pixels, width, height);
-        draw_text_top_right(&pellets_text, 3, &mut frame_pixels, width, height);
-        draw_text_top_right(&world_text, 4, &mut frame_pixels, width, height);
-        draw_text_top_right(&time_text, 5, &mut frame_pixels, width, height);
-        draw_text_top_right(&food_text, 6, &mut frame_pixels, width, height);
-        draw_text_top_right(&record_text, 7, &mut frame_pixels, width, height);
+        draw_text_top_right(&max_energy_text, 1, &mut frame_pixels, width, height);
+        draw_text_top_right(&fps_text, 2, &mut frame_pixels, width, height);
+        draw_text_top_right(&population_text, 3, &mut frame_pixels, width, height);
+        draw_text_top_right(&pellets_text, 4, &mut frame_pixels, width, height);
+        draw_text_top_right(&world_text, 5, &mut frame_pixels, width, height);
+        draw_text_top_right(&time_text, 6, &mut frame_pixels, width, height);
+        draw_text_top_right(&food_text, 7, &mut frame_pixels, width, height);
+        draw_text_top_right(&record_text, 8, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
