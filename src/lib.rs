@@ -28,4 +28,4 @@ pub use renderer::Renderer;
 pub use snapshot::format_block as format_snapshot_block;
 pub use stagnation_detector::StagnationDetector;
 pub use text::pixels as text_pixels;
-pub use world::{World, CRITTER_RADIUS, PELLET_BATCH_SIZE};
+pub use world::{FeedingState, World, CRITTER_RADIUS, PELLET_BATCH_SIZE};

@@ -1,5 +1,5 @@
 use circles::{
-    format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
+    format_elapsed, format_snapshot_block, parse_cli, text_pixels, FeedingState, FpsCounter,
     PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, CRITTER_RADIUS,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
@@ -7,6 +7,7 @@ use rand::thread_rng;
 use std::time::{Duration, Instant, SystemTime};
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
+const FRAMES_PER_SECOND: f32 = 60.0;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 const TEXT_COLOR: u32 = 0xFF_FF_FF;
 const TEXT_SIZE: f32 = 28.0;
@@ -187,10 +188,14 @@ fn main() {
         let pellets_text = format!("Pellets: {displayed_pellet_count}");
         let world_text = format!("World: {}", world.generation());
         let time_text = format!("Time: {}", format_elapsed(world_started_at.elapsed()));
-        let food_text = if world.needs_more_food() {
-            "Food: filling"
-        } else {
-            "Food: stocked"
+        let food_text = match world.feeding_state() {
+            FeedingState::Filling(frames) => {
+                format!("Food: filling {:.1}s", frames as f32 / FRAMES_PER_SECOND)
+            }
+            FeedingState::Resting(frames) => {
+                format!("Next food: {:.1}s", frames as f32 / FRAMES_PER_SECOND)
+            }
+            FeedingState::Stocked => "Food: stocked".to_string(),
         };
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
@@ -198,7 +203,7 @@ fn main() {
         draw_text_top_right(&pellets_text, 3, &mut frame_pixels, width, height);
         draw_text_top_right(&world_text, 4, &mut frame_pixels, width, height);
         draw_text_top_right(&time_text, 5, &mut frame_pixels, width, height);
-        draw_text_top_right(food_text, 6, &mut frame_pixels, width, height);
+        draw_text_top_right(&food_text, 6, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
