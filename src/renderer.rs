@@ -1,4 +1,4 @@
-use crate::{Critter, Pellet, EMITTER_COLOR, EMITTER_RADIUS, PELLET_COLOR, PELLET_RADIUS};
+use crate::{Critter, Pellet, PELLET_COLOR, PELLET_RADIUS};
 
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
@@ -63,23 +63,6 @@ impl Renderer {
             inner_squared: -1,
         };
         Self::fill_ring_with_wrap(&dot, &mut canvas, color);
-    }
-
-    /// Draws the emitter that pellets stream out of. Purely a landmark: it
-    /// occupies no space in the simulation and critters cannot sense it.
-    pub fn draw_emitter(buffer: &mut [u32], width: usize, height: usize) {
-        let mut canvas = Canvas {
-            buffer,
-            width,
-            height,
-        };
-        let disc = Ring {
-            cx: width as i32 / 2,
-            cy: height as i32 / 2,
-            radius: EMITTER_RADIUS,
-            inner_squared: -1,
-        };
-        Self::fill_ring_with_wrap(&disc, &mut canvas, EMITTER_COLOR);
     }
 
     pub fn draw_pellet(pellet: &Pellet, buffer: &mut [u32], width: usize, height: usize) {
@@ -586,53 +569,6 @@ mod tests {
                     pixel_at(&buffer, CENTER, RADIUS - 2),
                     critter.genome_color()
                 );
-            }
-        }
-
-        mod emitter {
-            use super::*;
-
-            fn render_emitter() -> Vec<u32> {
-                let mut buffer = vec![0u32; CANVAS * CANVAS];
-                Renderer::draw_emitter(&mut buffer, CANVAS, CANVAS);
-                buffer
-            }
-
-            #[test]
-            fn the_emitter_is_drawn_at_the_middle_of_the_canvas() {
-                let middle = CANVAS as i32 / 2;
-
-                let buffer = render_emitter();
-
-                assert_eq!(pixel_at(&buffer, middle, middle), EMITTER_COLOR);
-            }
-
-            #[test]
-            fn the_emitter_is_a_filled_disc_of_the_emitter_radius() {
-                let middle = CANVAS as i32 / 2;
-
-                let buffer = render_emitter();
-
-                // Just inside the rim is filled; just outside is untouched.
-                assert_eq!(
-                    pixel_at(&buffer, middle + EMITTER_RADIUS - 1, middle),
-                    EMITTER_COLOR
-                );
-                assert_eq!(pixel_at(&buffer, middle + EMITTER_RADIUS + 1, middle), 0);
-            }
-
-            #[test]
-            fn the_emitter_is_centered_on_both_axes() {
-                // A miscentered disc would leave one side of the canvas
-                // covered and the opposite side bare.
-                let middle = CANVAS as i32 / 2;
-                let offset = EMITTER_RADIUS - 1;
-
-                let buffer = render_emitter();
-
-                assert_eq!(pixel_at(&buffer, middle - offset, middle), EMITTER_COLOR);
-                assert_eq!(pixel_at(&buffer, middle, middle - offset), EMITTER_COLOR);
-                assert_eq!(pixel_at(&buffer, middle, middle + offset), EMITTER_COLOR);
             }
         }
 

@@ -30,10 +30,6 @@ impl Pellet {
 }
 
 pub const PELLET_RADIUS: i32 = 2;
-/// Radius of the emitter that pellets stream out of. Purely a source and a
-/// landmark: critters cannot sense it and do not collide with it.
-pub const EMITTER_RADIUS: i32 = 40;
-pub const EMITTER_COLOR: u32 = 0x00_60_20;
 /// Fastest a pellet may drift, in pixels per tick. Slow enough that food
 /// lingers near the emitter rather than crossing the world in moments.
 pub const PELLET_MAX_DRIFT: f32 = 0.35;

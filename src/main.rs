@@ -178,7 +178,6 @@ fn main() {
         frame_counter = frame_counter.wrapping_add(1);
 
         frame_pixels.fill(BACKGROUND_COLOR);
-        Renderer::draw_emitter(&mut frame_pixels, width, height);
         for pellet in world.pellets() {
             Renderer::draw_pellet(pellet, &mut frame_pixels, width, height);
         }
