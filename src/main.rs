@@ -22,8 +22,8 @@ const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 // growing without having failed.
 const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
-// At ~60 FPS this is 60s between top-ups of the world's energy budget.
-const REPLENISH_INTERVAL_FRAMES: u32 = 3600;
+// At ~60 FPS this is 30s between top-ups of the world's energy budget.
+const REPLENISH_INTERVAL_FRAMES: u32 = 1800;
 // A world ramps up to its target population instead of spawning it all at
 // once: this many critters are added every SEED_INTERVAL_FRAMES (~100ms at
 // 60 FPS), and only while the frame rate is holding, so a machine that
