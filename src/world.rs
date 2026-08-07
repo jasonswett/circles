@@ -23,8 +23,8 @@ const NUM_PELLETS: usize = 4000;
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
 // How long a world rests after restoring its energy before it begins
-// feeding again. At ~60 FPS this is ten seconds.
-const FEEDING_PAUSE_FRAMES: u32 = 600;
+// feeding again. At ~60 FPS this is thirty seconds.
+const FEEDING_PAUSE_FRAMES: u32 = 1800;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
