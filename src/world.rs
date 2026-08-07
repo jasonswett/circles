@@ -198,11 +198,22 @@ impl World {
         }
     }
 
-    /// Adds `count` pellets. Nothing bounds the larder: what limits food is
-    /// the length of a feeding run and what the critters eat, so a world
-    /// finds its own level rather than filling to a target.
+    /// Whether the world holds less energy than its budget allows. Counts
+    /// energy inside critters as well as on the ground, so a well-fed
+    /// population slows feeding by itself -- the budget is a thermostat on
+    /// the whole world rather than a ceiling on pellets.
+    pub fn needs_more_food(&self) -> bool {
+        self.total_energy() < self.original_total_energy
+    }
+
+    /// Adds up to `count` pellets, stopping once the world's energy budget is
+    /// met. What limits food is the budget, the length of a feeding run, and
+    /// what the critters eat.
     pub fn replenish_pellets<R: Rng>(&mut self, count: usize, rng: &mut R) {
         for _ in 0..count {
+            if !self.needs_more_food() {
+                return;
+            }
             self.pellets_emitted += 1;
             let poisonous = self.pellets_emitted.is_multiple_of(PELLETS_PER_POISON);
             self.pellets.push(spawn_pellet_of_kind(
@@ -1233,10 +1244,16 @@ mod tests {
 
     mod replenish_pellets {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, PELLET_ENERGY};
+        use crate::{Critter, Genome, Heading, Instruction, MAX_CRITTER_ENERGY, PELLET_ENERGY};
 
+        // Empty of critters and food, but budgeted for a full world, so it
+        // is hungry. The test-only constructor sizes its budget from actual
+        // contents, which for an empty world would be zero.
         fn empty_world() -> World {
-            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
+            world.original_total_energy = full_population_energy() + full_larder_energy();
+            world
         }
 
         #[test]
@@ -1409,6 +1426,56 @@ mod tests {
 
             assert!(!world.pellets().is_empty());
             assert!(after_run > 0);
+        }
+
+        #[test]
+        fn a_world_below_its_energy_budget_takes_on_food() {
+            let world = empty_world();
+
+            assert!(world.needs_more_food());
+        }
+
+        #[test]
+        fn a_world_at_its_energy_budget_takes_on_none() {
+            let mut world = empty_world();
+            world.original_total_energy = 0;
+
+            assert!(!world.needs_more_food());
+        }
+
+        #[test]
+        fn energy_inside_critters_counts_toward_the_budget() {
+            // This is what makes the budget a thermostat rather than a
+            // ceiling on pellets: a world whose critters are fat stops
+            // feeding even with bare ground.
+            let mut world = empty_world();
+            world.original_total_energy = MAX_CRITTER_ENERGY;
+            assert!(world.needs_more_food());
+
+            world.critters.push(Critter::with_genome(
+                10,
+                10,
+                Heading::North,
+                u32::MAX,
+                1,
+                MAX_CRITTER_ENERGY,
+                0,
+                Genome::all(Instruction::DoNothing),
+            ));
+
+            assert!(world.pellets().is_empty());
+            assert!(!world.needs_more_food());
+        }
+
+        #[test]
+        fn replenishing_stops_at_the_energy_budget() {
+            let mut world = empty_world();
+            world.original_total_energy = 3 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            world.replenish_pellets(100, &mut rng);
+
+            assert_eq!(world.pellets().len(), 3);
         }
 
         #[test]
@@ -2015,9 +2082,10 @@ mod tests {
         }
 
         #[test]
-        fn one_pellet_in_every_hundred_is_poison() {
+        fn a_fixed_share_of_emitted_pellets_is_poison() {
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
+            world.original_total_energy = full_population_energy() + full_larder_energy();
             let mut rng = StdRng::seed_from_u64(0);
 
             world.replenish_pellets(PELLETS_PER_POISON * 3, &mut rng);
