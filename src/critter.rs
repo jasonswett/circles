@@ -15,7 +15,7 @@ pub const SPLIT_ATTEMPT_COST: u32 = 5;
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
 // that starves partway through dies with nothing to show for it.
-pub const SPLIT_DURATION_TICKS: u32 = 5;
+pub const SPLIT_DURATION_TICKS: u32 = 1;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -1430,16 +1430,21 @@ mod tests {
 
         #[test]
         fn a_dividing_critter_does_not_act() {
-            // It is committed: no moving, so no foraging either.
+            // It is committed: no moving, so no foraging either. Holds however
+            // brief the division is, so the loop runs the whole of it rather
+            // than stopping a tick short to catch it mid-division.
             let mut critter = splitter();
             critter.tick(true);
             let (x, y) = (critter.x(), critter.y());
 
-            for _ in 0..(SPLIT_DURATION_TICKS - 1) {
+            // Tick through the whole division. Position is compared across
+            // all of it rather than only on ticks that leave the critter
+            // still dividing, which at a one-tick duration is none of them.
+            assert!(critter.is_dividing());
+            for _ in 0..SPLIT_DURATION_TICKS {
                 critter.tick(true);
             }
 
-            assert!(critter.is_dividing());
             assert_eq!((critter.x(), critter.y()), (x, y));
         }
 
