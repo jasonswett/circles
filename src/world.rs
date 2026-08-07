@@ -22,9 +22,10 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
-// How long a world rests after restoring its energy before it begins
-// feeding again. At ~60 FPS this is thirty seconds.
-const FEEDING_PAUSE_FRAMES: u32 = 1800;
+// How often a replenishment begins. At ~60 FPS this is sixty seconds: a
+// world starts feeding on this cadence and keeps at it until its energy is
+// restored, however long that takes.
+const FEEDING_INTERVAL_FRAMES: u32 = 3600;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
@@ -60,8 +61,8 @@ pub struct World {
     /// How many pellets this world has emitted, so every PELLETS_PER_POISON
     /// of them can be poison.
     pellets_emitted: usize,
-    /// Frames left before feeding resumes, or zero while feeding.
-    pause_frames_left: u32,
+    /// Frames until the next replenishment, or zero while feeding.
+    frames_until_feeding: u32,
     /// The genome new critters are seeded with, if this world was started
     /// from one. None means each newcomer gets a fresh random genome.
     seed_genome: Option<Genome>,
@@ -85,7 +86,7 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
-            pause_frames_left: 0,
+            frames_until_feeding: 0,
             seed_genome: None,
         }
     }
@@ -112,7 +113,7 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
-            pause_frames_left: 0,
+            frames_until_feeding: 0,
             seed_genome: Some(seed_genome),
         }
     }
@@ -164,7 +165,7 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
-            pause_frames_left: 0,
+            frames_until_feeding: 0,
             seed_genome: None,
         }
     }
@@ -176,24 +177,24 @@ impl World {
     /// Where the world stands on food: taking it on, or resting with this
     /// many frames until it begins again.
     pub fn feeding_state(&self) -> FeedingState {
-        if self.pause_frames_left > 0 {
-            FeedingState::Waiting(self.pause_frames_left)
+        if self.frames_until_feeding > 0 {
+            FeedingState::Waiting(self.frames_until_feeding)
         } else {
             FeedingState::Filling
         }
     }
 
     /// Takes on food for this frame. A world feeds until its energy is
-    /// restored, then rests for FEEDING_PAUSE_FRAMES before beginning again,
-    /// so deliveries are paced by the world's own state rather than a timer.
+    /// restored, then waits FEEDING_INTERVAL_FRAMES before the next
+    /// replenishment begins.
     pub fn feed<R: Rng>(&mut self, rng: &mut R) {
-        if self.pause_frames_left > 0 {
-            self.pause_frames_left -= 1;
+        if self.frames_until_feeding > 0 {
+            self.frames_until_feeding -= 1;
             return;
         }
         self.replenish_pellets(PELLET_BATCH_SIZE, rng);
         if !self.needs_more_food() {
-            self.pause_frames_left = FEEDING_PAUSE_FRAMES;
+            self.frames_until_feeding = FEEDING_INTERVAL_FRAMES;
         }
     }
 
@@ -434,7 +435,7 @@ impl World {
             .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
         self.pellets.clear();
-        self.pause_frames_left = 0;
+        self.frames_until_feeding = 0;
         self.generation += 1;
     }
 }
@@ -1304,18 +1305,19 @@ mod tests {
             // No timer bounds the run: it lasts exactly as long as the world
             // is short of energy.
             let mut world = empty_world();
-            world.original_total_energy = 40 * PELLET_ENERGY;
+            let target = 4 * PELLET_BATCH_SIZE;
+            world.original_total_energy = target as u32 * PELLET_ENERGY;
             let mut rng = StdRng::seed_from_u64(0);
 
-            // Exactly enough calls to fill it; the pause begins on the last.
-            for _ in 0..(40 / PELLET_BATCH_SIZE) {
+            // Exactly enough calls to fill it; the wait begins on the last.
+            for _ in 0..4 {
                 world.feed(&mut rng);
             }
 
-            assert_eq!(world.pellets().len(), 40);
+            assert_eq!(world.pellets().len(), target);
             assert_eq!(
                 world.feeding_state(),
-                FeedingState::Waiting(FEEDING_PAUSE_FRAMES)
+                FeedingState::Waiting(FEEDING_INTERVAL_FRAMES)
             );
         }
 
@@ -1349,7 +1351,7 @@ mod tests {
             world.pellets.clear();
 
             // One call per paused frame runs the pause out; the next feeds.
-            for _ in 0..FEEDING_PAUSE_FRAMES {
+            for _ in 0..FEEDING_INTERVAL_FRAMES {
                 world.feed(&mut rng);
             }
             assert!(world.pellets().is_empty());
