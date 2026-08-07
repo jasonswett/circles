@@ -18,8 +18,8 @@ const NUM_PELLETS: usize = 4000;
 pub const PELLET_BATCH_SIZE: usize = 10;
 // A feeding run never lasts longer than this, whether or not the larder ever
 // fills. Without the cap a world whose critters outeat the feed rate would
-// pour food in forever and never rest. At ~60 FPS this is one second.
-const FEEDING_RUN_FRAMES: u32 = 60;
+// pour food in forever and never rest. At ~60 FPS this is five seconds.
+const FEEDING_RUN_FRAMES: u32 = 300;
 // How long a world waits after a feeding run before the next one. At ~60 FPS
 // this is ten seconds, so food arrives as brief, widely spaced deliveries.
 const FEEDING_WAIT_FRAMES: u32 = 600;
