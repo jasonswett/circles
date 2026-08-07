@@ -61,5 +61,5 @@ pub const PELLET_MIN_DRIFT: f32 = 0.1;
 pub const PELLET_COLOR: u32 = 0x00_FF_00;
 pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
-pub const PELLETS_PER_POISON: usize = 100;
+pub const PELLETS_PER_POISON: usize = 50;
 pub const PELLET_ENERGY: u32 = 100;
