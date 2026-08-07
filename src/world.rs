@@ -68,18 +68,15 @@ impl World {
         let critters: Vec<Critter> = (0..SEED_POPULATION)
             .map(|_| spawn_critter(width, height, rng))
             .collect();
-        let pellets: Vec<Pellet> = (0..NUM_PELLETS)
-            .map(|_| spawn_pellet(width, height, rng))
-            .collect();
-        // Budget for the population the world is growing toward, not the seed
-        // it starts with: replenishment restores this total, so sizing it to
-        // the seed would starve the world it is trying to become.
-        let original_total_energy = full_population_energy() + pellet_total_energy(&pellets);
+        // Budget for what the world is growing toward, not what it starts
+        // with: both the population and the larder fill up over time, and a
+        // budget sized to the opening moment would never top either up.
+        let original_total_energy = full_population_energy() + full_larder_energy();
         Self {
             width,
             height,
             critters,
-            pellets,
+            pellets: Vec::new(),
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
@@ -100,15 +97,12 @@ impl World {
         let critters: Vec<Critter> = (0..SEED_POPULATION)
             .map(|_| spawn_critter_with_genome(width, height, seed_genome.clone(), rng))
             .collect();
-        let pellets: Vec<Pellet> = (0..NUM_PELLETS)
-            .map(|_| spawn_pellet(width, height, rng))
-            .collect();
-        let original_total_energy = full_population_energy() + pellet_total_energy(&pellets);
+        let original_total_energy = full_population_energy() + full_larder_energy();
         Self {
             width,
             height,
             critters,
-            pellets,
+            pellets: Vec::new(),
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
@@ -393,9 +387,8 @@ impl World {
         self.critters = (0..SEED_POPULATION)
             .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
-        self.pellets = (0..NUM_PELLETS)
-            .map(|_| spawn_pellet(self.width, self.height, rng))
-            .collect();
+        self.pellets.clear();
+        self.feeding_frame = 0;
         self.generation += 1;
     }
 }
@@ -405,6 +398,7 @@ fn critter_total_energy(critters: &[Critter]) -> u32 {
     critters.iter().map(|c| c.energy()).sum()
 }
 
+#[cfg(test)]
 fn pellet_total_energy(pellets: &[Pellet]) -> u32 {
     pellets.len() as u32 * crate::PELLET_ENERGY
 }
@@ -421,6 +415,13 @@ fn toroidal_delta(a: i32, b: i32, size: i32) -> i32 {
 /// The energy a full target population would hold. Used to size a world's
 /// budget up front, so replenishment aims at the population being grown
 /// toward rather than whatever happens to be alive at construction.
+/// The energy a world's food stocks hold when full. Like the population
+/// budget, this is what the world is filling toward rather than what it
+/// holds, so a world that starts empty still knows to feed itself.
+fn full_larder_energy() -> u32 {
+    NUM_PELLETS as u32 * crate::PELLET_ENERGY
+}
+
 fn full_population_energy() -> u32 {
     NUM_CRITTERS as u32 * INITIAL_ENERGY
 }
@@ -478,6 +479,16 @@ mod tests {
     use super::*;
     use rand::rngs::StdRng;
     use rand::SeedableRng;
+
+    // Feeds a world until it holds food, the way the main loop does.
+    // Bounded so a broken feeding cycle fails rather than hangs.
+    fn feed_until_stocked<R: Rng>(world: &mut World, rng: &mut R) {
+        let cycle = FEEDING_SPELL_FRAMES + FEEDING_REST_FRAMES;
+        let spells = NUM_PELLETS / (FEEDING_SPELL_FRAMES as usize * PELLET_BATCH_SIZE) + 2;
+        for _ in 0..(cycle as usize * spells) {
+            world.feed(rng);
+        }
+    }
 
     const TEST_WIDTH: usize = 200;
     const TEST_HEIGHT: usize = 200;
@@ -925,12 +936,16 @@ mod tests {
         use super::*;
 
         #[test]
-        fn the_world_scatters_the_configured_number_of_pellets_on_creation() {
+        fn the_world_feeds_itself_a_full_larder() {
             let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
 
-            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            feed_until_stocked(&mut world, &mut rng);
 
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
+            // At least a full larder. Not "exactly NUM_PELLETS": the budget
+            // also covers critters the world has yet to breed, so food keeps
+            // arriving past a full larder until that shortfall is met too.
+            assert!(world.pellets().len() >= NUM_PELLETS);
         }
 
         #[test]
@@ -956,6 +971,7 @@ mod tests {
             // rather than streaming off in one direction.
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            feed_until_stocked(&mut world, &mut rng);
             let (cx, cy) = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
 
             for _ in 0..100 {
@@ -971,14 +987,17 @@ mod tests {
         }
 
         #[test]
-        fn reset_re_emits_the_pellets_on_fresh_headings() {
+        fn reset_empties_the_larder_and_feeds_it_afresh() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            feed_until_stocked(&mut world, &mut rng);
             let original: Vec<_> = world.pellets().to_vec();
 
             world.reset(&mut rng);
+            assert!(world.pellets().is_empty());
 
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
+            feed_until_stocked(&mut world, &mut rng);
+            assert!(world.pellets().len() >= NUM_PELLETS);
             assert_ne!(world.pellets(), original.as_slice());
         }
     }
@@ -1166,6 +1185,45 @@ mod tests {
 
         fn empty_world() -> World {
             World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
+        }
+
+        #[test]
+        fn a_new_world_starts_empty_of_food_and_feeds_like_any_other() {
+            // The opening larder is filled by the same metered spells as
+            // every later one, not handed over whole at construction.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            assert!(world.pellets().is_empty());
+            assert!(world.needs_more_food());
+        }
+
+        #[test]
+        fn a_reset_world_starts_empty_of_food_too() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            for _ in 0..500 {
+                world.feed(&mut rng);
+            }
+
+            world.reset(&mut rng);
+
+            assert!(world.pellets().is_empty());
+        }
+
+        #[test]
+        fn a_new_worlds_budget_covers_a_full_larder() {
+            // Sized for the food the world is filling toward rather than what
+            // it holds, or an empty world would consider itself stocked.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            assert_eq!(
+                world.original_total_energy(),
+                full_population_energy() + full_larder_energy()
+            );
         }
 
         #[test]
@@ -1927,6 +1985,7 @@ mod tests {
 
     mod emanating_pellets {
         use super::*;
+
         use rand::rngs::StdRng;
         use rand::SeedableRng;
 
@@ -1984,6 +2043,7 @@ mod tests {
         fn ticking_moves_a_pellet_along_its_heading() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.feed(&mut rng);
             let before = world.pellets()[0];
 
             world.tick(true);
@@ -1997,6 +2057,7 @@ mod tests {
         fn a_drifting_pellet_wraps_around_the_world_edge() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.feed(&mut rng);
             world.pellets[0] = Pellet {
                 x: TEST_WIDTH as f32 - 0.5,
                 y: 10.0,
@@ -2282,13 +2343,14 @@ mod tests {
         }
 
         #[test]
-        fn it_creates_the_usual_number_of_pellets() {
+        fn it_feeds_itself_a_full_larder() {
             let seed = Genome::all(Instruction::Split);
             let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
 
-            let world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
+            feed_until_stocked(&mut world, &mut rng);
 
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
+            assert!(world.pellets().len() >= NUM_PELLETS);
         }
 
         #[test]
