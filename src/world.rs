@@ -3,7 +3,14 @@ use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 6;
 
+// The population a world grows toward. It does not start there: spawning
+// thousands of critters at once stalls the first seconds of a run, so a world
+// begins at SEED_POPULATION and is topped up gradually while the frame rate
+// holds.
 const NUM_CRITTERS: usize = 4000;
+// How many critters a world starts with. Above MIN_POPULATION so a freshly
+// seeded world is not immediately judged too small and reset.
+const SEED_POPULATION: usize = 100;
 const NUM_PELLETS: usize = 4000;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
@@ -28,17 +35,23 @@ pub struct World {
     original_total_energy: u32,
     generation: u32,
     overlap_detection_cursor: usize,
+    /// The genome new critters are seeded with, if this world was started
+    /// from one. None means each newcomer gets a fresh random genome.
+    seed_genome: Option<Genome>,
 }
 
 impl World {
     pub fn new<R: Rng>(width: usize, height: usize, rng: &mut R) -> Self {
-        let critters: Vec<Critter> = (0..NUM_CRITTERS)
+        let critters: Vec<Critter> = (0..SEED_POPULATION)
             .map(|_| spawn_critter(width, height, rng))
             .collect();
         let pellets: Vec<Pellet> = (0..NUM_PELLETS)
             .map(|_| spawn_pellet(width, height, rng))
             .collect();
-        let original_total_energy = critter_total_energy(&critters) + pellet_total_energy(&pellets);
+        // Budget for the population the world is growing toward, not the seed
+        // it starts with: replenishment restores this total, so sizing it to
+        // the seed would starve the world it is trying to become.
+        let original_total_energy = full_population_energy() + pellet_total_energy(&pellets);
         Self {
             width,
             height,
@@ -47,6 +60,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            seed_genome: None,
         }
     }
 
@@ -59,13 +73,13 @@ impl World {
         seed_genome: Genome,
         rng: &mut R,
     ) -> Self {
-        let critters: Vec<Critter> = (0..NUM_CRITTERS)
+        let critters: Vec<Critter> = (0..SEED_POPULATION)
             .map(|_| spawn_critter_with_genome(width, height, seed_genome.clone(), rng))
             .collect();
         let pellets: Vec<Pellet> = (0..NUM_PELLETS)
             .map(|_| spawn_pellet(width, height, rng))
             .collect();
-        let original_total_energy = critter_total_energy(&critters) + pellet_total_energy(&pellets);
+        let original_total_energy = full_population_energy() + pellet_total_energy(&pellets);
         Self {
             width,
             height,
@@ -74,6 +88,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            seed_genome: Some(seed_genome),
         }
     }
 
@@ -123,6 +138,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            seed_genome: None,
         }
     }
 
@@ -279,6 +295,28 @@ impl World {
         self.critters.retain(|c| c.energy() > 0);
     }
 
+    /// Adds up to `count` more critters, stopping at the target population.
+    /// The caller decides when the world can afford to grow. Critters carry
+    /// the world's seed genome when it has one, so a `--genome` run stays a
+    /// monoculture as it ramps rather than diluting with random newcomers.
+    pub fn seed_more_critters<R: Rng>(&mut self, count: usize, rng: &mut R) {
+        let room = NUM_CRITTERS.saturating_sub(self.critters.len());
+        for _ in 0..count.min(room) {
+            let critter = match &self.seed_genome {
+                Some(genome) => {
+                    spawn_critter_with_genome(self.width, self.height, genome.clone(), rng)
+                }
+                None => spawn_critter(self.width, self.height, rng),
+            };
+            self.critters.push(critter);
+        }
+    }
+
+    /// Whether the world has finished ramping up to its target population.
+    pub fn is_fully_seeded(&self) -> bool {
+        self.critters.len() >= NUM_CRITTERS
+    }
+
     pub fn population_too_low(&self) -> bool {
         self.critters.len() < MIN_POPULATION
     }
@@ -288,7 +326,7 @@ impl World {
     }
 
     pub fn reset<R: Rng>(&mut self, rng: &mut R) {
-        self.critters = (0..NUM_CRITTERS)
+        self.critters = (0..SEED_POPULATION)
             .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
         self.pellets = (0..NUM_PELLETS)
@@ -298,6 +336,7 @@ impl World {
     }
 }
 
+#[cfg(test)]
 fn critter_total_energy(critters: &[Critter]) -> u32 {
     critters.iter().map(|c| c.energy()).sum()
 }
@@ -313,6 +352,13 @@ fn toroidal_delta(a: i32, b: i32, size: i32) -> i32 {
     } else {
         raw - size
     }
+}
+
+/// The energy a full target population would hold. Used to size a world's
+/// budget up front, so replenishment aims at the population being grown
+/// toward rather than whatever happens to be alive at construction.
+fn full_population_energy() -> u32 {
+    NUM_CRITTERS as u32 * INITIAL_ENERGY
 }
 
 fn spawn_critter<R: Rng>(width: usize, height: usize, rng: &mut R) -> Critter {
@@ -367,15 +413,6 @@ mod tests {
 
     mod new {
         use super::*;
-
-        #[test]
-        fn it_creates_the_configured_number_of_critters() {
-            let mut rng = StdRng::seed_from_u64(0);
-
-            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-
-            assert_eq!(world.critters().len(), NUM_CRITTERS);
-        }
 
         #[test]
         fn each_critter_starts_with_full_energy() {
@@ -1047,12 +1084,15 @@ mod tests {
         use super::*;
 
         #[test]
-        fn it_returns_the_total_energy_present_at_construction() {
+        fn it_exceeds_the_energy_present_in_a_freshly_seeded_world() {
+            // The budget is sized for the target population, so a world that
+            // has only just started seeding holds less than its budget — the
+            // gap is the room it has to grow into.
             let mut rng = StdRng::seed_from_u64(0);
 
             let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
 
-            assert_eq!(world.original_total_energy(), world.total_energy());
+            assert!(world.original_total_energy() > world.total_energy());
         }
 
         #[test]
@@ -1649,6 +1689,98 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.critters()[1].energy(), 0);
+        }
+    }
+
+    mod seeding {
+        use super::*;
+        use crate::Instruction;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        #[test]
+        fn a_new_world_starts_with_a_seed_population_rather_than_the_full_target() {
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            assert_eq!(world.critters().len(), SEED_POPULATION);
+        }
+
+        #[test]
+        fn a_new_worlds_energy_budget_covers_the_full_target_population() {
+            // Replenishment tops the world back up to its original budget, so
+            // that budget must reflect the population the world is growing
+            // toward — not the handful it starts with, which would starve it.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            let full_population_energy = NUM_CRITTERS as u32 * INITIAL_ENERGY;
+            assert!(world.original_total_energy >= full_population_energy);
+        }
+
+        #[test]
+        fn seeding_more_critters_adds_them_to_the_population() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            let before = world.critters().len();
+
+            world.seed_more_critters(10, &mut rng);
+
+            assert_eq!(world.critters().len(), before + 10);
+        }
+
+        #[test]
+        fn seeding_stops_at_the_target_population() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            world.seed_more_critters(NUM_CRITTERS * 2, &mut rng);
+
+            assert_eq!(world.critters().len(), NUM_CRITTERS);
+        }
+
+        #[test]
+        fn a_seed_genome_world_seeds_newcomers_with_that_same_genome() {
+            // A --genome run should stay a monoculture as it ramps, rather
+            // than diluting itself with randomly generated newcomers.
+            let mut rng = StdRng::seed_from_u64(0);
+            let seed = Genome::all(Instruction::Split);
+            let mut world =
+                World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed.clone(), &mut rng);
+
+            world.seed_more_critters(10, &mut rng);
+
+            assert!(world
+                .critters()
+                .iter()
+                .all(|critter| *critter.genome() == seed));
+        }
+
+        #[test]
+        fn a_world_without_a_seed_genome_seeds_newcomers_randomly() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+            world.seed_more_critters(10, &mut rng);
+
+            let first = world.critters()[0].genome().clone();
+            assert!(world
+                .critters()
+                .iter()
+                .any(|critter| *critter.genome() != first));
+        }
+
+        #[test]
+        fn a_world_at_its_target_population_is_done_seeding() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            assert!(!world.is_fully_seeded());
+
+            world.seed_more_critters(NUM_CRITTERS, &mut rng);
+
+            assert!(world.is_fully_seeded());
         }
     }
 

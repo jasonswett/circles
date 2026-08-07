@@ -24,6 +24,12 @@ const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
 // At ~60 FPS this is 60s between top-ups of the world's energy budget.
 const REPLENISH_INTERVAL_FRAMES: u32 = 3600;
+// A world ramps up to its target population instead of spawning it all at
+// once: this many critters are added per second, and only while the frame
+// rate is holding, so a machine that cannot keep up simply settles at a
+// smaller population.
+const SEED_BATCH_SIZE: usize = 100;
+const SEED_INTERVAL_FRAMES: u32 = 60;
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
@@ -141,6 +147,13 @@ fn main() {
             && allow_growth
         {
             world.replenish_pellets(&mut rng);
+        }
+        if frame_counter > 0
+            && frame_counter.is_multiple_of(SEED_INTERVAL_FRAMES)
+            && allow_growth
+            && !world.is_fully_seeded()
+        {
+            world.seed_more_critters(SEED_BATCH_SIZE, &mut rng);
         }
         if last_snapshot_at.elapsed() >= SNAPSHOT_INTERVAL {
             if let Some(genome) = world.dominant_genome() {
