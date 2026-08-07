@@ -14,6 +14,9 @@ const NUM_CRITTERS: usize = 4000;
 // How many critters a world starts with. Above MIN_POPULATION so a freshly
 // seeded world is not immediately judged too small and reset.
 const SEED_POPULATION: usize = 100;
+// How much food a world's energy budget is sized for. Not a ceiling on
+// pellets: nothing caps the larder, which settles wherever consumption meets
+// the feed rate.
 const NUM_PELLETS: usize = 4000;
 // How many pellets a single replenishment call may add. Small, because the
 // call happens often: food seeps into the world a few at a time rather than
@@ -174,15 +177,6 @@ impl World {
         self.original_total_energy
     }
 
-    /// Whether the world holds fewer pellets than a full larder, and so
-    /// should keep taking food on. Measured in pellets rather than total
-    /// energy: energy sitting inside a critter is not food a critter can
-    /// find, and a budget covering critters the world never breeds would
-    /// leave it hungry forever.
-    pub fn needs_more_food(&self) -> bool {
-        self.pellets.len() < NUM_PELLETS
-    }
-
     /// Where the world stands on food: taking it on with frames left in the
     /// run, or waiting with frames until the next delivery.
     pub fn feeding_state(&self) -> FeedingState {
@@ -204,14 +198,11 @@ impl World {
         }
     }
 
-    /// Adds up to `count` pellets, stopping early once the world's energy
-    /// budget is met. Called often with a small count so food trickles in the
-    /// way critters do, rather than a whole deficit landing in one frame.
+    /// Adds `count` pellets. Nothing bounds the larder: what limits food is
+    /// the length of a feeding run and what the critters eat, so a world
+    /// finds its own level rather than filling to a target.
     pub fn replenish_pellets<R: Rng>(&mut self, count: usize, rng: &mut R) {
         for _ in 0..count {
-            if !self.needs_more_food() {
-                return;
-            }
             self.pellets_emitted += 1;
             let poisonous = self.pellets_emitted.is_multiple_of(PELLETS_PER_POISON);
             self.pellets.push(spawn_pellet_of_kind(
@@ -538,7 +529,7 @@ mod tests {
 
     // Feeds a world until it holds a full larder, the way the main loop
     // does. Bounded so a broken feed fails the test rather than hanging it.
-    fn feed_until_stocked<R: Rng>(world: &mut World, rng: &mut R) {
+    fn feed_a_while<R: Rng>(world: &mut World, rng: &mut R) {
         // Runs alternate with waits, so allow for both phases.
         let feeding_frames = NUM_PELLETS / PELLET_BATCH_SIZE + 2;
         let cycle = (FEEDING_RUN_FRAMES + FEEDING_WAIT_FRAMES) as usize;
@@ -999,14 +990,14 @@ mod tests {
         use super::*;
 
         #[test]
-        fn the_world_feeds_itself_a_full_larder() {
+        fn the_world_feeds_itself_from_empty() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
 
-            feed_until_stocked(&mut world, &mut rng);
+            feed_a_while(&mut world, &mut rng);
 
             // Deliveries recur, so repeated runs do fill the larder.
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
+            assert!(!world.pellets().is_empty());
         }
 
         #[test]
@@ -1032,7 +1023,7 @@ mod tests {
             // rather than streaming off in one direction.
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-            feed_until_stocked(&mut world, &mut rng);
+            feed_a_while(&mut world, &mut rng);
             let (cx, cy) = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
 
             for _ in 0..100 {
@@ -1051,14 +1042,14 @@ mod tests {
         fn reset_empties_the_larder_and_feeds_it_afresh() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-            feed_until_stocked(&mut world, &mut rng);
+            feed_a_while(&mut world, &mut rng);
             let original: Vec<_> = world.pellets().to_vec();
 
             world.reset(&mut rng);
             assert!(world.pellets().is_empty());
 
-            feed_until_stocked(&mut world, &mut rng);
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
+            feed_a_while(&mut world, &mut rng);
+            assert!(!world.pellets().is_empty());
             assert_ne!(world.pellets(), original.as_slice());
         }
     }
@@ -1242,19 +1233,7 @@ mod tests {
 
     mod replenish_pellets {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, MAX_CRITTER_ENERGY, PELLET_ENERGY};
-
-        // A world holding a full larder, so it wants no more food.
-        fn stocked_world() -> World {
-            let mut world = empty_world();
-            let mut rng = StdRng::seed_from_u64(0);
-            for _ in 0..NUM_PELLETS {
-                world
-                    .pellets
-                    .push(super::spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng));
-            }
-            world
-        }
+        use crate::{Critter, Genome, Heading, Instruction, PELLET_ENERGY};
 
         fn empty_world() -> World {
             World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
@@ -1269,7 +1248,6 @@ mod tests {
             let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
 
             assert!(world.pellets().is_empty());
-            assert!(world.needs_more_food());
         }
 
         #[test]
@@ -1355,19 +1333,6 @@ mod tests {
         }
 
         #[test]
-        fn a_world_with_a_full_larder_takes_on_no_food_at_all() {
-            let mut world = stocked_world();
-            let before = world.pellets().len();
-            let mut rng = StdRng::seed_from_u64(0);
-
-            for _ in 0..100 {
-                world.feed(&mut rng);
-            }
-
-            assert_eq!(world.pellets().len(), before);
-        }
-
-        #[test]
         fn a_feeding_run_lasts_no_longer_than_its_limit() {
             // A world whose critters outeat the feed rate would otherwise
             // fill forever, so a run is bounded by time as well as by target.
@@ -1447,63 +1412,6 @@ mod tests {
         }
 
         #[test]
-        fn a_world_short_of_pellets_wants_more_food() {
-            let world = empty_world();
-
-            assert!(world.needs_more_food());
-        }
-
-        #[test]
-        fn a_world_holding_a_full_larder_wants_no_more_food() {
-            let mut world = empty_world();
-            let mut rng = StdRng::seed_from_u64(0);
-            for _ in 0..NUM_PELLETS {
-                world
-                    .pellets
-                    .push(super::spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng));
-            }
-
-            assert!(!world.needs_more_food());
-        }
-
-        #[test]
-        fn hunger_ignores_energy_held_inside_critters() {
-            // Food is measured in pellets, not total energy. A world whose
-            // critters are fat but whose ground is bare is still hungry --
-            // the old energy test called that stocked, and a world whose
-            // budget covered critters it never bred stayed hungry forever.
-            let mut world = empty_world();
-            let mut rng = StdRng::seed_from_u64(0);
-            for _ in 0..NUM_PELLETS {
-                world
-                    .pellets
-                    .push(super::spawn_pellet(TEST_WIDTH, TEST_HEIGHT, &mut rng));
-            }
-            let stocked_with_no_critters = world.needs_more_food();
-
-            world.critters.push(Critter::with_genome(
-                10,
-                10,
-                Heading::North,
-                1,
-                1,
-                MAX_CRITTER_ENERGY,
-                0,
-                Genome::all(Instruction::DoNothing),
-            ));
-
-            assert!(!stocked_with_no_critters);
-            assert_eq!(world.needs_more_food(), stocked_with_no_critters);
-        }
-
-        #[test]
-        fn a_world_at_its_larder_target_wants_no_more_food() {
-            let world = stocked_world();
-
-            assert!(!world.needs_more_food());
-        }
-
-        #[test]
         fn replenishing_adds_only_a_small_batch_at_a_time() {
             // Food trickles in the way critters do, rather than a whole
             // deficit's worth landing in one frame.
@@ -1517,31 +1425,22 @@ mod tests {
         }
 
         #[test]
-        fn replenishing_stops_once_the_larder_is_full() {
+        fn repeated_small_batches_accumulate_without_bound() {
+            // Nothing caps the larder: what limits food in a running world is
+            // the length of a feeding run and what the critters eat.
             let mut world = empty_world();
             let mut rng = StdRng::seed_from_u64(0);
+            let batches = NUM_PELLETS / PELLET_BATCH_SIZE + 2;
 
-            // Ask for far more than a full larder holds.
-            world.replenish_pellets(NUM_PELLETS * 2, &mut rng);
-
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
-        }
-
-        #[test]
-        fn repeated_small_batches_fill_a_world_to_its_larder() {
-            let mut world = empty_world();
-            let mut rng = StdRng::seed_from_u64(0);
-
-            for _ in 0..(NUM_PELLETS / PELLET_BATCH_SIZE + 2) {
+            for _ in 0..batches {
                 world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
             }
 
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
-            assert!(!world.needs_more_food());
+            assert_eq!(world.pellets().len(), batches * PELLET_BATCH_SIZE);
         }
 
         // Fills a world the way the main loop does: many small batches.
-        // Bounded rather than looping on needs_more_food, so a broken
+        // Bounded rather than looping on a condition, so a broken
         // condition fails the test instead of hanging it.
         fn fill_to_target<R: Rng>(world: &mut World, rng: &mut R) {
             for _ in 0..(NUM_PELLETS / PELLET_BATCH_SIZE + 2) {
@@ -1566,17 +1465,6 @@ mod tests {
         }
 
         #[test]
-        fn it_does_not_add_pellets_when_the_larder_is_already_full() {
-            let mut world = stocked_world();
-            let pellets_before = world.pellets().len();
-            let mut rng = StdRng::seed_from_u64(1);
-
-            world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
-
-            assert_eq!(world.pellets().len(), pellets_before);
-        }
-
-        #[test]
         fn it_adds_enough_pellets_to_bring_total_energy_back_to_the_original() {
             let target = 10 * PELLET_ENERGY;
             let mut world = world_with_target(target);
@@ -1587,17 +1475,6 @@ mod tests {
             fill_to_target(&mut world, &mut rng);
 
             assert!(world.total_energy() >= target);
-        }
-
-        #[test]
-        fn it_tops_a_partly_full_larder_up_without_overshooting() {
-            let mut world = stocked_world();
-            world.pellets.truncate(NUM_PELLETS / 2);
-            let mut rng = StdRng::seed_from_u64(1);
-
-            fill_to_target(&mut world, &mut rng);
-
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
         }
 
         #[test]
@@ -2637,14 +2514,14 @@ mod tests {
         }
 
         #[test]
-        fn it_feeds_itself_like_any_other_world() {
+        fn it_feeds_itself_from_empty_like_any_other_world() {
             let seed = Genome::all(Instruction::Split);
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, seed, &mut rng);
 
-            feed_until_stocked(&mut world, &mut rng);
+            feed_a_while(&mut world, &mut rng);
 
-            assert_eq!(world.pellets().len(), NUM_PELLETS);
+            assert!(!world.pellets().is_empty());
         }
 
         #[test]
