@@ -15,7 +15,7 @@ pub const SPLIT_ATTEMPT_COST: u32 = 5;
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
 // that starves partway through dies with nothing to show for it.
-pub const SPLIT_DURATION_TICKS: u32 = 60;
+pub const SPLIT_DURATION_TICKS: u32 = 30;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
