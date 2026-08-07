@@ -15,7 +15,7 @@ const NUM_PELLETS: usize = 4000;
 // How many pellets a single replenishment call may add. Small, because the
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
-pub const PELLET_BATCH_SIZE: usize = 2;
+pub const PELLET_BATCH_SIZE: usize = 10;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
