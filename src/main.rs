@@ -198,9 +198,7 @@ fn main() {
             world_record.best_world()
         );
         let food_text = match world.feeding_state() {
-            FeedingState::Filling(frames) => {
-                format!("Food: filling {:.1}s", frames as f32 / FRAMES_PER_SECOND)
-            }
+            FeedingState::Filling => "Food: filling".to_string(),
             FeedingState::Waiting(frames) => {
                 format!("Next food: {:.1}s", frames as f32 / FRAMES_PER_SECOND)
             }
