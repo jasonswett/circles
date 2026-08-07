@@ -16,6 +16,11 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 2;
+// Food arrives in spells rather than one continuous pour: a hungry world
+// takes some on for this long, then rests before the next. At ~60 FPS a
+// spell is a second and the rest between them is two.
+const FEEDING_SPELL_FRAMES: u32 = 60;
+const FEEDING_REST_FRAMES: u32 = 120;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
@@ -39,6 +44,8 @@ pub struct World {
     original_total_energy: u32,
     generation: u32,
     overlap_detection_cursor: usize,
+    /// Where this world sits in its feed-then-rest cycle.
+    feeding_frame: u32,
     /// The genome new critters are seeded with, if this world was started
     /// from one. None means each newcomer gets a fresh random genome.
     seed_genome: Option<Genome>,
@@ -64,6 +71,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            feeding_frame: 0,
             seed_genome: None,
         }
     }
@@ -92,6 +100,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            feeding_frame: 0,
             seed_genome: Some(seed_genome),
         }
     }
@@ -142,6 +151,7 @@ impl World {
             original_total_energy,
             generation: 1,
             overlap_detection_cursor: 0,
+            feeding_frame: 0,
             seed_genome: None,
         }
     }
@@ -154,6 +164,21 @@ impl World {
     /// should keep taking on food.
     pub fn needs_more_food(&self) -> bool {
         self.total_energy() < self.original_total_energy
+    }
+
+    /// Takes on food for this frame, in spells: a hungry world fills for
+    /// FEEDING_SPELL_FRAMES and then rests for FEEDING_REST_FRAMES, so food
+    /// arrives in visible pulses instead of one long pour. A world with
+    /// enough energy takes on nothing and its cycle stays put.
+    pub fn feed<R: Rng>(&mut self, rng: &mut R) {
+        if !self.needs_more_food() {
+            return;
+        }
+        let cycle = self.feeding_frame % (FEEDING_SPELL_FRAMES + FEEDING_REST_FRAMES);
+        self.feeding_frame = self.feeding_frame.wrapping_add(1);
+        if cycle < FEEDING_SPELL_FRAMES {
+            self.replenish_pellets(PELLET_BATCH_SIZE, rng);
+        }
     }
 
     /// Adds up to `count` pellets, stopping early once the world's energy
@@ -1115,6 +1140,57 @@ mod tests {
 
         fn empty_world() -> World {
             World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
+        }
+
+        #[test]
+        fn a_feeding_spell_runs_no_longer_than_its_limit() {
+            // Food arrives in spells rather than one long pour, so a hungry
+            // world takes it on in visible pulses.
+            let mut world = empty_world();
+            world.original_total_energy = 10_000 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..(FEEDING_SPELL_FRAMES * 3) {
+                world.feed(&mut rng);
+            }
+
+            assert_eq!(
+                world.pellets().len(),
+                FEEDING_SPELL_FRAMES as usize * PELLET_BATCH_SIZE
+            );
+        }
+
+        #[test]
+        fn a_new_spell_begins_after_the_rest_between_them() {
+            let mut world = empty_world();
+            world.original_total_energy = 10_000 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+            for _ in 0..FEEDING_SPELL_FRAMES {
+                world.feed(&mut rng);
+            }
+            let after_first = world.pellets().len();
+
+            for _ in 0..(FEEDING_REST_FRAMES + FEEDING_SPELL_FRAMES) {
+                world.feed(&mut rng);
+            }
+
+            assert_eq!(
+                world.pellets().len(),
+                after_first + FEEDING_SPELL_FRAMES as usize * PELLET_BATCH_SIZE
+            );
+        }
+
+        #[test]
+        fn a_world_with_enough_energy_takes_on_no_food_at_all() {
+            let mut world = world_with_target(50 * PELLET_ENERGY);
+            let before = world.pellets().len();
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..(FEEDING_SPELL_FRAMES * 2) {
+                world.feed(&mut rng);
+            }
+
+            assert_eq!(world.pellets().len(), before);
         }
 
         #[test]

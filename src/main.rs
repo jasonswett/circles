@@ -1,7 +1,6 @@
 use circles::{
     format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
     PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, CRITTER_RADIUS,
-    PELLET_BATCH_SIZE,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
@@ -149,7 +148,7 @@ fn main() {
             world_started_at = Instant::now();
         }
         if allow_growth {
-            world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
+            world.feed(&mut rng);
         }
         if frame_counter > 0
             && frame_counter.is_multiple_of(SEED_INTERVAL_FRAMES)
