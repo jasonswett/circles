@@ -8,7 +8,6 @@ mod instruction;
 mod pellet;
 mod population_growth_detector;
 mod renderer;
-mod replenish_countdown;
 mod snapshot;
 mod stagnation_detector;
 mod text;
@@ -26,8 +25,7 @@ pub use pellet::{
 };
 pub use population_growth_detector::PopulationGrowthDetector;
 pub use renderer::Renderer;
-pub use replenish_countdown::{format_minutes_seconds, frames_until_next_replenish};
 pub use snapshot::format_block as format_snapshot_block;
 pub use stagnation_detector::StagnationDetector;
 pub use text::pixels as text_pixels;
-pub use world::{World, CRITTER_RADIUS};
+pub use world::{World, CRITTER_RADIUS, PELLET_BATCH_SIZE};

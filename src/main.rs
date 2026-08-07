@@ -1,14 +1,13 @@
 use circles::{
-    format_elapsed, format_minutes_seconds, format_snapshot_block, frames_until_next_replenish,
-    parse_cli, text_pixels, FpsCounter, PopulationGrowthDetector, Renderer, StagnationDetector,
-    Startup, World, CRITTER_RADIUS,
+    format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
+    PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, CRITTER_RADIUS,
+    PELLET_BATCH_SIZE,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
 use std::time::{Duration, Instant, SystemTime};
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
-const TARGET_FPS: u32 = 60;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 const TEXT_COLOR: u32 = 0xFF_FF_FF;
 const TEXT_SIZE: f32 = 28.0;
@@ -22,8 +21,6 @@ const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 // growing without having failed.
 const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
-// At ~60 FPS this is 15s between top-ups of the world's energy budget.
-const REPLENISH_INTERVAL_FRAMES: u32 = 900;
 // A world ramps up to its target population instead of spawning it all at
 // once: this many critters are added every SEED_INTERVAL_FRAMES (~100ms at
 // 60 FPS), and only while the frame rate is holding, so a machine that
@@ -151,11 +148,8 @@ fn main() {
             population_growth.reset();
             world_started_at = Instant::now();
         }
-        if frame_counter > 0
-            && frame_counter.is_multiple_of(REPLENISH_INTERVAL_FRAMES)
-            && allow_growth
-        {
-            world.replenish_pellets(&mut rng);
+        if allow_growth {
+            world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
         }
         if frame_counter > 0
             && frame_counter.is_multiple_of(SEED_INTERVAL_FRAMES)
@@ -194,20 +188,18 @@ fn main() {
         let pellets_text = format!("Pellets: {displayed_pellet_count}");
         let world_text = format!("World: {}", world.generation());
         let time_text = format!("Time: {}", format_elapsed(world_started_at.elapsed()));
-        let frames_remaining =
-            frames_until_next_replenish(frame_counter, REPLENISH_INTERVAL_FRAMES);
-        let seconds_remaining = Duration::from_secs((frames_remaining / TARGET_FPS) as u64);
-        let next_pellets_text = format!(
-            "Next pellets: {}",
-            format_minutes_seconds(seconds_remaining)
-        );
+        let food_text = if world.needs_more_food() {
+            "Food: filling"
+        } else {
+            "Food: stocked"
+        };
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
         draw_text_top_right(&population_text, 2, &mut frame_pixels, width, height);
         draw_text_top_right(&pellets_text, 3, &mut frame_pixels, width, height);
         draw_text_top_right(&world_text, 4, &mut frame_pixels, width, height);
         draw_text_top_right(&time_text, 5, &mut frame_pixels, width, height);
-        draw_text_top_right(&next_pellets_text, 6, &mut frame_pixels, width, height);
+        draw_text_top_right(food_text, 6, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)

@@ -12,6 +12,10 @@ const NUM_CRITTERS: usize = 4000;
 // seeded world is not immediately judged too small and reset.
 const SEED_POPULATION: usize = 100;
 const NUM_PELLETS: usize = 4000;
+// How many pellets a single replenishment call may add. Small, because the
+// call happens often: food seeps into the world a few at a time rather than
+// a whole deficit's worth arriving at once.
+pub const PELLET_BATCH_SIZE: usize = 2;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
@@ -146,15 +150,20 @@ impl World {
         self.original_total_energy
     }
 
-    pub fn replenish_pellets<R: Rng>(&mut self, rng: &mut R) {
-        let current = self.total_energy();
-        if current >= self.original_total_energy {
-            return;
-        }
-        let deficit = self.original_total_energy - current;
-        // Round up: add enough pellets so the new total is at least the target.
-        let pellets_needed = deficit.div_ceil(crate::PELLET_ENERGY);
-        for _ in 0..pellets_needed {
+    /// Whether the world holds less energy than its budget allows, and so
+    /// should keep taking on food.
+    pub fn needs_more_food(&self) -> bool {
+        self.total_energy() < self.original_total_energy
+    }
+
+    /// Adds up to `count` pellets, stopping early once the world's energy
+    /// budget is met. Called often with a small count so food trickles in the
+    /// way critters do, rather than a whole deficit landing in one frame.
+    pub fn replenish_pellets<R: Rng>(&mut self, count: usize, rng: &mut R) {
+        for _ in 0..count {
+            if !self.needs_more_food() {
+                return;
+            }
             self.pellets
                 .push(spawn_pellet(self.width, self.height, rng));
         }
@@ -1108,6 +1117,71 @@ mod tests {
             World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![])
         }
 
+        #[test]
+        fn a_hungry_world_wants_more_food() {
+            let world = world_with_target(50 * PELLET_ENERGY);
+            let mut hungry = empty_world();
+            hungry.original_total_energy = world.original_total_energy;
+
+            assert!(hungry.needs_more_food());
+        }
+
+        #[test]
+        fn a_world_at_its_energy_target_wants_no_more_food() {
+            let world = world_with_target(50 * PELLET_ENERGY);
+
+            assert!(!world.needs_more_food());
+        }
+
+        #[test]
+        fn replenishing_adds_only_a_small_batch_at_a_time() {
+            // Food trickles in the way critters do, rather than a whole
+            // deficit's worth landing in one frame.
+            let mut world = empty_world();
+            world.original_total_energy = 500 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
+
+            assert_eq!(world.pellets().len(), PELLET_BATCH_SIZE);
+        }
+
+        #[test]
+        fn replenishing_stops_once_the_world_has_enough_energy() {
+            let mut world = empty_world();
+            world.original_total_energy = 3 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            // Ask for far more than the deficit calls for.
+            world.replenish_pellets(100, &mut rng);
+
+            assert_eq!(world.pellets().len(), 3);
+        }
+
+        #[test]
+        fn repeated_small_batches_fill_a_world_to_its_target() {
+            let mut world = empty_world();
+            world.original_total_energy = 50 * PELLET_ENERGY;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..100 {
+                world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
+            }
+
+            assert!(world.total_energy() >= world.original_total_energy);
+            assert!(!world.needs_more_food());
+        }
+
+        // Fills a world the way the main loop does: many small batches.
+        // Bounded rather than looping on needs_more_food, so a broken
+        // condition fails the test instead of hanging it.
+        fn fill_to_target<R: Rng>(world: &mut World, rng: &mut R) {
+            let batches = world.original_total_energy as usize / PELLET_ENERGY as usize + 2;
+            for _ in 0..batches {
+                world.replenish_pellets(PELLET_BATCH_SIZE, rng);
+            }
+        }
+
         fn world_with_target(target: u32) -> World {
             // Construct an "empty" world and then make the target deterministic
             // by directly using with_critters_and_pellets with a known
@@ -1131,7 +1205,7 @@ mod tests {
             let pellets_before = world.pellets().len();
             let mut rng = StdRng::seed_from_u64(1);
 
-            world.replenish_pellets(&mut rng);
+            world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
 
             assert_eq!(world.pellets().len(), pellets_before);
         }
@@ -1144,7 +1218,7 @@ mod tests {
             world.pellets.clear();
             let mut rng = StdRng::seed_from_u64(1);
 
-            world.replenish_pellets(&mut rng);
+            fill_to_target(&mut world, &mut rng);
 
             assert!(world.total_energy() >= target);
         }
@@ -1159,7 +1233,7 @@ mod tests {
             world.pellets.truncate(5);
             let mut rng = StdRng::seed_from_u64(1);
 
-            world.replenish_pellets(&mut rng);
+            fill_to_target(&mut world, &mut rng);
 
             assert!(world.total_energy() < target + PELLET_ENERGY);
         }
@@ -1173,7 +1247,7 @@ mod tests {
             for seed in 0..20 {
                 let mut rng = StdRng::seed_from_u64(seed);
                 world.pellets.clear();
-                world.replenish_pellets(&mut rng);
+                world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
                 for pellet in world.pellets() {
                     assert_eq!(pellet.x, TEST_WIDTH as f32 / 2.0);
                     assert_eq!(pellet.y, TEST_HEIGHT as f32 / 2.0);
@@ -1201,7 +1275,7 @@ mod tests {
             world.original_total_energy = 100 + 5 * PELLET_ENERGY;
             let mut rng = StdRng::seed_from_u64(0);
 
-            world.replenish_pellets(&mut rng);
+            fill_to_target(&mut world, &mut rng);
 
             assert!(world.total_energy() >= world.original_total_energy);
         }
