@@ -100,6 +100,9 @@ fn main() {
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
     let mut frame_counter: u32 = 0;
     let mut displayed_total_energy = world.total_energy();
+    // Pellets are eaten and emitted constantly, so the count is sampled on the
+    // same cadence as the energy readout rather than flickering every frame.
+    let mut displayed_pellet_count = world.pellets().len();
     let mut stagnation = StagnationDetector::new(STAGNATION_THRESHOLD_FRAMES);
     let mut population_growth = PopulationGrowthDetector::new(POPULATION_GROWTH_TIMEOUT_FRAMES);
     let mut fps_counter = FpsCounter::new(FPS_REFRESH_INTERVAL);
@@ -129,6 +132,7 @@ fn main() {
 
         if frame_counter.is_multiple_of(ENERGY_REFRESH_FRAMES) {
             displayed_total_energy = total_energy;
+            displayed_pellet_count = world.pellets().len();
         }
         if frame_counter > 0 && frame_counter.is_multiple_of(REAPER_INTERVAL_FRAMES) {
             world.reap_dead_critters();
@@ -187,6 +191,7 @@ fn main() {
         let energy_text = format!("Energy: {displayed_total_energy}");
         let fps_text = format!("FPS: {}", fps_counter.current_fps());
         let population_text = format!("Population: {}", world.critters().len());
+        let pellets_text = format!("Pellets: {displayed_pellet_count}");
         let world_text = format!("World: {}", world.generation());
         let time_text = format!("Time: {}", format_elapsed(world_started_at.elapsed()));
         let frames_remaining =
@@ -199,9 +204,10 @@ fn main() {
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 1, &mut frame_pixels, width, height);
         draw_text_top_right(&population_text, 2, &mut frame_pixels, width, height);
-        draw_text_top_right(&world_text, 3, &mut frame_pixels, width, height);
-        draw_text_top_right(&time_text, 4, &mut frame_pixels, width, height);
-        draw_text_top_right(&next_pellets_text, 5, &mut frame_pixels, width, height);
+        draw_text_top_right(&pellets_text, 3, &mut frame_pixels, width, height);
+        draw_text_top_right(&world_text, 4, &mut frame_pixels, width, height);
+        draw_text_top_right(&time_text, 5, &mut frame_pixels, width, height);
+        draw_text_top_right(&next_pellets_text, 6, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
