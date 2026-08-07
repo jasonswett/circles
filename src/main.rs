@@ -1,6 +1,7 @@
 use circles::{
     format_elapsed, format_snapshot_block, parse_cli, text_pixels, FeedingState, FpsCounter,
-    PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, CRITTER_RADIUS,
+    PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, WorldRecord,
+    CRITTER_RADIUS,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
@@ -104,6 +105,7 @@ fn main() {
     let mut population_growth = PopulationGrowthDetector::new(POPULATION_GROWTH_TIMEOUT_FRAMES);
     let mut fps_counter = FpsCounter::new(FPS_REFRESH_INTERVAL);
     let mut world_started_at = Instant::now();
+    let mut world_record = WorldRecord::new();
     let mut last_snapshot_at = Instant::now();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -188,6 +190,12 @@ fn main() {
         let pellets_text = format!("Pellets: {displayed_pellet_count}");
         let world_text = format!("World: {}", world.generation());
         let time_text = format!("Time: {}", format_elapsed(world_started_at.elapsed()));
+        world_record.observe(world.generation(), world_started_at.elapsed());
+        let record_text = format!(
+            "World record: {} (world {})",
+            format_elapsed(world_record.best_elapsed()),
+            world_record.best_world()
+        );
         let food_text = match world.feeding_state() {
             FeedingState::Filling(frames) => {
                 format!("Food: filling {:.1}s", frames as f32 / FRAMES_PER_SECOND)
@@ -203,6 +211,7 @@ fn main() {
         draw_text_top_right(&world_text, 4, &mut frame_pixels, width, height);
         draw_text_top_right(&time_text, 5, &mut frame_pixels, width, height);
         draw_text_top_right(&food_text, 6, &mut frame_pixels, width, height);
+        draw_text_top_right(&record_text, 7, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)

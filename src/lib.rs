@@ -12,6 +12,7 @@ mod snapshot;
 mod stagnation_detector;
 mod text;
 mod world;
+mod world_record;
 
 pub use cli::{parse as parse_cli, CliError, Startup};
 pub use critter::{Critter, MAX_CRITTER_ENERGY};
@@ -29,3 +30,4 @@ pub use snapshot::format_block as format_snapshot_block;
 pub use stagnation_detector::StagnationDetector;
 pub use text::pixels as text_pixels;
 pub use world::{FeedingState, World, CRITTER_RADIUS, PELLET_BATCH_SIZE};
+pub use world_record::WorldRecord;
