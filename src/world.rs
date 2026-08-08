@@ -5,6 +5,11 @@ use crate::{
 use rand::Rng;
 
 pub const CRITTER_RADIUS: i32 = 6;
+// What share of its prey's energy a predator takes in one bite. Partial, so
+// predation wears prey down rather than executing it: what the predator does
+// not take, the prey keeps, and only a critter with nothing left to give dies
+// of being eaten.
+const PREDATION_SHARE_PERCENT: u32 = 25;
 
 // The population a world grows toward. It does not start there: spawning
 // thousands of critters at once stalls the first seconds of a run, so a world
@@ -330,11 +335,10 @@ impl World {
                 continue;
             }
 
-            // No pellet in range — kill the first overlapping critter, if
-            // any. Eating a critter is lethal: the victim loses everything
-            // even though the eater's gain saturates at MAX_CRITTER_ENERGY;
-            // whatever doesn't fit is destroyed (replenishment later returns
-            // it to the world as pellets).
+            // No pellet in range — take a bite out of the first overlapping
+            // critter, if any. Predation is partial: the predator takes a
+            // share and the prey keeps the rest, so a well-fed critter
+            // survives being bitten and a depleted one does not.
             let victim_index = (0..count).find(|&victim_index| {
                 if victim_index == eater_index {
                     return false;
@@ -348,8 +352,9 @@ impl World {
             });
             if let Some(victim_index) = victim_index {
                 let victim_energy = self.critters[victim_index].energy();
-                self.critters[eater_index].gain_energy(victim_energy);
-                self.critters[victim_index].die();
+                let bite = victim_energy * PREDATION_SHARE_PERCENT / 100;
+                self.critters[eater_index].gain_energy(bite);
+                self.critters[victim_index].lose_energy(bite.max(1));
                 self.critters[victim_index].mark_being_eaten_for(EATEN_INDICATOR_LINGER_TICKS);
             }
         }
@@ -1804,7 +1809,7 @@ mod tests {
         }
 
         #[test]
-        fn an_eater_with_no_pellet_in_range_drains_a_touching_critter() {
+        fn a_predator_takes_only_a_share_of_its_prey() {
             let eater = eating_critter(100, 100);
             let victim = idle_critter_with_energy(105, 100, 80);
             let mut world = World::with_critters_and_pellets(
@@ -1816,14 +1821,19 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), STARTING_AFTER_FAILED_EAT + 80);
-            assert_eq!(world.critters()[1].energy(), 0);
+            let taken = 80 * PREDATION_SHARE_PERCENT / 100;
+            assert_eq!(
+                world.critters()[0].energy(),
+                STARTING_AFTER_FAILED_EAT + taken
+            );
         }
 
         #[test]
-        fn an_eater_that_caps_out_mid_meal_still_kills_its_victim() {
-            let eater = eating_critter_with_energy(100, 100, MAX_CRITTER_ENERGY - 30);
-            let victim = idle_critter_with_energy(105, 100, 100);
+        fn prey_survives_a_bite_it_can_afford() {
+            // Predation is a bite rather than an execution: what the predator
+            // does not take, the prey keeps.
+            let eater = eating_critter(100, 100);
+            let victim = idle_critter_with_energy(105, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -1833,10 +1843,68 @@ mod tests {
 
             world.tick(true);
 
-            // The surplus the eater couldn't absorb is destroyed, not left
-            // with the victim.
-            assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
+            let taken = 80 * PREDATION_SHARE_PERCENT / 100;
+            assert_eq!(world.critters()[1].energy(), 80 - taken);
+            assert!(world.critters()[1].energy() > 0);
+        }
+
+        #[test]
+        fn prey_bitten_down_to_nothing_dies() {
+            // A critter with too little left to give up its share dies of it.
+            let eater = eating_critter(100, 100);
+            let victim = idle_critter_with_energy(105, 100, 1);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
             assert_eq!(world.critters()[1].energy(), 0);
+        }
+
+        #[test]
+        fn repeated_bites_wear_prey_down() {
+            let eater = eating_critter_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let victim = idle_critter_with_energy(105, 100, 200);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            let mut previous = world.critters()[1].energy();
+            for _ in 0..5 {
+                world.tick(true);
+                let now = world.critters()[1].energy();
+                assert!(
+                    now < previous,
+                    "prey did not lose energy: {now} vs {previous}"
+                );
+                previous = now;
+            }
+        }
+
+        #[test]
+        fn an_eaters_gain_still_stops_at_its_cap() {
+            // A quarter of the prey's energy exceeds the eater's headroom.
+            let eater = eating_critter_with_energy(100, 100, MAX_CRITTER_ENERGY - 5);
+            let victim = idle_critter_with_energy(105, 100, MAX_CRITTER_ENERGY);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            // The eater fills up; the prey loses only what was taken.
+            assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
+            assert!(world.critters()[1].energy() > 0);
         }
 
         #[test]
@@ -1921,7 +1989,7 @@ mod tests {
         }
 
         #[test]
-        fn a_victim_just_inside_the_critter_eat_radius_is_drained() {
+        fn a_victim_just_inside_the_critter_eat_radius_is_bitten() {
             // Centers one pixel closer than the 2 * CRITTER_RADIUS eat radius.
             // Mutations that shrink the threshold below this separation would
             // mistakenly classify the pair as out of range.
@@ -1936,7 +2004,7 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[1].energy(), 0);
+            assert!(world.critters()[1].energy() < 80);
         }
 
         #[test]
@@ -1979,7 +2047,7 @@ mod tests {
         }
 
         #[test]
-        fn draining_a_critter_works_across_the_toroidal_wrap() {
+        fn biting_a_critter_works_across_the_toroidal_wrap() {
             let eater = eating_critter(2, 100);
             let victim = idle_critter_with_energy(TEST_WIDTH as i32 - 2, 100, 80);
             let mut world = World::with_critters_and_pellets(
@@ -1991,7 +2059,7 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[1].energy(), 0);
+            assert!(world.critters()[1].energy() < 80);
         }
     }
 
