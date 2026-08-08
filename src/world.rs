@@ -12,7 +12,7 @@ pub const CRITTER_RADIUS: i32 = 6;
 const PREDATION_SHARE_PERCENT: u32 = 25;
 // How far the eruption site travels each frame. Small, so the source drifts
 // visibly across the world rather than jumping between places.
-const ERUPTION_SITE_DRIFT: f32 = 1.2;
+const ERUPTION_SITE_DRIFT: f32 = 3.0;
 // How sharply the site's heading can turn each frame, in radians. Low enough
 // that the source wanders on a curve rather than jittering in place.
 const ERUPTION_SITE_TURN: f32 = 0.08;
@@ -37,10 +37,10 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
-// How often a replenishment begins. At ~60 FPS this is sixty seconds: a
+// How often a replenishment begins. At ~60 FPS this is ten seconds: a
 // world starts feeding on this cadence and keeps at it until its energy is
 // restored, however long that takes.
-const FEEDING_INTERVAL_FRAMES: u32 = 3600;
+const FEEDING_INTERVAL_FRAMES: u32 = 600;
 pub const MIN_POPULATION: usize = 20;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
