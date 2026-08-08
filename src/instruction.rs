@@ -9,6 +9,11 @@ pub enum Instruction {
     TurnRight,
     Split,
     Eat,
+    /// Moves the playhead forward, skipping the slots between. Gated like any
+    /// other instruction, so a critter's inputs decide whether it jumps.
+    SkipAhead,
+    /// Moves the playhead back toward earlier slots.
+    SkipBack,
 }
 
 impl Instruction {

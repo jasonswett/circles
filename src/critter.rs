@@ -15,7 +15,11 @@ pub const SPLIT_ATTEMPT_COST: u32 = 5;
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
 // that starves partway through dies with nothing to show for it.
-pub const SPLIT_DURATION_TICKS: u32 = 5;
+pub const SPLIT_DURATION_TICKS: u32 = 1;
+// How many slots a skip moves the playhead. Fixed for now: evolution
+// controls whether a critter jumps, through the usual weights and sigmoid,
+// but not yet how far.
+pub const SKIP_DISTANCE: usize = 4;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -251,9 +255,6 @@ impl Critter {
         }
 
         let instruction = self.genome.decode_at(self.genome_cursor);
-        // decode_at handles wrap-around itself, so the cursor can grow without
-        // an explicit modulo. usize will not overflow within any realistic run.
-        self.genome_cursor += 1;
 
         // Each instruction is gated by the genome's sigmoid: the probability of
         // acting is sigmoid((energy - threshold) / softness) for that
@@ -272,11 +273,21 @@ impl Critter {
             self.recent_repetition_of(instruction),
         );
         let split_blocked = instruction == Instruction::Split && !allow_split;
-        let outcome = if !split_blocked && self.roll_against(probability) {
+        let acted = !split_blocked && self.roll_against(probability);
+        let outcome = if acted {
             self.remember_action(instruction);
             self.execute(instruction)
         } else {
             TickOutcome::default()
+        };
+        // A skip that fires moves the playhead instead of advancing it; every
+        // other outcome, including a skip whose roll failed, walks on by one.
+        // decode_at handles wrap-around, so the cursor can grow without an
+        // explicit modulo.
+        self.genome_cursor = match instruction {
+            Instruction::SkipAhead if acted => self.genome_cursor + SKIP_DISTANCE,
+            Instruction::SkipBack if acted => self.genome_cursor.saturating_sub(SKIP_DISTANCE),
+            _ => self.genome_cursor + 1,
         };
         self.energy = self.energy.saturating_sub(1);
         outcome
@@ -363,6 +374,11 @@ impl Critter {
                 self.energy = self.energy.saturating_sub(SPLIT_ATTEMPT_COST);
                 self.dividing_ticks_remaining = SPLIT_DURATION_TICKS;
                 self.last_executed = Some(Instruction::Split);
+                TickOutcome::default()
+            }
+            Instruction::SkipAhead | Instruction::SkipBack => {
+                // The playhead move happens in `tick`, which owns the cursor.
+                self.last_executed = Some(instruction);
                 TickOutcome::default()
             }
             Instruction::Eat => {
@@ -1281,6 +1297,137 @@ mod tests {
             critter.wrap_position(WIDTH, HEIGHT);
 
             assert_eq!(critter.x(), 7);
+        }
+    }
+
+    mod skipping {
+        use super::*;
+        use crate::Genome;
+
+        // A critter whose stream is the given instructions, firing every tick
+        // and always acting.
+        fn player(instructions: &[Instruction]) -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                MAX_CRITTER_ENERGY,
+                0,
+                Genome::from_instructions(instructions),
+            )
+        }
+
+        #[test]
+        fn skipping_ahead_moves_the_playhead_past_slots() {
+            // The instruction after SkipAhead is not the one that runs next:
+            // the playhead lands SKIP_DISTANCE further on.
+            let mut critter = player(&[Instruction::SkipAhead]);
+            let before = critter.genome_cursor;
+
+            critter.tick(true);
+
+            assert_eq!(critter.genome_cursor, before + SKIP_DISTANCE);
+        }
+
+        #[test]
+        fn skipping_back_moves_the_playhead_toward_earlier_slots() {
+            let mut critter = player(&[Instruction::SkipBack]);
+            // Walk the cursor forward so there is somewhere to go back to.
+            critter.genome_cursor = SKIP_DISTANCE * 2;
+            let before = critter.genome_cursor;
+
+            critter.tick(true);
+
+            assert_eq!(critter.genome_cursor, before - SKIP_DISTANCE);
+        }
+
+        #[test]
+        fn skipping_back_from_the_start_does_not_underflow() {
+            let mut critter = player(&[Instruction::SkipBack]);
+            critter.genome_cursor = 0;
+
+            critter.tick(true);
+
+            assert_eq!(critter.genome_cursor, 0);
+        }
+
+        #[test]
+        fn a_skip_whose_roll_fails_walks_on_by_one() {
+            // The jump is gated like any other instruction: inputs decide
+            // whether the playhead moves, which is the point of the design.
+            // A never-act genome leaves every roll failing.
+            let mut genome = Genome::from_instructions(&[Instruction::SkipAhead]);
+            genome.set_never_act_header();
+            let mut critter = Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                MAX_CRITTER_ENERGY,
+                0,
+                genome,
+            );
+            let before = critter.genome_cursor;
+
+            critter.tick(true);
+
+            assert_eq!(critter.genome_cursor, before + 1);
+        }
+
+        #[test]
+        fn a_skip_back_whose_roll_fails_also_walks_on_by_one() {
+            let mut genome = Genome::from_instructions(&[Instruction::SkipBack]);
+            genome.set_never_act_header();
+            let mut critter = Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                MAX_CRITTER_ENERGY,
+                0,
+                genome,
+            );
+            critter.genome_cursor = SKIP_DISTANCE * 2;
+            let before = critter.genome_cursor;
+
+            critter.tick(true);
+
+            assert_eq!(critter.genome_cursor, before + 1);
+        }
+
+        #[test]
+        fn an_ordinary_instruction_advances_the_playhead_by_one() {
+            let mut critter = player(&[Instruction::MoveForward]);
+            let before = critter.genome_cursor;
+
+            critter.tick(true);
+
+            assert_eq!(critter.genome_cursor, before + 1);
+        }
+
+        #[test]
+        fn a_skip_changes_which_instruction_runs_next() {
+            // The point of the whole thing: a jump lands the playhead on a
+            // different instruction than the walk would have reached.
+            let mut skipper = player(&[
+                Instruction::SkipAhead,
+                Instruction::TurnLeft,
+                Instruction::TurnRight,
+            ]);
+            let mut walker = player(&[
+                Instruction::DoNothing,
+                Instruction::TurnLeft,
+                Instruction::TurnRight,
+            ]);
+
+            skipper.tick(true);
+            walker.tick(true);
+
+            assert_ne!(skipper.genome_cursor, walker.genome_cursor);
         }
     }
 

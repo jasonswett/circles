@@ -1,7 +1,7 @@
 use crate::Instruction;
 use rand::Rng;
 
-const INSTRUCTION_COUNT: usize = 7;
+const INSTRUCTION_COUNT: usize = 9;
 // The genome's leading field: how often this critter's splits mutate the
 // child. Evolvable like everything else — it mutates along with the rest of
 // the genome, so a lineage's mutability drifts under selection.
@@ -370,6 +370,24 @@ impl Genome {
         )
     }
 
+    /// Sets every instruction's sigmoid so the probability of acting is
+    /// essentially zero: no factors enabled and the highest threshold, so the
+    /// input is always far below it. Test-only.
+    #[cfg(test)]
+    pub fn set_never_act_header(&mut self) {
+        for index in 0..INSTRUCTION_COUNT {
+            let window = header_window_offset(index);
+            write_bits(&mut self.bytes, window, FACTOR_MASK_BITS, 0);
+            write_bits(
+                &mut self.bytes,
+                window + THRESHOLD_OFFSET,
+                THRESHOLD_BITS,
+                (1 << THRESHOLD_BITS) - 1,
+            );
+            write_bits(&mut self.bytes, window + SOFTNESS_OFFSET, SOFTNESS_BITS, 0);
+        }
+    }
+
     #[cfg(test)]
     fn always_act_header() -> Self {
         // Enable just the energy factor on every instruction so the sigmoid
@@ -447,6 +465,8 @@ const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
     Instruction::RepeatPreviousMove,
     Instruction::Split,
     Instruction::Eat,
+    Instruction::SkipAhead,
+    Instruction::SkipBack,
 ];
 
 /// Bit offset of one instruction's parameter window, measured from the start
@@ -464,6 +484,8 @@ fn instruction_index(instruction: Instruction) -> usize {
         Instruction::RepeatPreviousMove => 4,
         Instruction::Split => 5,
         Instruction::Eat => 6,
+        Instruction::SkipAhead => 7,
+        Instruction::SkipBack => 8,
     }
 }
 
@@ -1428,9 +1450,9 @@ mod tests {
 
             let counts = decoded_counts(&genome);
 
-            // Weights are bits + 1: Eat holds 16, the other six hold 1 each,
-            // totalling 22. Opcode value c maps to position floor(c * 22 / 16),
-            // so Eat takes 11 of the 16 values and five of the six
+            // Weights are bits + 1: Eat holds 16, the other eight hold 1
+            // each, totalling 24. Opcode value c maps to position
+            // floor(c * 24 / 16), so Eat takes 11 of the 16 values and four
             // minimum-weight instructions take one apiece — DoNothing's band
             // is the one no opcode value lands in. Naming each instruction's
             // share, rather than summing the non-Eat ones, is what pins the
@@ -1441,10 +1463,12 @@ mod tests {
             assert_eq!(share(Instruction::Eat), 11);
             assert_eq!(share(Instruction::MoveForward), 1);
             assert_eq!(share(Instruction::TurnLeft), 1);
-            assert_eq!(share(Instruction::TurnRight), 1);
+            assert_eq!(share(Instruction::DoNothing), 1);
             assert_eq!(share(Instruction::RepeatPreviousMove), 1);
-            assert_eq!(share(Instruction::Split), 1);
-            assert_eq!(share(Instruction::DoNothing), 0);
+            assert_eq!(share(Instruction::SkipAhead), 1);
+            assert_eq!(share(Instruction::TurnRight), 0);
+            assert_eq!(share(Instruction::Split), 0);
+            assert_eq!(share(Instruction::SkipBack), 0);
         }
 
         #[test]
