@@ -22,8 +22,8 @@ pub use genome::{Genome, GenomeParseError};
 pub use heading::Heading;
 pub use instruction::Instruction;
 pub use pellet::{
-    Pellet, PELLETS_PER_POISON, PELLET_COLOR, PELLET_ENERGY, PELLET_LIFETIME_TICKS,
-    PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS, POISON_COLOR,
+    Pellet, PELLETS_PER_POISON, PELLET_COLOR, PELLET_ENERGY, PELLET_MAX_DRIFT, PELLET_MIN_DRIFT,
+    PELLET_RADIUS, POISON_COLOR,
 };
 pub use population_growth_detector::PopulationGrowthDetector;
 pub use renderer::Renderer;

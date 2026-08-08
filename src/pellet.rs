@@ -11,9 +11,6 @@ pub struct Pellet {
     /// to eat it. Critters cannot see it coming: nothing in their sensorium
     /// distinguishes poison from food.
     pub poisonous: bool,
-    /// Ticks since this pellet was emitted. Food spoils, so a pellet that
-    /// goes uneaten eventually vanishes.
-    pub age: u32,
 }
 
 impl Pellet {
@@ -27,7 +24,6 @@ impl Pellet {
             dx: 0.0,
             dy: 0.0,
             poisonous: false,
-            age: 0,
         }
     }
 
@@ -49,11 +45,6 @@ impl Pellet {
         }
     }
 
-    /// Whether the pellet has spoiled and should be removed from the world.
-    pub fn is_spoiled(&self) -> bool {
-        self.age >= PELLET_LIFETIME_TICKS
-    }
-
     /// Advances the pellet along its heading, wrapping around the world.
     pub fn drift(&mut self, width: f32, height: f32) {
         self.x = (self.x + self.dx).rem_euclid(width);
@@ -72,36 +63,3 @@ pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
 pub const PELLETS_PER_POISON: usize = 25;
 pub const PELLET_ENERGY: u32 = 100;
-/// How long a pellet lasts before spoiling away. At ~60 FPS this is sixty
-/// seconds, so uneaten food does not accumulate indefinitely.
-pub const PELLET_LIFETIME_TICKS: u32 = 3600;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn aged(age: u32) -> Pellet {
-        let mut pellet = Pellet::at(0, 0);
-        pellet.age = age;
-        pellet
-    }
-
-    mod is_spoiled {
-        use super::*;
-
-        #[test]
-        fn a_fresh_pellet_has_not_spoiled() {
-            assert!(!aged(0).is_spoiled());
-        }
-
-        #[test]
-        fn a_pellet_short_of_its_lifetime_has_not_spoiled() {
-            assert!(!aged(PELLET_LIFETIME_TICKS - 1).is_spoiled());
-        }
-
-        #[test]
-        fn a_pellet_that_reaches_its_lifetime_has_spoiled() {
-            assert!(aged(PELLET_LIFETIME_TICKS).is_spoiled());
-        }
-    }
-}
