@@ -14,7 +14,7 @@ const MAX_MUTATION_CHANCE: f32 = 0.25;
 // factor contributes to the sigmoid input; off means it is ignored. This is
 // the "stair-step" mechanism: a single mutation can enable or disable a
 // whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 4;
+const FACTOR_MASK_BITS: usize = 6;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -26,11 +26,12 @@ const MIN_SOFTNESS: f32 = 1.0;
 // decision but not entirely dominate it.
 const TOUCHING_FACTOR_SCALE: f32 = 64.0;
 
-// When the color-dissimilarity factor is enabled, the contribution scales
-// from 0 (touched critter has the same color) up to this value (touched
-// critter is the maximally distant color in RGB space). Same scale as
-// TOUCHING_FACTOR_SCALE so the two factors are directly comparable.
-const COLOR_DISSIMILARITY_FACTOR_SCALE: f32 = 64.0;
+// When a color channel is enabled, the contribution scales from 0 (the
+// channel is dark in what the critter touched) up to this value (the channel
+// is at full brightness). Same scale as TOUCHING_FACTOR_SCALE so the factors
+// are directly comparable. Each channel is sensed separately, so a lineage
+// can respond to green food without responding to red poison.
+const COLOR_CHANNEL_SCALE: f32 = 64.0;
 
 // Within each instruction's bit window: mask occupies bits 0..3, threshold
 // occupies bits 3..10, softness occupies bits 10..17.
@@ -39,8 +40,10 @@ const SOFTNESS_OFFSET: usize = THRESHOLD_OFFSET + THRESHOLD_BITS;
 
 const ENERGY_FACTOR_BIT: u32 = 0b0001;
 const TOUCHING_FACTOR_BIT: u32 = 0b0010;
-const COLOR_DISSIMILARITY_FACTOR_BIT: u32 = 0b0100;
-const HISTORY_FACTOR_BIT: u32 = 0b1000;
+const RED_FACTOR_BIT: u32 = 0b0000_0100;
+const GREEN_FACTOR_BIT: u32 = 0b0001_0000;
+const BLUE_FACTOR_BIT: u32 = 0b0010_0000;
+const HISTORY_FACTOR_BIT: u32 = 0b0000_1000;
 
 // When the history factor is enabled, the contribution scales from 0 (none of
 // the remembered actions were this instruction) up to this value (all of them
@@ -91,6 +94,20 @@ const TOTAL_BITS: usize = MUTATION_RATE_BITS
     + OPCODE_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 
+/// Everything a critter can perceive when deciding whether to act. Grouped
+/// rather than passed positionally: there are enough of them now that the
+/// order would be easy to get wrong.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Senses {
+    pub energy: u32,
+    pub touching_critter: bool,
+    /// The color of whatever the critter most recently touched, black when it
+    /// has touched nothing. Sensed per channel, so what a critter sees is the
+    /// color itself rather than how unlike itself it is.
+    pub touched_color: u32,
+    pub recent_repetition: f32,
+}
+
 /// A binary genome that encodes both the critter's instruction stream and the
 /// sigmoid decision parameters in one packed bitstring. The first 96 bits hold
 /// six (threshold, softness) pairs (one per instruction); the remaining 256
@@ -109,6 +126,11 @@ impl Genome {
         // TOTAL_BITS need not fill the last byte. Zero the leftover pad bits:
         // to_bits doesn't emit them, so a genome carrying random padding would
         // not survive a to_bits/from_bits round trip.
+        // Zero any bits past TOTAL_BITS. The layout currently ends on a byte
+        // boundary and leaves none, but a future field could reintroduce
+        // them, and pad bits that to_bits does not emit would break a round
+        // trip through from_bits.
+        #[allow(clippy::reversed_empty_ranges)]
         for bit in TOTAL_BITS..(TOTAL_BYTES * 8) {
             write_bits(&mut bytes, bit, 1, 0);
         }
@@ -261,27 +283,32 @@ impl Genome {
         }
     }
 
-    pub fn probability_of_acting(
-        &self,
-        instruction: Instruction,
-        energy: u32,
-        is_touching_critter: bool,
-        touched_color_dissimilarity: f32,
-        recent_repetition: f32,
-    ) -> f32 {
+    pub fn probability_of_acting(&self, instruction: Instruction, senses: &Senses) -> f32 {
         let (mask, threshold, softness) = self.params(instruction);
         let energy_contribution = if mask & ENERGY_FACTOR_BIT != 0 {
-            energy as f32
+            senses.energy as f32
         } else {
             0.0
         };
-        let touching_contribution = if mask & TOUCHING_FACTOR_BIT != 0 && is_touching_critter {
+        let touching_contribution = if mask & TOUCHING_FACTOR_BIT != 0 && senses.touching_critter {
             TOUCHING_FACTOR_SCALE
         } else {
             0.0
         };
-        let color_contribution = if mask & COLOR_DISSIMILARITY_FACTOR_BIT != 0 {
-            COLOR_DISSIMILARITY_FACTOR_SCALE * touched_color_dissimilarity.clamp(0.0, 1.0)
+        let [_, red, green, blue] = senses.touched_color.to_be_bytes();
+        let channel = |lit: u8| COLOR_CHANNEL_SCALE * lit as f32 / 255.0;
+        let red_contribution = if mask & RED_FACTOR_BIT != 0 {
+            channel(red)
+        } else {
+            0.0
+        };
+        let green_contribution = if mask & GREEN_FACTOR_BIT != 0 {
+            channel(green)
+        } else {
+            0.0
+        };
+        let blue_contribution = if mask & BLUE_FACTOR_BIT != 0 {
+            channel(blue)
         } else {
             0.0
         };
@@ -289,12 +316,16 @@ impl Genome {
         // that were this instruction, so the contribution does not grow just
         // because the window widened — only because the behavior repeated.
         let history_contribution = if mask & HISTORY_FACTOR_BIT != 0 {
-            HISTORY_FACTOR_SCALE * recent_repetition.clamp(0.0, 1.0)
+            HISTORY_FACTOR_SCALE * senses.recent_repetition.clamp(0.0, 1.0)
         } else {
             0.0
         };
-        let input =
-            energy_contribution + touching_contribution + color_contribution + history_contribution;
+        let input = energy_contribution
+            + touching_contribution
+            + red_contribution
+            + green_contribution
+            + blue_contribution
+            + history_contribution;
         sigmoid((input - threshold) / softness)
     }
 
@@ -586,17 +617,6 @@ impl std::fmt::Display for GenomeParseError {
 
 impl std::error::Error for GenomeParseError {}
 
-pub fn color_dissimilarity(a: u32, b: u32) -> f32 {
-    let max_distance: f32 = (3.0_f32 * 255.0 * 255.0).sqrt();
-    let [_, ar, ag, ab] = a.to_be_bytes();
-    let [_, br, bg, bb] = b.to_be_bytes();
-    let dr = ar as f32 - br as f32;
-    let dg = ag as f32 - bg as f32;
-    let db = ab as f32 - bb as f32;
-    let distance = (dr * dr + dg * dg + db * db).sqrt();
-    (distance / max_distance).clamp(0.0, 1.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -776,12 +796,28 @@ mod tests {
     mod sigmoid {
         use super::*;
 
+        fn genome_with_mask_for_split(mask: u32) -> Genome {
+            // Threshold = 0, softness = 1 (raw bits 0). Just the mask varies.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            let split_window = header_window_offset(instruction_index(Instruction::Split));
+            write_bits(&mut bytes, split_window, FACTOR_MASK_BITS, mask);
+            Genome { bytes }
+        }
+
         #[test]
         fn the_always_act_test_constructor_returns_high_probability_at_typical_energy() {
             // With threshold=0 and softness=1, sigmoid(60) ≈ 1.0 exactly.
             let genome = Genome::all(Instruction::Split);
 
-            let probability = genome.probability_of_acting(Instruction::Split, 60, false, 0.0, 0.0);
+            let probability = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 60,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
 
             assert!(probability > 0.99);
         }
@@ -799,10 +835,12 @@ mod tests {
                 }
                 let probability = genome.probability_of_acting(
                     Instruction::Split,
-                    threshold as u32,
-                    false,
-                    0.0,
-                    0.0,
+                    &Senses {
+                        energy: threshold as u32,
+                        touching_critter: false,
+                        recent_repetition: 0.0,
+                        ..Senses::default()
+                    },
                 );
                 assert!((probability - 0.5).abs() < 0.5);
                 return;
@@ -819,8 +857,15 @@ mod tests {
                     continue;
                 }
                 let energy = (threshold + 20.0 * softness) as u32;
-                let probability =
-                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0, 0.0);
+                let probability = genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        energy,
+                        touching_critter: false,
+                        recent_repetition: 0.0,
+                        ..Senses::default()
+                    },
+                );
                 assert!(probability > 0.99, "seed {seed}: probability {probability}");
                 return;
             }
@@ -841,8 +886,15 @@ mod tests {
                     continue;
                 }
                 let energy = (threshold - 10.0 * softness).max(0.0) as u32;
-                let probability =
-                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0, 0.0);
+                let probability = genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        energy,
+                        touching_critter: false,
+                        recent_repetition: 0.0,
+                        ..Senses::default()
+                    },
+                );
                 assert!(probability < 0.01, "seed {seed}: probability {probability}");
                 return;
             }
@@ -873,10 +925,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 4 bits + threshold 7 bits = 11)
+            // Use a hard-coded offset (mask 6 bits + threshold 7 bits = 13)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 11;
+            const SOFTNESS_OFFSET_LITERAL: usize = 13;
             assert_eq!(
                 SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
                 "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
@@ -902,10 +954,33 @@ mod tests {
         fn with_no_factors_enabled_the_probability_does_not_depend_on_energy_or_touching() {
             let genome = genome_with_mask_for_split(0b00);
 
-            let p_low = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_high_energy =
-                genome.probability_of_acting(Instruction::Split, 500, false, 0.0, 0.0);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0, 0.0);
+            let p_low = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_high_energy = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 500,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_touching = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: true,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
 
             assert_eq!(p_low, p_high_energy);
             assert_eq!(p_low, p_touching);
@@ -915,9 +990,24 @@ mod tests {
         fn with_only_the_energy_factor_enabled_touching_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
 
-            let p_not_touching =
-                genome.probability_of_acting(Instruction::Split, 100, false, 0.0, 0.0);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 100, true, 0.0, 0.0);
+            let p_not_touching = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 100,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_touching = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 100,
+                    touching_critter: true,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
 
             assert_eq!(p_not_touching, p_touching);
         }
@@ -926,9 +1016,24 @@ mod tests {
         fn with_only_the_touching_factor_enabled_energy_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
 
-            let p_low_energy = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_high_energy =
-                genome.probability_of_acting(Instruction::Split, 500, false, 0.0, 0.0);
+            let p_low_energy = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_high_energy = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 500,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
 
             assert_eq!(p_low_energy, p_high_energy);
         }
@@ -939,9 +1044,24 @@ mod tests {
             // input — sigmoid(64) is essentially 1, sigmoid(0) is 0.5.
             let genome = genome_with_mask_for_split(TOUCHING_FACTOR_BIT);
 
-            let p_not_touching =
-                genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_touching = genome.probability_of_acting(Instruction::Split, 0, true, 0.0, 0.0);
+            let p_not_touching = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_touching = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: true,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
 
             assert!(p_not_touching < p_touching);
         }
@@ -950,45 +1070,151 @@ mod tests {
         fn with_no_color_factor_dissimilarity_does_not_change_the_probability() {
             let genome = genome_with_mask_for_split(0b000);
 
-            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0, 0.0);
+            let p_similar = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_dissimilar = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
 
             assert_eq!(p_similar, p_dissimilar);
         }
 
         #[test]
-        fn with_only_the_color_factor_enabled_dissimilarity_increases_the_probability() {
-            // Softness = 1, threshold = 0. Dissimilarity = 1 adds 64 to input;
-            // dissimilarity = 0 leaves input at 0. sigmoid(64) ≈ 1, sigmoid(0) = 0.5.
-            let genome = genome_with_mask_for_split(COLOR_DISSIMILARITY_FACTOR_BIT);
+        fn each_colour_channel_can_be_sensed_on_its_own() {
+            // A critter that senses green responds to green and ignores red,
+            // which is what makes food and poison distinguishable.
+            let genome = genome_with_mask_for_split(GREEN_FACTOR_BIT);
 
-            let p_similar = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_dissimilar = genome.probability_of_acting(Instruction::Split, 0, false, 1.0, 0.0);
+            let p_dark = genome.probability_of_acting(Instruction::Split, &Senses::default());
+            let p_green = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0x00_FF_00,
+                    ..Senses::default()
+                },
+            );
+            let p_red = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0xFF_00_00,
+                    ..Senses::default()
+                },
+            );
 
-            assert!(p_similar < p_dissimilar);
+            assert!(p_green > p_dark);
+            assert_eq!(p_red, p_dark);
         }
 
         #[test]
-        fn with_only_the_color_factor_enabled_neither_energy_nor_touching_changes_the_probability()
-        {
-            let genome = genome_with_mask_for_split(COLOR_DISSIMILARITY_FACTOR_BIT);
+        fn the_red_channel_is_sensed_separately_from_the_green() {
+            let genome = genome_with_mask_for_split(RED_FACTOR_BIT);
 
-            let baseline = genome.probability_of_acting(Instruction::Split, 0, false, 0.5, 0.0);
-            let varied_energy =
-                genome.probability_of_acting(Instruction::Split, 500, false, 0.5, 0.0);
-            let varied_touching =
-                genome.probability_of_acting(Instruction::Split, 0, true, 0.5, 0.0);
+            let p_green = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0x00_FF_00,
+                    ..Senses::default()
+                },
+            );
+            let p_red = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0xFF_00_00,
+                    ..Senses::default()
+                },
+            );
 
-            assert_eq!(baseline, varied_energy);
-            assert_eq!(baseline, varied_touching);
+            assert!(p_red > p_green);
         }
 
-        fn genome_with_mask_for_split(mask: u32) -> Genome {
-            // Threshold = 0, softness = 1 (raw bits 0). Just the mask varies.
-            let mut bytes = [0u8; TOTAL_BYTES];
-            let split_window = header_window_offset(instruction_index(Instruction::Split));
-            write_bits(&mut bytes, split_window, FACTOR_MASK_BITS, mask);
-            Genome { bytes }
+        #[test]
+        fn the_blue_channel_is_sensed_separately_too() {
+            let genome = genome_with_mask_for_split(BLUE_FACTOR_BIT);
+
+            let p_blue = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0x00_00_FF,
+                    ..Senses::default()
+                },
+            );
+            let p_green = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0x00_FF_00,
+                    ..Senses::default()
+                },
+            );
+
+            assert!(p_blue > p_green);
+        }
+
+        #[test]
+        fn a_full_channel_contributes_the_whole_channel_scale() {
+            // Pins the scaling rather than only its direction: full
+            // brightness contributes exactly COLOR_CHANNEL_SCALE, which a
+            // comparison between two colours leaves free.
+            let genome = genome_with_mask_for_split(GREEN_FACTOR_BIT);
+
+            let p = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0x00_FF_00,
+                    ..Senses::default()
+                },
+            );
+
+            // Threshold 0 and softness 1, so the probability is sigmoid of the
+            // contribution itself.
+            assert!((p - sigmoid(COLOR_CHANNEL_SCALE)).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn a_barely_lit_channel_contributes_barely_anything() {
+            // Tested near the bottom of the range, where the sigmoid has not
+            // saturated: at full brightness every plausible scaling saturates
+            // to 1.0 and the arithmetic cannot be seen at all.
+            let genome = genome_with_mask_for_split(GREEN_FACTOR_BIT);
+
+            let p = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0x00_01_00,
+                    ..Senses::default()
+                },
+            );
+
+            let expected = sigmoid(COLOR_CHANNEL_SCALE / 255.0);
+            assert!((p - expected).abs() < 0.001, "probability was {p}");
+        }
+
+        #[test]
+        fn a_genome_sensing_no_colour_ignores_it_entirely() {
+            let genome = genome_with_mask_for_split(0);
+
+            let p_dark = genome.probability_of_acting(Instruction::Split, &Senses::default());
+            let p_bright = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    touched_color: 0xFF_FF_FF,
+                    ..Senses::default()
+                },
+            );
+
+            assert_eq!(p_dark, p_bright);
         }
 
         #[test]
@@ -999,8 +1225,24 @@ mod tests {
             let mut genome = genome_with_mask_for_split(HISTORY_FACTOR_BIT);
             genome.set_history_window_bits(0b1111);
 
-            let p_unrepeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_repeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 1.0);
+            let p_unrepeated = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_repeated = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 1.0,
+                    ..Senses::default()
+                },
+            );
 
             assert!(p_unrepeated < p_repeated);
         }
@@ -1010,8 +1252,24 @@ mod tests {
             let mut genome = genome_with_mask_for_split(0b0000);
             genome.set_history_window_bits(0b1111);
 
-            let p_unrepeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 0.0);
-            let p_repeated = genome.probability_of_acting(Instruction::Split, 0, false, 0.0, 1.0);
+            let p_unrepeated = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 0.0,
+                    ..Senses::default()
+                },
+            );
+            let p_repeated = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: 0,
+                    touching_critter: false,
+                    recent_repetition: 1.0,
+                    ..Senses::default()
+                },
+            );
 
             assert_eq!(p_unrepeated, p_repeated);
         }
@@ -1026,19 +1284,69 @@ mod tests {
                 let genome = random_genome(seed);
                 let energy = 250;
                 let probabilities = [
-                    genome.probability_of_acting(Instruction::MoveForward, energy, false, 0.0, 0.0),
+                    genome.probability_of_acting(
+                        Instruction::MoveForward,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
+                    ),
                     genome.probability_of_acting(
                         Instruction::RepeatPreviousMove,
-                        energy,
-                        false,
-                        0.0,
-                        0.0,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
                     ),
-                    genome.probability_of_acting(Instruction::DoNothing, energy, false, 0.0, 0.0),
-                    genome.probability_of_acting(Instruction::TurnLeft, energy, false, 0.0, 0.0),
-                    genome.probability_of_acting(Instruction::TurnRight, energy, false, 0.0, 0.0),
-                    genome.probability_of_acting(Instruction::Split, energy, false, 0.0, 0.0),
-                    genome.probability_of_acting(Instruction::Eat, energy, false, 0.0, 0.0),
+                    genome.probability_of_acting(
+                        Instruction::DoNothing,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
+                    ),
+                    genome.probability_of_acting(
+                        Instruction::TurnLeft,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
+                    ),
+                    genome.probability_of_acting(
+                        Instruction::TurnRight,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
+                    ),
+                    genome.probability_of_acting(
+                        Instruction::Split,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
+                    ),
+                    genome.probability_of_acting(
+                        Instruction::Eat,
+                        &Senses {
+                            energy,
+                            touching_critter: false,
+                            recent_repetition: 0.0,
+                            ..Senses::default()
+                        },
+                    ),
                 ];
                 let mut sorted = probabilities.to_vec();
                 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -1097,73 +1405,6 @@ mod tests {
         }
     }
 
-    mod color_dissimilarity {
-        use super::*;
-
-        #[test]
-        fn identical_colors_have_zero_dissimilarity() {
-            assert_eq!(color_dissimilarity(0xAB_CD_EF, 0xAB_CD_EF), 0.0);
-        }
-
-        #[test]
-        fn black_and_white_have_maximum_dissimilarity() {
-            assert!((color_dissimilarity(0x00_00_00, 0xFF_FF_FF) - 1.0).abs() < 1e-6);
-        }
-
-        #[test]
-        fn dissimilarity_is_symmetric() {
-            let a = 0x12_34_56;
-            let b = 0xAB_CD_EF;
-
-            assert_eq!(color_dissimilarity(a, b), color_dissimilarity(b, a));
-        }
-
-        #[test]
-        fn closer_colors_are_less_dissimilar_than_more_distant_ones() {
-            let close = color_dissimilarity(0x10_10_10, 0x20_20_20);
-            let far = color_dissimilarity(0x10_10_10, 0xF0_F0_F0);
-
-            assert!(close < far);
-        }
-
-        #[test]
-        fn an_asymmetric_channel_delta_produces_a_known_intermediate_dissimilarity() {
-            // dr = 10, dg = 20, db = 30 → distance² = 100 + 400 + 900 = 1400.
-            // distance ≈ 37.417, max ≈ 441.673, ratio ≈ 0.0847. The exact
-            // numeric assertion catches mutations that scramble either the
-            // squared-distance sum or the normalizer.
-            let a = 0x00_00_00;
-            let b = 0x0A_14_1E;
-            let expected = (1400.0_f32).sqrt() / (3.0_f32 * 255.0 * 255.0).sqrt();
-
-            let actual = color_dissimilarity(a, b);
-
-            assert!((actual - expected).abs() < 1e-6, "{actual} vs {expected}");
-        }
-
-        #[test]
-        fn a_mid_gray_pair_produces_a_known_intermediate_dissimilarity() {
-            // 0x40_40_40 vs 0x80_80_80: dr = dg = db = 64.
-            // distance² = 3 * 64² = 12288, distance = 64*sqrt(3),
-            // ratio = 64*sqrt(3) / (255*sqrt(3)) = 64/255.
-            let actual = color_dissimilarity(0x40_40_40, 0x80_80_80);
-            let expected = 64.0 / 255.0;
-
-            assert!((actual - expected).abs() < 1e-6, "{actual} vs {expected}");
-        }
-
-        #[test]
-        fn the_dissimilarity_of_any_pair_lies_in_the_unit_interval() {
-            for seed in 0..50 {
-                let a = random_genome(seed).digest_color();
-                let b = random_genome(seed + 100).digest_color();
-                let d = color_dissimilarity(a, b);
-
-                assert!((0.0..=1.0).contains(&d), "{d}");
-            }
-        }
-    }
-
     mod digest_color {
         use super::*;
 
@@ -1202,19 +1443,28 @@ mod tests {
 
             // The signature byte sits at position [end_of_slice - 1] for each
             // third; only the matching channel should differ from the all-zero
-            // genome's color.
-            let (zr, zg, zb) = channels(zero.digest_color());
-            let (rr, rg, rb) = channels(red_only.digest_color());
+            // genome's color. Compared before brightening, since the floor
+            // can clamp two different hashes to the same value.
+            let channels = |genome: &Genome| {
+                let third = TOTAL_BYTES / 3;
+                (
+                    fnv1a_byte(&genome.bytes[0..third]),
+                    fnv1a_byte(&genome.bytes[third..2 * third]),
+                    fnv1a_byte(&genome.bytes[2 * third..]),
+                )
+            };
+            let (zr, zg, zb) = channels(&zero);
+            let (rr, rg, rb) = channels(&red_only);
             assert_ne!(zr, rr);
             assert_eq!(zg, rg);
             assert_eq!(zb, rb);
 
-            let (gr, gg, gb) = channels(green_only.digest_color());
+            let (gr, gg, gb) = channels(&green_only);
             assert_eq!(zr, gr);
             assert_ne!(zg, gg);
             assert_eq!(zb, gb);
 
-            let (br, bg, bb) = channels(blue_only.digest_color());
+            let (br, bg, bb) = channels(&blue_only);
             assert_eq!(zr, br);
             assert_eq!(zg, bg);
             assert_ne!(zb, bb);
@@ -1338,8 +1588,24 @@ mod tests {
             ] {
                 for energy in [0, 100, 250, 400, 500] {
                     assert_eq!(
-                        original.probability_of_acting(instruction, energy, false, 0.0, 0.0),
-                        cloned.probability_of_acting(instruction, energy, false, 0.0, 0.0),
+                        original.probability_of_acting(
+                            instruction,
+                            &Senses {
+                                energy,
+                                touching_critter: false,
+                                recent_repetition: 0.0,
+                                ..Senses::default()
+                            }
+                        ),
+                        cloned.probability_of_acting(
+                            instruction,
+                            &Senses {
+                                energy,
+                                touching_critter: false,
+                                recent_repetition: 0.0,
+                                ..Senses::default()
+                            }
+                        ),
                     );
                 }
             }

@@ -1,4 +1,4 @@
-use crate::{Genome, Heading, Instruction};
+use crate::{Genome, Heading, Instruction, Senses};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
@@ -261,17 +261,15 @@ impl Critter {
         // instruction's per-critter parameters. A "no" still consumes one
         // energy and `last_executed` is left untouched so RepeatPreviousMove
         // keeps referring to whatever did execute last.
-        let dissimilarity = match self.most_recent_overlap_color {
-            Some(other) => crate::genome::color_dissimilarity(self.genome.digest_color(), other),
-            None => 0.0,
+        let senses = Senses {
+            energy: self.energy,
+            touching_critter: self.is_overlapping_critter(),
+            // Black when nothing has been touched, so an untouched critter
+            // senses no colour rather than some arbitrary one.
+            touched_color: self.most_recent_overlap_color.unwrap_or(0),
+            recent_repetition: self.recent_repetition_of(instruction),
         };
-        let probability = self.genome.probability_of_acting(
-            instruction,
-            self.energy,
-            self.is_overlapping_critter(),
-            dissimilarity,
-            self.recent_repetition_of(instruction),
-        );
+        let probability = self.genome.probability_of_acting(instruction, &senses);
         let split_blocked = instruction == Instruction::Split && !allow_split;
         let acted = !split_blocked && self.roll_against(probability);
         let outcome = if acted {

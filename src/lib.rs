@@ -18,7 +18,7 @@ pub use cli::{parse as parse_cli, CliError, Startup};
 pub use critter::{Critter, MAX_CRITTER_ENERGY, SPLIT_DURATION_TICKS};
 pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;
-pub use genome::{Genome, GenomeParseError};
+pub use genome::{Genome, GenomeParseError, Senses};
 pub use heading::Heading;
 pub use instruction::Instruction;
 pub use pellet::{
