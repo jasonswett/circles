@@ -294,7 +294,9 @@ impl World {
         let (width, height) = (self.width as f32, self.height as f32);
         for pellet in &mut self.pellets {
             pellet.drift(width, height);
+            pellet.age += 1;
         }
+        self.pellets.retain(|pellet| !pellet.is_spoiled());
         self.resolve_poison();
         self.resolve_eats(&eater_indices);
         self.detect_critter_overlaps();
@@ -529,6 +531,7 @@ fn spawn_pellet_of_kind<R: Rng>(
         dx: angle.cos() * speed,
         dy: angle.sin() * speed,
         poisonous,
+        age: 0,
     }
 }
 
@@ -2211,6 +2214,49 @@ mod tests {
         }
 
         #[test]
+        fn ticking_ages_the_pellets() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.feed(&mut rng);
+
+            world.tick(true);
+
+            assert_eq!(world.pellets()[0].age, 1);
+        }
+
+        #[test]
+        fn a_spoiled_pellet_is_removed_from_the_world() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.feed(&mut rng);
+            let before = world.pellets().len();
+            for pellet in &mut world.pellets {
+                pellet.age = crate::PELLET_LIFETIME_TICKS - 1;
+            }
+
+            world.tick(true);
+
+            assert!(before > 0);
+            assert!(world.pellets().is_empty());
+        }
+
+        #[test]
+        fn spoilage_leaves_younger_pellets_alone() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.feed(&mut rng);
+            let doomed = world.pellets().len() / 2;
+            for pellet in world.pellets.iter_mut().take(doomed) {
+                pellet.age = crate::PELLET_LIFETIME_TICKS - 1;
+            }
+            let total = world.pellets().len();
+
+            world.tick(true);
+
+            assert_eq!(world.pellets().len(), total - doomed);
+        }
+
+        #[test]
         fn ticking_moves_a_pellet_along_its_heading() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
@@ -2235,6 +2281,7 @@ mod tests {
                 dx: 1.0,
                 dy: 0.0,
                 poisonous: false,
+                age: 0,
             };
 
             world.tick(true);
