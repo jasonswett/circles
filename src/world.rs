@@ -12,7 +12,7 @@ pub const CRITTER_RADIUS: i32 = 6;
 const PREDATION_SHARE_PERCENT: u32 = 25;
 // How far the eruption site travels each frame. Small, so the source drifts
 // visibly across the world rather than jumping between places.
-const ERUPTION_SITE_DRIFT: f32 = 0.6;
+const ERUPTION_SITE_DRIFT: f32 = 1.2;
 // How sharply the site's heading can turn each frame, in radians. Low enough
 // that the source wanders on a curve rather than jittering in place.
 const ERUPTION_SITE_TURN: f32 = 0.08;
