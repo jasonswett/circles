@@ -29,10 +29,10 @@ const REAPER_INTERVAL_FRAMES: u32 = 60;
 const SEED_BATCH_SIZE: usize = 100;
 const SEED_INTERVAL_FRAMES: u32 = 6;
 // Seeding stops once a world is this old, whether or not it reached the
-// target. Past this point the population is whatever the world grew or bred
-// on its own, so a slow machine ends up with a smaller world rather than one
-// that keeps topping itself up indefinitely.
-const SEED_WINDOW: Duration = Duration::from_secs(5);
+// target. Long enough that critters keep arriving while the larder is still
+// filling: seeded critters that appear before there is food to find simply
+// starve, so the window outlasts the world's first stock of food.
+const SEED_WINDOW: Duration = Duration::from_secs(30);
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
