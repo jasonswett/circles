@@ -10,6 +10,12 @@ pub const CRITTER_RADIUS: i32 = 6;
 // not take, the prey keeps, and only a critter with nothing left to give dies
 // of being eaten.
 const PREDATION_SHARE_PERCENT: u32 = 25;
+// How far the eruption site travels each frame. Small, so the source drifts
+// visibly across the world rather than jumping between places.
+const ERUPTION_SITE_DRIFT: f32 = 0.6;
+// How sharply the site's heading can turn each frame, in radians. Low enough
+// that the source wanders on a curve rather than jittering in place.
+const ERUPTION_SITE_TURN: f32 = 0.08;
 // How often a predator does not survive its own attack. Predation is
 // dangerous as well as profitable: the bite lands, but this share of the time
 // the predator dies of it.
@@ -72,6 +78,10 @@ pub struct World {
     pellets_emitted: usize,
     /// Frames until the next replenishment, or zero while feeding.
     frames_until_feeding: u32,
+    /// Where food is currently erupting from, and the heading it is
+    /// wandering along. Both drift every frame, so the source travels.
+    eruption_site: (f32, f32),
+    eruption_heading: f32,
     /// The genome new critters are seeded with, if this world was started
     /// from one. None means each newcomer gets a fresh random genome.
     seed_genome: Option<Genome>,
@@ -96,6 +106,12 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             frames_until_feeding: 0,
+            // Test-only constructor: a fixed site, since it has no rng.
+            eruption_site: (
+                rng.gen_range(0.0..width as f32),
+                rng.gen_range(0.0..height as f32),
+            ),
+            eruption_heading: rng.gen_range(0.0..std::f32::consts::TAU),
             seed_genome: None,
         }
     }
@@ -123,6 +139,11 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             frames_until_feeding: 0,
+            eruption_site: (
+                rng.gen_range(0.0..width as f32),
+                rng.gen_range(0.0..height as f32),
+            ),
+            eruption_heading: rng.gen_range(0.0..std::f32::consts::TAU),
             seed_genome: Some(seed_genome),
         }
     }
@@ -175,6 +196,9 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             frames_until_feeding: 0,
+            // Test-only constructor: a fixed site, since it has no rng.
+            eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
+            eruption_heading: 0.0,
             seed_genome: None,
         }
     }
@@ -197,6 +221,7 @@ impl World {
     /// restored, then waits FEEDING_INTERVAL_FRAMES before the next
     /// replenishment begins.
     pub fn feed<R: Rng>(&mut self, rng: &mut R) {
+        self.drift_eruption_site(rng);
         if self.frames_until_feeding > 0 {
             self.frames_until_feeding -= 1;
             return;
@@ -205,6 +230,29 @@ impl World {
         if !self.needs_more_food() {
             self.frames_until_feeding = FEEDING_INTERVAL_FRAMES;
         }
+    }
+
+    /// Where food is currently erupting from.
+    pub fn eruption_site(&self) -> (f32, f32) {
+        self.eruption_site
+    }
+
+    /// Nudges the eruption site along its heading, turning it slightly, so
+    /// the source wanders continuously instead of sitting still.
+    //
+    // The `+=` on the heading is an equivalent mutant: the turn is drawn
+    // symmetrically about zero, so subtracting it yields the same
+    // distribution of headings as adding it.
+    #[mutants::skip]
+    fn drift_eruption_site<R: Rng>(&mut self, rng: &mut R) {
+        self.eruption_heading += rng.gen_range(-ERUPTION_SITE_TURN..=ERUPTION_SITE_TURN);
+        let (width, height) = (self.width as f32, self.height as f32);
+        self.eruption_site = (
+            (self.eruption_site.0 + self.eruption_heading.cos() * ERUPTION_SITE_DRIFT)
+                .rem_euclid(width),
+            (self.eruption_site.1 + self.eruption_heading.sin() * ERUPTION_SITE_DRIFT)
+                .rem_euclid(height),
+        );
     }
 
     /// Whether the world holds less energy than its budget allows. Counts
@@ -225,12 +273,8 @@ impl World {
             }
             self.pellets_emitted += 1;
             let poisonous = self.pellets_emitted.is_multiple_of(PELLETS_PER_POISON);
-            self.pellets.push(spawn_pellet_of_kind(
-                self.width,
-                self.height,
-                poisonous,
-                rng,
-            ));
+            self.pellets
+                .push(spawn_pellet_of_kind(self.eruption_site, poisonous, rng));
         }
     }
 
@@ -525,20 +569,15 @@ fn spawn_critter_with_genome<R: Rng>(
 /// where a critter forages matters.
 #[cfg(test)]
 fn spawn_pellet<R: Rng>(width: usize, height: usize, rng: &mut R) -> Pellet {
-    spawn_pellet_of_kind(width, height, false, rng)
+    spawn_pellet_of_kind((width as f32 / 2.0, height as f32 / 2.0), false, rng)
 }
 
-fn spawn_pellet_of_kind<R: Rng>(
-    width: usize,
-    height: usize,
-    poisonous: bool,
-    rng: &mut R,
-) -> Pellet {
+fn spawn_pellet_of_kind<R: Rng>(site: (f32, f32), poisonous: bool, rng: &mut R) -> Pellet {
     let angle = rng.gen_range(0.0..std::f32::consts::TAU);
     let speed = rng.gen_range(PELLET_MIN_DRIFT..=PELLET_MAX_DRIFT);
     Pellet {
-        x: width as f32 / 2.0,
-        y: height as f32 / 2.0,
+        x: site.0,
+        y: site.1,
         dx: angle.cos() * speed,
         dy: angle.sin() * speed,
         poisonous,
@@ -1302,6 +1341,187 @@ mod tests {
                 world.original_total_energy(),
                 full_population_energy() + full_larder_energy()
             );
+        }
+
+        #[test]
+        fn different_worlds_start_their_site_in_different_places() {
+            let sites: std::collections::HashSet<(i32, i32)> = (0..30)
+                .map(|seed| {
+                    let mut rng = StdRng::seed_from_u64(seed);
+                    let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+                    let (x, y) = world.eruption_site();
+                    (x.round() as i32, y.round() as i32)
+                })
+                .collect();
+
+            assert!(sites.len() > 1, "every world began at the same site");
+        }
+
+        #[test]
+        fn the_site_drifts_every_frame() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            let before = world.eruption_site();
+
+            world.feed(&mut rng);
+
+            assert_ne!(world.eruption_site(), before);
+        }
+
+        #[test]
+        fn each_step_is_the_configured_drift_in_some_direction() {
+            // Pins the step's size exactly: the site moves ERUPTION_SITE_DRIFT
+            // per frame, decomposed across the axes by its heading. Measured
+            // away from the edges so no wrap folds the comparison.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+
+            for _ in 0..50 {
+                let before = world.eruption_site();
+                world.feed(&mut rng);
+                let after = world.eruption_site();
+                let (dx, dy) = (after.0 - before.0, after.1 - before.1);
+                let step = (dx * dx + dy * dy).sqrt();
+
+                assert!(
+                    (step - ERUPTION_SITE_DRIFT).abs() < 0.001,
+                    "step was {step}, expected {ERUPTION_SITE_DRIFT}"
+                );
+                world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+            }
+        }
+
+        #[test]
+        fn the_site_travels_along_its_heading_not_against_it() {
+            // Pins direction as well as distance: the site moves the way its
+            // heading points, which a step-size check alone cannot tell.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+            world.eruption_heading = 0.0; // due east
+
+            let before = world.eruption_site();
+            world.feed(&mut rng);
+            let after = world.eruption_site();
+
+            // The heading turns a little first, but never past a right angle,
+            // so an eastward heading must still carry the site east.
+            assert!(
+                after.0 > before.0,
+                "site moved west ({} to {}) on an eastward heading",
+                before.0,
+                after.0
+            );
+        }
+
+        #[test]
+        fn the_site_travels_north_on_a_northward_heading() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+            world.eruption_heading = std::f32::consts::FRAC_PI_2; // due south in screen terms
+
+            let before = world.eruption_site();
+            world.feed(&mut rng);
+            let after = world.eruption_site();
+
+            assert!(after.1 > before.1);
+        }
+
+        #[test]
+        fn the_heading_turns_both_ways() {
+            // A heading that could only turn one way would spiral rather than
+            // wander, so the turn spans zero in both directions.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            let (mut left, mut right) = (false, false);
+
+            for _ in 0..200 {
+                let before = world.eruption_heading;
+                world.feed(&mut rng);
+                if world.eruption_heading < before {
+                    left = true;
+                }
+                if world.eruption_heading > before {
+                    right = true;
+                }
+            }
+
+            assert!(left && right, "heading turned only one way");
+        }
+
+        #[test]
+        fn the_heading_turns_by_no_more_than_its_limit() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..200 {
+                let before = world.eruption_heading;
+                world.feed(&mut rng);
+                let turn = (world.eruption_heading - before).abs();
+
+                assert!(turn <= ERUPTION_SITE_TURN + 0.001, "heading turned {turn}");
+            }
+        }
+
+        #[test]
+        fn the_site_drifts_slowly_rather_than_jumping() {
+            // Continuous drift: a frame moves the site a little, so a viewer
+            // can see it travel rather than teleport.
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..200 {
+                let before = world.eruption_site();
+                world.feed(&mut rng);
+                let after = world.eruption_site();
+                let dx = toroidal_delta(
+                    after.0.round() as i32,
+                    before.0.round() as i32,
+                    TEST_WIDTH as i32,
+                ) as f32;
+                let dy = toroidal_delta(
+                    after.1.round() as i32,
+                    before.1.round() as i32,
+                    TEST_HEIGHT as i32,
+                ) as f32;
+                let step = (dx * dx + dy * dy).sqrt();
+                assert!(
+                    step <= ERUPTION_SITE_DRIFT + 1.5,
+                    "site moved {step} in one frame"
+                );
+            }
+        }
+
+        #[test]
+        fn the_site_wanders_across_the_world_over_time() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+            let start = world.eruption_site();
+
+            for _ in 0..2000 {
+                world.feed(&mut rng);
+            }
+
+            let (dx, dy) = (
+                world.eruption_site().0 - start.0,
+                world.eruption_site().1 - start.1,
+            );
+            assert!((dx * dx + dy * dy).sqrt() > ERUPTION_SITE_DRIFT * 10.0);
+        }
+
+        #[test]
+        fn the_site_stays_inside_the_world() {
+            let mut world = empty_world();
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..5000 {
+                world.feed(&mut rng);
+                let (x, y) = world.eruption_site();
+                assert!((0.0..TEST_WIDTH as f32).contains(&x));
+                assert!((0.0..TEST_HEIGHT as f32).contains(&y));
+            }
         }
 
         #[test]
