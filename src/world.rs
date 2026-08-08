@@ -10,6 +10,10 @@ pub const CRITTER_RADIUS: i32 = 6;
 // not take, the prey keeps, and only a critter with nothing left to give dies
 // of being eaten.
 const PREDATION_SHARE_PERCENT: u32 = 25;
+// How often a predator does not survive its own attack. Predation is
+// dangerous as well as profitable: the bite lands, but this share of the time
+// the predator dies of it.
+const PREDATION_DEATH_PERCENT: u32 = 10;
 
 // The population a world grows toward. It does not start there: spawning
 // thousands of critters at once stalls the first seconds of a run, so a world
@@ -356,6 +360,10 @@ impl World {
                 self.critters[eater_index].gain_energy(bite);
                 self.critters[victim_index].lose_energy(bite.max(1));
                 self.critters[victim_index].mark_being_eaten_for(EATEN_INDICATOR_LINGER_TICKS);
+                // The bite lands either way; the predator may not survive it.
+                if self.critters[eater_index].roll_predation_death(PREDATION_DEATH_PERCENT) {
+                    self.critters[eater_index].die();
+                }
             }
         }
     }
@@ -1806,6 +1814,102 @@ mod tests {
                 0,
                 Genome::all(Instruction::DoNothing),
             )
+        }
+
+        #[test]
+        fn predation_sometimes_kills_the_predator() {
+            // Attacking carries a risk: some share of the time the predator
+            // does not survive the meal.
+            let deaths = (0..200u64)
+                .filter(|&seed| {
+                    let eater = Critter::with_genome(
+                        100,
+                        100,
+                        Heading::North,
+                        1,
+                        1,
+                        HUNGRY_INITIAL,
+                        seed,
+                        Genome::all(Instruction::Eat),
+                    );
+                    let victim = idle_critter_with_energy(105, 100, 80);
+                    let mut world = World::with_critters_and_pellets(
+                        TEST_WIDTH,
+                        TEST_HEIGHT,
+                        vec![eater, victim],
+                        vec![],
+                    );
+                    world.tick(true);
+                    world.critters()[0].energy() == 0
+                })
+                .count();
+
+            // Near the configured rate rather than merely nonzero: a wide
+            // band, since 200 trials of a 10% risk vary considerably.
+            let expected = 200 * PREDATION_DEATH_PERCENT as usize / 100;
+            assert!(
+                deaths > expected / 2 && deaths < expected * 2,
+                "{deaths} of 200 predators died, expected near {expected}"
+            );
+        }
+
+        #[test]
+        fn a_predator_that_dies_still_lands_its_bite() {
+            // The meal happens; the predator merely does not survive it.
+            let mut bitten_despite_death = false;
+            for seed in 0..200u64 {
+                let eater = Critter::with_genome(
+                    100,
+                    100,
+                    Heading::North,
+                    1,
+                    1,
+                    HUNGRY_INITIAL,
+                    seed,
+                    Genome::all(Instruction::Eat),
+                );
+                let victim = idle_critter_with_energy(105, 100, 80);
+                let mut world = World::with_critters_and_pellets(
+                    TEST_WIDTH,
+                    TEST_HEIGHT,
+                    vec![eater, victim],
+                    vec![],
+                );
+                world.tick(true);
+                if world.critters()[0].energy() == 0 && world.critters()[1].energy() < 80 {
+                    bitten_despite_death = true;
+                    break;
+                }
+            }
+
+            assert!(bitten_despite_death);
+        }
+
+        #[test]
+        fn eating_a_pellet_carries_no_such_risk() {
+            // Only predation is dangerous; foraging is not.
+            for seed in 0..50u64 {
+                let eater = Critter::with_genome(
+                    100,
+                    100,
+                    Heading::North,
+                    1,
+                    1,
+                    HUNGRY_INITIAL,
+                    seed,
+                    Genome::all(Instruction::Eat),
+                );
+                let mut world = World::with_critters_and_pellets(
+                    TEST_WIDTH,
+                    TEST_HEIGHT,
+                    vec![eater],
+                    vec![Pellet::at(100, 100)],
+                );
+
+                world.tick(true);
+
+                assert!(world.critters()[0].energy() > 0);
+            }
         }
 
         #[test]

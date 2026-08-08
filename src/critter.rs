@@ -173,6 +173,12 @@ impl Critter {
         self.energy = self.energy.saturating_sub(amount);
     }
 
+    /// Rolls the predator's own dice against a percentage risk, using its
+    /// own rng so the outcome is the critter's rather than the world's.
+    pub fn roll_predation_death(&mut self, percent: u32) -> bool {
+        self.rng.gen_range(0..100) < percent
+    }
+
     /// Kills the critter outright. A zero-energy critter can't act and the
     /// reaper removes it on its next pass.
     pub fn die(&mut self) {
@@ -1275,6 +1281,50 @@ mod tests {
             critter.wrap_position(WIDTH, HEIGHT);
 
             assert_eq!(critter.x(), 7);
+        }
+    }
+
+    mod predation_risk {
+        use super::*;
+        use crate::Genome;
+
+        fn roller(seed: u64) -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                60,
+                seed,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_zero_percent_risk_never_kills() {
+            // The boundary: a roll of 0 must fall outside a 0% risk, so the
+            // comparison is strict.
+            let mut any = false;
+            for seed in 0..200 {
+                if roller(seed).roll_predation_death(0) {
+                    any = true;
+                }
+            }
+
+            assert!(!any);
+        }
+
+        #[test]
+        fn a_hundred_percent_risk_always_kills() {
+            let mut all = true;
+            for seed in 0..200 {
+                if !roller(seed).roll_predation_death(100) {
+                    all = false;
+                }
+            }
+
+            assert!(all);
         }
     }
 
