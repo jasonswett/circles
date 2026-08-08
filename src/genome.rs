@@ -53,12 +53,6 @@ const HISTORY_FACTOR_SCALE: f32 = 64.0;
 // encoded range is 1..=16 and no instruction can be excluded outright —
 // which also means the cumulative table is never empty.
 const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
-// A thumb on the scale for reproduction. Split's evolved weight is scaled by
-// this before it competes with the other instructions, so every genome
-// devotes more of its stream to dividing than its bits alone would ask for.
-// A multiplier rather than a floor: it scales what the genome asked for, so
-// a genome that favours splitting still outweighs one that does not.
-const SPLIT_WEIGHT_MULTIPLIER: u32 = 4;
 #[cfg(test)]
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
 const WEIGHT_BITS: usize = INSTRUCTION_COUNT * WEIGHT_BITS_PER_INSTRUCTION;
@@ -327,12 +321,7 @@ impl Genome {
     /// Read as `bits + 1` so every instruction keeps a nonzero share.
     fn instruction_weight(&self, instruction: Instruction) -> u32 {
         let offset = WEIGHTS_OFFSET + instruction_index(instruction) * WEIGHT_BITS_PER_INSTRUCTION;
-        let weight = read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1;
-        if instruction == Instruction::Split {
-            weight * SPLIT_WEIGHT_MULTIPLIER
-        } else {
-            weight
-        }
+        read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1
     }
 
     /// Overwrites one instruction's weight field. Test-only: in a running
@@ -1439,24 +1428,23 @@ mod tests {
 
             let counts = decoded_counts(&genome);
 
-            // Weights are bits + 1, and Split's is then multiplied: Eat holds
-            // 16, Split 4, the other five 1 each, totalling 25. Opcode value c
-            // maps to position floor(c * 25 / 16), so Eat takes 10 of the 16
-            // values, Split 2, and four of the five minimum-weight
-            // instructions one apiece — TurnRight's band is the one no opcode
-            // value lands in. Naming each instruction's share, rather than
-            // summing them, is what pins the scaling arithmetic: formulas that
-            // shift which instructions get a slot preserve the totals but not
-            // this breakdown.
+            // Weights are bits + 1: Eat holds 16, the other six hold 1 each,
+            // totalling 22. Opcode value c maps to position floor(c * 22 / 16),
+            // so Eat takes 11 of the 16 values and five of the six
+            // minimum-weight instructions take one apiece — DoNothing's band
+            // is the one no opcode value lands in. Naming each instruction's
+            // share, rather than summing the non-Eat ones, is what pins the
+            // scaling arithmetic: formulas that shift which instructions get
+            // a slot preserve the totals but not this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 10);
-            assert_eq!(share(Instruction::Split), 2);
+            assert_eq!(share(Instruction::Eat), 11);
             assert_eq!(share(Instruction::MoveForward), 1);
             assert_eq!(share(Instruction::TurnLeft), 1);
-            assert_eq!(share(Instruction::DoNothing), 1);
+            assert_eq!(share(Instruction::TurnRight), 1);
             assert_eq!(share(Instruction::RepeatPreviousMove), 1);
-            assert_eq!(share(Instruction::TurnRight), 0);
+            assert_eq!(share(Instruction::Split), 1);
+            assert_eq!(share(Instruction::DoNothing), 0);
         }
 
         #[test]
