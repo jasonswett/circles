@@ -78,6 +78,9 @@ pub struct Critter {
     recent_actions: VecDeque<Instruction>,
     /// Ticks left in an in-progress division, or zero when not dividing.
     dividing_ticks_remaining: u32,
+    /// How many ticks this critter has lived. Its own, not inherited: a child
+    /// begins at nothing however old its parent is.
+    age: u32,
     rng: SmallRng,
 }
 
@@ -158,6 +161,7 @@ impl Critter {
             most_recent_overlap_color: None,
             recent_actions: VecDeque::new(),
             dividing_ticks_remaining: 0,
+            age: 0,
             rng,
         }
     }
@@ -176,6 +180,11 @@ impl Critter {
 
     pub fn energy(&self) -> u32 {
         self.energy
+    }
+
+    /// How many ticks this critter has lived.
+    pub fn age(&self) -> u32 {
+        self.age
     }
 
     pub fn initial_energy(&self) -> u32 {
@@ -273,6 +282,10 @@ impl Critter {
     }
 
     pub fn tick(&mut self, allow_split: bool) -> TickOutcome {
+        // Counted on every tick the critter exists, including the ones where
+        // it does not fire, so age measures time lived rather than actions
+        // taken.
+        self.age = self.age.saturating_add(1);
         self.tick_counter += 1;
         if self.tick_counter < self.next_fire_threshold {
             return TickOutcome::default();
@@ -302,6 +315,7 @@ impl Critter {
             // senses no colour rather than some arbitrary one.
             touched_color: self.most_recent_overlap_color.unwrap_or(0),
             recent_repetition: self.recent_repetition_of(instruction),
+            age: self.age,
         };
         let probability = self.genome.probability_of_acting(instruction, &senses);
         let split_blocked = instruction == Instruction::Split && !allow_split;
@@ -487,6 +501,7 @@ impl Critter {
             step_size: self.step_size,
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
+            age: 0,
             overlap_indicator_ticks: 0,
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
@@ -1044,6 +1059,62 @@ mod tests {
             critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 3);
+        }
+    }
+
+    mod age {
+        use super::*;
+
+        fn a_critter() -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_new_critter_has_lived_no_ticks() {
+            let critter = a_critter();
+
+            assert_eq!(critter.age(), 0);
+        }
+
+        #[test]
+        fn a_critter_ages_a_tick_at_a_time() {
+            let mut critter = a_critter();
+
+            critter.tick(true);
+            critter.tick(true);
+            critter.tick(true);
+
+            assert_eq!(critter.age(), 3);
+        }
+
+        #[test]
+        fn a_child_is_born_with_no_age_of_its_own() {
+            // Age is the critter's own, not something inherited: a child
+            // starts its life at nothing however old its parent is.
+            let mut parent = Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                1,
+                MAX_CRITTER_ENERGY,
+                0,
+                Genome::all(Instruction::Split),
+            );
+
+            let child = divide_fully(&mut parent);
+
+            assert!(parent.age() > 0, "the parent should have lived a while");
+            assert_eq!(child.age(), 0);
         }
     }
 

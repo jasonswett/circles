@@ -17,7 +17,7 @@ const MAX_MUTATION_RATE: f32 = 0.0005;
 // factor contributes to the sigmoid input; off means it is ignored. This is
 // the "stair-step" mechanism: a single mutation can enable or disable a
 // whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 6;
+const FACTOR_MASK_BITS: usize = 7;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -33,6 +33,12 @@ const MIN_SOFTNESS: f32 = 1.0;
 // express triggered at 127 -- an eighth of the range -- and every energy above
 // that read identically. "Hold out until nearly full" was not a rule evolution
 // was failing to find; it was one the genome had no way to say.
+// How long a critter takes to count as grown. Age matters while a critter is
+// young -- newborn, half grown, grown -- and stops mattering after that: one
+// long life is much like another, so the sense saturates rather than
+// separating the old from the very old forever.
+pub const MATURE_AGE: u32 = 600;
+const AGE_FACTOR_SCALE: f32 = 64.0;
 const ENERGY_FACTOR_SCALE: f32 = 64.0;
 const TOUCHING_FACTOR_SCALE: f32 = 64.0;
 
@@ -54,6 +60,7 @@ const RED_FACTOR_BIT: u32 = 0b0000_0100;
 const GREEN_FACTOR_BIT: u32 = 0b0001_0000;
 const BLUE_FACTOR_BIT: u32 = 0b0010_0000;
 const HISTORY_FACTOR_BIT: u32 = 0b0000_1000;
+const AGE_FACTOR_BIT: u32 = 0b0100_0000;
 
 // When the history factor is enabled, the contribution scales from 0 (none of
 // the remembered actions were this instruction) up to this value (all of them
@@ -116,6 +123,8 @@ pub struct Senses {
     /// color itself rather than how unlike itself it is.
     pub touched_color: u32,
     pub recent_repetition: f32,
+    /// How many ticks the critter has lived.
+    pub age: u32,
 }
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -331,7 +340,16 @@ impl Genome {
         } else {
             0.0
         };
-        let input = energy_contribution
+        // Saturating rather than asymptotic: growing up is what age is for,
+        // and a critter long past MATURE_AGE reads the same as one that just
+        // reached it.
+        let age_contribution = if mask & AGE_FACTOR_BIT != 0 {
+            AGE_FACTOR_SCALE * senses.age.min(MATURE_AGE) as f32 / MATURE_AGE as f32
+        } else {
+            0.0
+        };
+        let input = age_contribution
+            + energy_contribution
             + touching_contribution
             + red_contribution
             + green_contribution
@@ -847,6 +865,98 @@ mod tests {
         }
 
         #[test]
+        fn a_young_critter_and_an_old_one_are_told_apart() {
+            let genome = genome_with_mask_for_split(AGE_FACTOR_BIT);
+            let probe = |age: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        age,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            assert!(probe(MATURE_AGE / 4) < probe(MATURE_AGE));
+        }
+
+        #[test]
+        fn age_stops_mattering_once_a_critter_is_grown() {
+            // Whether a critter is newborn, half grown, or grown is what its
+            // decisions can turn on. Past that, one long life is much like
+            // another and the sense saturates.
+            let genome = genome_with_mask_for_split(AGE_FACTOR_BIT);
+            let probe = |age: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        age,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            assert_eq!(probe(MATURE_AGE), probe(MATURE_AGE * 10));
+        }
+
+        #[test]
+        fn age_is_ignored_unless_the_genome_asks_for_it() {
+            let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
+            let probe = |age: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        age,
+                        energy: 100,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            assert_eq!(probe(0), probe(MATURE_AGE));
+        }
+
+        #[test]
+        fn every_instruction_can_consult_age() {
+            // Not a sense reserved to one decision: any instruction's rule can
+            // turn on how old the critter is.
+            for instruction in [
+                Instruction::MoveSlow,
+                Instruction::MoveFast,
+                Instruction::TurnLeft,
+                Instruction::TurnRight,
+                Instruction::DoNothing,
+                Instruction::RepeatPreviousMove,
+                Instruction::Split,
+                Instruction::Eat,
+                Instruction::SkipAhead,
+                Instruction::SkipBack,
+            ] {
+                let mut bytes = [0u8; TOTAL_BYTES];
+                let window = header_window_offset(instruction_index(instruction));
+                write_bits(&mut bytes, window, FACTOR_MASK_BITS, AGE_FACTOR_BIT);
+                let genome = Genome { bytes };
+
+                let young = genome.probability_of_acting(
+                    instruction,
+                    &Senses {
+                        age: 0,
+                        ..Senses::default()
+                    },
+                );
+                let old = genome.probability_of_acting(
+                    instruction,
+                    &Senses {
+                        age: MATURE_AGE,
+                        ..Senses::default()
+                    },
+                );
+
+                assert!(old > young, "{instruction:?} should be able to sense age");
+            }
+        }
+
+        #[test]
         fn a_threshold_can_hold_out_for_most_of_the_energy_range() {
             // Energy is normalized like every other factor, so the encodable
             // thresholds span the whole range a critter's energy can reach.
@@ -992,7 +1102,7 @@ mod tests {
         fn far_below_the_threshold_the_probability_approaches_zero() {
             // Search for a seed whose Split rule has the energy factor on and
             // sits well above zero so we have room to probe below it.
-            for seed in 0..100 {
+            for seed in 0..2000 {
                 let genome = random_genome(seed);
                 let (mask, threshold, softness) = genome.params(Instruction::Split);
                 if mask & ENERGY_FACTOR_BIT == 0 {
@@ -1041,10 +1151,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 6 bits + threshold 7 bits = 13)
+            // Use a hard-coded offset (mask 7 bits + threshold 7 bits = 14)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 13;
+            const SOFTNESS_OFFSET_LITERAL: usize = 14;
             assert_eq!(
                 SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
                 "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
