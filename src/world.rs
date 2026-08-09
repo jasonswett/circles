@@ -41,7 +41,7 @@ const ERUPTION_SITE_TURN: f32 = 0.08;
 // At a quarter share this puts break-even at a victim holding 160 -- well
 // above the energy a critter is seeded or born with, so attacking anything
 // but a conspicuously well-fed neighbor is a losing move.
-pub const PREDATION_ATTACK_COST: u32 = 40;
+pub const PREDATION_ATTACK_COST: u32 = 100;
 const PREDATION_BASE_DEATH_PERCENT: u32 = 5;
 const PREDATION_ENERGY_DEATH_PERCENT: u32 = 30;
 
