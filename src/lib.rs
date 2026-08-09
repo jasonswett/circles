@@ -16,8 +16,7 @@ mod world_record;
 
 pub use cli::{parse as parse_cli, CliError, Startup};
 pub use critter::{
-    Critter, CRITTER_RADIUS, MAX_CRITTER_ENERGY, MIN_CRITTER_RADIUS, REFERENCE_ENERGY,
-    SPLIT_DURATION_TICKS,
+    Critter, CRITTER_RADIUS, MAX_CRITTER_ENERGY, REFERENCE_ENERGY, SPLIT_DURATION_TICKS,
 };
 pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;

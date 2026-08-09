@@ -1903,10 +1903,11 @@ mod tests {
 
         #[test]
         fn critters_that_touch_at_the_overlap_threshold_are_not_marked_overlapping() {
-            // Distance equals exactly 2 * CRITTER_RADIUS: tangent, not
+            // Distance equals exactly the two radii together: tangent, not
             // overlapping. The strict `<` comparison must reject this pair.
             let a = idle_critter_at(100, 100);
-            let b = idle_critter_at(100 + 2 * CRITTER_RADIUS, 100);
+            let touching = a.radius() * 2;
+            let b = idle_critter_at(100 + touching, 100);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
 
@@ -1957,7 +1958,8 @@ mod tests {
             // each component separately rather than sum, subtract, or
             // otherwise collapse them into one value.
             let a = idle_critter_at(100, 100);
-            let b = idle_critter_at(100 + CRITTER_RADIUS, 100 + 2 * CRITTER_RADIUS - 1);
+            let r = a.radius();
+            let b = idle_critter_at(100 + r, 100 + 2 * r - 1);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
 
@@ -2077,7 +2079,7 @@ mod tests {
 
     mod physical_size {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, MIN_CRITTER_RADIUS, REFERENCE_ENERGY};
+        use crate::{Critter, Genome, Heading, Instruction, REFERENCE_ENERGY};
 
         fn eater_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             Critter::with_genome(
@@ -2325,11 +2327,11 @@ mod tests {
 
         #[test]
         fn a_spent_critter_still_takes_up_space() {
-            // Size bottoms out rather than vanishing, so a corpse is still
-            // something a neighbor can run into.
+            // The free allowance means a corpse is a full-sized body, not a
+            // speck: it is still something a neighbor can run into.
             let critter = idle_with_energy(0, 0, 0);
 
-            assert_eq!(critter.radius(), MIN_CRITTER_RADIUS);
+            assert_eq!(critter.radius(), CRITTER_RADIUS);
         }
     }
 
@@ -2826,10 +2828,12 @@ mod tests {
 
         #[test]
         fn a_critter_at_exactly_the_eat_distance_is_not_drained() {
-            // Distance equals exactly 2 * CRITTER_RADIUS — circles tangent,
-            // not overlapping. The strict `<` comparison must reject this pair.
+            // Distance equals exactly the two radii together — circles
+            // tangent, not overlapping. The strict `<` comparison must reject
+            // this pair.
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(100 + 2 * CRITTER_RADIUS, 100, 80);
+            let touching = eater.radius() + idle_critter_with_energy(0, 0, 80).radius();
+            let victim = idle_critter_with_energy(100 + touching, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2849,8 +2853,8 @@ mod tests {
             // proves the squared-distance computation must square each
             // component independently rather than summing or subtracting them.
             let eater = eating_critter(100, 100);
-            let victim =
-                idle_critter_with_energy(100 + CRITTER_RADIUS, 100 + 2 * CRITTER_RADIUS - 1, 80);
+            let r = (eater.radius() + idle_critter_with_energy(0, 0, 80).radius()) / 2;
+            let victim = idle_critter_with_energy(100 + r, 100 + 2 * r - 1, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2961,7 +2965,7 @@ mod tests {
         #[test]
         fn poison_at_exactly_the_touch_radius_does_not_kill() {
             // Tangent, not overlapping: the comparison is strict.
-            let touch = CRITTER_RADIUS + PELLET_RADIUS;
+            let touch = critter_at(0, 0).radius() + PELLET_RADIUS;
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,

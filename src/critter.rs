@@ -9,14 +9,16 @@ pub const MAX_CRITTER_ENERGY: u32 = 1000;
 // times. Size is therefore a reading of how well fed a critter is, visible at
 // a glance without any readout.
 //
-// REFERENCE_ENERGY is the energy at which a critter is exactly CRITTER_RADIUS
-// across -- the size every critter used to be -- so the scale is anchored to
-// what the world looked like before size varied.
+// CRITTER_RADIUS is the size a critter is for free, whatever its energy --
+// the size every critter used to be. Energy buys area on top of that, so the
+// newly born and the nearly spent are still fully visible bodies rather than
+// specks, and being well fed shows as growth beyond the ordinary rather than
+// as the difference between existing and not.
 pub const CRITTER_RADIUS: i32 = 6;
+// The energy that doubles a critter's area, taking it from the free size to
+// about one and a half times as wide. Larger values make energy count for
+// less, flattening the range of sizes the world shows.
 pub const REFERENCE_ENERGY: u32 = 250;
-// No critter draws smaller than this, so a spent one stays visible until the
-// reaper takes it rather than vanishing at zero energy.
-pub const MIN_CRITTER_RADIUS: i32 = 2;
 // Energy charged when a critter actually fires Split, regardless of whether
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
@@ -174,12 +176,14 @@ impl Critter {
         &self.genome
     }
 
-    /// How wide this critter is, in pixels. Area is proportional to energy,
-    /// so this grows as the square root of it.
+    /// How wide this critter is, in pixels. Area is the free allowance plus
+    /// the critter's energy, so the radius grows as the square root: four
+    /// times the energy makes a critter twice as wide, not four times.
     pub fn radius(&self) -> i32 {
         let energy = self.energy.min(MAX_CRITTER_ENERGY) as f32;
-        let scaled = CRITTER_RADIUS as f32 * (energy / REFERENCE_ENERGY as f32).sqrt();
-        (scaled.round() as i32).max(MIN_CRITTER_RADIUS)
+        let reference = REFERENCE_ENERGY as f32;
+        let scaled = CRITTER_RADIUS as f32 * ((energy + reference) / reference).sqrt();
+        scaled.round() as i32
     }
 
     /// A color derived from the genome bytes — identical for genomes with
@@ -1260,20 +1264,20 @@ mod tests {
         }
 
         #[test]
-        fn a_critter_at_the_reference_energy_has_the_reference_radius() {
-            let critter = critter_with_energy(REFERENCE_ENERGY);
+        fn a_critter_with_nothing_is_still_the_free_size() {
+            // Size is not earned from zero: every critter gets CRITTER_RADIUS
+            // for nothing, and energy buys growth beyond it.
+            let critter = critter_with_energy(0);
 
             assert_eq!(critter.radius(), CRITTER_RADIUS);
         }
 
         #[test]
-        fn four_times_the_energy_makes_a_critter_twice_as_wide() {
-            // Area grows with energy, and area goes as the square of the
-            // radius, so the radius goes as the square root of the energy.
-            let small = critter_with_energy(REFERENCE_ENERGY);
-            let large = critter_with_energy(REFERENCE_ENERGY * 4);
+        fn energy_makes_a_critter_larger_than_the_free_size() {
+            let free = critter_with_energy(0);
+            let fed = critter_with_energy(REFERENCE_ENERGY);
 
-            assert_eq!(large.radius(), small.radius() * 2);
+            assert!(fed.radius() > free.radius());
         }
 
         #[test]
@@ -1282,9 +1286,10 @@ mod tests {
             // at one convenient pair: area over energy is a constant. Radii
             // are whole pixels, so each one is within rounding of the ideal
             // rather than exactly on it.
-            for energy in (REFERENCE_ENERGY / 4..=MAX_CRITTER_ENERGY).step_by(37) {
+            for energy in (0..=MAX_CRITTER_ENERGY).step_by(37) {
+                let reference = REFERENCE_ENERGY as f32;
                 let ideal =
-                    CRITTER_RADIUS as f32 * (energy as f32 / REFERENCE_ENERGY as f32).sqrt();
+                    CRITTER_RADIUS as f32 * ((energy as f32 + reference) / reference).sqrt();
                 let actual = critter_with_energy(energy).radius() as f32;
 
                 assert!(
@@ -1295,12 +1300,22 @@ mod tests {
         }
 
         #[test]
-        fn a_spent_critter_is_still_drawn() {
-            // Zero energy would be zero area. A critter is never smaller than
-            // this, so a corpse remains visible until the reaper takes it.
-            let critter = critter_with_energy(0);
+        fn a_critters_area_is_its_energy_plus_the_free_allowance() {
+            // The law itself: area over (energy + allowance) is constant, so
+            // the same energy adds the same area wherever a critter starts.
+            let probe = |energy: u32| {
+                let r = critter_with_energy(energy).radius() as f32;
+                r * r / (energy + REFERENCE_ENERGY) as f32
+            };
 
-            assert_eq!(critter.radius(), MIN_CRITTER_RADIUS);
+            let lean = probe(0);
+            let middling = probe(REFERENCE_ENERGY * 2);
+            let full = probe(MAX_CRITTER_ENERGY);
+
+            assert!(
+                (middling - lean).abs() < 0.02 && (full - lean).abs() < 0.02,
+                "area per unit should be constant, got {lean} {middling} {full}"
+            );
         }
 
         #[test]
