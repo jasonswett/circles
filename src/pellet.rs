@@ -75,7 +75,7 @@ pub const PELLET_COLOR: u32 = 0x00_FF_00;
 pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
 pub const PELLETS_PER_POISON: usize = 25;
-pub const PELLET_ENERGY: u32 = 100;
+pub const PELLET_ENERGY: u32 = 200;
 /// How long a pellet lasts before rotting away, in ticks. At 60 ticks per
 /// second this is 20 seconds. Uneaten food does not accumulate forever, so
 /// the larder reflects recent deliveries rather than the world's whole
