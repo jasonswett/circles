@@ -3,7 +3,7 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 
-pub const MAX_CRITTER_ENERGY: u32 = 500;
+pub const MAX_CRITTER_ENERGY: u32 = 1000;
 // Energy charged when a critter actually fires Split, regardless of whether
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
