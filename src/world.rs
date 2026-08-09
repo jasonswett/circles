@@ -1,6 +1,6 @@
 use crate::{
-    Critter, Genome, Heading, Pellet, PELLETS_PER_POISON, PELLET_MAX_DRIFT, PELLET_MIN_DRIFT,
-    PELLET_RADIUS,
+    Critter, Genome, Heading, Pellet, MAX_CRITTER_ENERGY, PELLETS_PER_POISON, PELLET_MAX_DRIFT,
+    PELLET_MIN_DRIFT, PELLET_RADIUS,
 };
 use rand::Rng;
 
@@ -16,10 +16,19 @@ const ERUPTION_SITE_DRIFT: f32 = 3.0;
 // How sharply the site's heading can turn each frame, in radians. Low enough
 // that the source wanders on a curve rather than jittering in place.
 const ERUPTION_SITE_TURN: f32 = 0.08;
-// How often a predator does not survive its own attack. Predation is
-// dangerous as well as profitable: the bite lands, but this share of the time
-// the predator dies of it.
-const PREDATION_DEATH_PERCENT: u32 = 10;
+// How often a predator does not survive its own attack. The bite always
+// lands; this is the chance it costs the predator its life.
+//
+// The risk scales with what the victim has left to fight with: the base
+// applies against prey with nothing, and a victim at full energy adds the
+// whole of the scaled part on top. Since the bite is a fixed share of the
+// victim's energy, the fattest target is also the most rewarding one --
+// scaling the danger the same way puts reward and risk on one axis, so
+// attacking indiscriminately is punished while attacking the depleted is
+// nearly free. It is also how predation works: healthy prey fights back, and
+// wolves take the elk that cannot run.
+const PREDATION_BASE_DEATH_PERCENT: u32 = 5;
+const PREDATION_ENERGY_DEATH_PERCENT: u32 = 30;
 
 // The population a world grows toward. It does not start there: spawning
 // thousands of critters at once stalls the first seconds of a run, so a world
@@ -398,7 +407,8 @@ impl World {
                 self.critters[victim_index].lose_energy(bite.max(1));
                 self.critters[victim_index].mark_being_eaten_for(EATEN_INDICATOR_LINGER_TICKS);
                 // The bite lands either way; the predator may not survive it.
-                if self.critters[eater_index].roll_predation_death(PREDATION_DEATH_PERCENT) {
+                let risk = predation_death_percent(victim_energy);
+                if self.critters[eater_index].roll_predation_death(risk) {
                     self.critters[eater_index].die();
                 }
             }
@@ -562,6 +572,15 @@ fn spawn_critter_with_genome<R: Rng>(
 #[cfg(test)]
 fn spawn_pellet<R: Rng>(width: usize, height: usize, rng: &mut R) -> Pellet {
     spawn_pellet_of_kind((width as f32 / 2.0, height as f32 / 2.0), false, rng)
+}
+
+/// How likely an attack is to kill the predator, given what the victim has
+/// left to resist with. Ranges from the base risk against spent prey up to
+/// the base plus the full scaled part against prey at full energy.
+fn predation_death_percent(victim_energy: u32) -> u32 {
+    let scaled =
+        PREDATION_ENERGY_DEATH_PERCENT * victim_energy.min(MAX_CRITTER_ENERGY) / MAX_CRITTER_ENERGY;
+    PREDATION_BASE_DEATH_PERCENT + scaled
 }
 
 fn spawn_pellet_of_kind<R: Rng>(site: (f32, f32), poisonous: bool, rng: &mut R) -> Pellet {
@@ -2068,7 +2087,20 @@ mod tests {
         fn predation_sometimes_kills_the_predator() {
             // Attacking carries a risk: some share of the time the predator
             // does not survive the meal.
-            let deaths = (0..200u64)
+            let deaths = predator_deaths_against_victim_energy(80, 200);
+
+            // Near the rate the victim's energy implies, rather than merely
+            // nonzero: a wide band, since 200 trials vary considerably.
+            let expected = 200 * predation_death_percent(80) as usize / 100;
+            assert!(
+                deaths > expected / 2 && deaths < expected * 2,
+                "{deaths} of 200 predators died, expected near {expected}"
+            );
+        }
+
+        // How many of `trials` predators died biting a victim of this energy.
+        fn predator_deaths_against_victim_energy(victim_energy: u32, trials: u64) -> usize {
+            (0..trials)
                 .filter(|&seed| {
                     let eater = Critter::with_genome(
                         100,
@@ -2080,7 +2112,7 @@ mod tests {
                         seed,
                         Genome::all(Instruction::Eat),
                     );
-                    let victim = idle_critter_with_energy(105, 100, 80);
+                    let victim = idle_critter_with_energy(105, 100, victim_energy);
                     let mut world = World::with_critters_and_pellets(
                         TEST_WIDTH,
                         TEST_HEIGHT,
@@ -2090,14 +2122,35 @@ mod tests {
                     world.tick(true);
                     world.critters()[0].energy() == 0
                 })
-                .count();
+                .count()
+        }
 
-            // Near the configured rate rather than merely nonzero: a wide
-            // band, since 200 trials of a 10% risk vary considerably.
-            let expected = 200 * PREDATION_DEATH_PERCENT as usize / 100;
+        #[test]
+        fn biting_a_strong_victim_kills_more_predators_than_biting_a_weak_one() {
+            // Healthy prey fights back. The risk of attacking scales with what
+            // the victim has left, so the fattest target is also the most
+            // dangerous one.
+            let against_weak = predator_deaths_against_victim_energy(1, 300);
+            let against_strong = predator_deaths_against_victim_energy(MAX_CRITTER_ENERGY, 300);
+
             assert!(
-                deaths > expected / 2 && deaths < expected * 2,
-                "{deaths} of 200 predators died, expected near {expected}"
+                against_strong > against_weak * 2,
+                "expected biting a strong victim to be far deadlier, \
+                 got {against_strong} vs {against_weak} of 300"
+            );
+        }
+
+        #[test]
+        fn biting_a_spent_victim_is_near_the_base_risk() {
+            // A victim with nothing left offers no resistance beyond the
+            // baseline danger of attacking at all.
+            let deaths = predator_deaths_against_victim_energy(1, 300);
+
+            let expected = 300 * PREDATION_BASE_DEATH_PERCENT as usize / 100;
+            assert!(
+                deaths > expected / 2 && deaths < expected * 2 + 5,
+                "{deaths} of 300 predators died against a spent victim, \
+                 expected near {expected}"
             );
         }
 
