@@ -4,7 +4,14 @@ use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
-const BIT_FLIP_RATE: f32 = 0.01;
+// How much of the genome changes when a mutation fires. With 440 bits and a
+// mutation chance capped at MAX_MUTATION_CHANCE, this puts the ceiling at
+// roughly 0.2 changed bits per split. Higher rates crowd the error threshold,
+// the point past which selection cannot hold a genome together faster than
+// mutation degrades it: adaptations needing several bits get torn down before
+// they can pay off. Far hotter per bit than nature, which is correct for a
+// 440-bit genome whose generations are seconds long rather than years.
+const BIT_FLIP_RATE: f32 = 0.002;
 // Energy charged when a critter actually fires Split, regardless of whether
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
