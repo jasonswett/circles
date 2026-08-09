@@ -1,10 +1,9 @@
 use crate::{
-    Critter, Genome, Heading, Pellet, MAX_CRITTER_ENERGY, PELLETS_PER_POISON, PELLET_MAX_DRIFT,
-    PELLET_MIN_DRIFT, PELLET_RADIUS,
+    Critter, Genome, Heading, Pellet, CRITTER_RADIUS, MAX_CRITTER_ENERGY, PELLETS_PER_POISON,
+    PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS,
 };
 use rand::Rng;
 
-pub const CRITTER_RADIUS: i32 = 6;
 // What share of its prey's energy a predator takes in one bite. Partial, so
 // predation wears prey down rather than executing it: what the predator does
 // not take, the prey keeps, and only a critter with nothing left to give dies

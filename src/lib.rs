@@ -15,7 +15,10 @@ mod world;
 mod world_record;
 
 pub use cli::{parse as parse_cli, CliError, Startup};
-pub use critter::{Critter, MAX_CRITTER_ENERGY, SPLIT_DURATION_TICKS};
+pub use critter::{
+    Critter, CRITTER_RADIUS, MAX_CRITTER_ENERGY, MIN_CRITTER_RADIUS, REFERENCE_ENERGY,
+    SPLIT_DURATION_TICKS,
+};
 pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;
 pub use genome::{Genome, GenomeParseError, Senses};
@@ -30,5 +33,5 @@ pub use renderer::Renderer;
 pub use snapshot::format_block as format_snapshot_block;
 pub use stagnation_detector::StagnationDetector;
 pub use text::pixels as text_pixels;
-pub use world::{World, CRITTER_RADIUS, PELLET_BATCH_SIZE};
+pub use world::{World, PELLET_BATCH_SIZE};
 pub use world_record::WorldRecord;

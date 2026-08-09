@@ -1,7 +1,6 @@
 use circles::{
     format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
     PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, WorldRecord,
-    CRITTER_RADIUS,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
@@ -186,7 +185,7 @@ fn main() {
             Renderer::draw_pellet(pellet, &mut frame_pixels, width, height);
         }
         for critter in world.critters() {
-            Renderer::draw(critter, CRITTER_RADIUS, &mut frame_pixels, width, height);
+            Renderer::draw(critter, critter.radius(), &mut frame_pixels, width, height);
         }
         let energy_text = format!("Energy: {displayed_total_energy}");
         let max_energy_text = format!("Max energy: {}", world.original_total_energy());
