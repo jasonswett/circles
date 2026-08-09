@@ -294,8 +294,6 @@ impl World {
     /// Contact alone is fatal: a critter need not be trying to eat, and
     /// nothing in its sensorium warns it.
     fn resolve_poison(&mut self) {
-        let touch_distance_squared =
-            (CRITTER_RADIUS + PELLET_RADIUS) * (CRITTER_RADIUS + PELLET_RADIUS);
         let (width, height) = (self.width as i32, self.height as i32);
         let mut spent: Vec<usize> = Vec::new();
 
@@ -303,6 +301,8 @@ impl World {
             if critter.energy() == 0 {
                 continue;
             }
+            let reach = critter.radius() + PELLET_RADIUS;
+            let touch_distance_squared = reach * reach;
             let touched = self.pellets.iter().position(|pellet| {
                 if !pellet.poisonous {
                     return false;
@@ -371,9 +371,6 @@ impl World {
 
     fn resolve_eats(&mut self, eater_indices: &[usize]) {
         let count = self.critters.len();
-        let pellet_eat_distance_squared =
-            (CRITTER_RADIUS + PELLET_RADIUS) * (CRITTER_RADIUS + PELLET_RADIUS);
-        let critter_eat_distance_squared = (2 * CRITTER_RADIUS) * (2 * CRITTER_RADIUS);
         let width = self.width as i32;
         let height = self.height as i32;
 
@@ -386,6 +383,11 @@ impl World {
             }
             let eater_x = self.critters[eater_index].x();
             let eater_y = self.critters[eater_index].y();
+            // Reach is the eater's own radius, so a well-fed critter covers
+            // more ground than a starving one.
+            let eater_radius = self.critters[eater_index].radius();
+            let pellet_reach = eater_radius + PELLET_RADIUS;
+            let pellet_eat_distance_squared = pellet_reach * pellet_reach;
 
             // Look for an overlapping pellet first; eat it if found.
             let pellet_position = self.pellets.iter().position(|pellet| {
@@ -412,7 +414,10 @@ impl World {
                 }
                 let dx = toroidal_delta(eater_x, self.critters[victim_index].x(), width);
                 let dy = toroidal_delta(eater_y, self.critters[victim_index].y(), height);
-                dx * dx + dy * dy < critter_eat_distance_squared
+                // Both bring their own radius to the contact, so a fat victim
+                // is easier to catch as well as more worth catching.
+                let reach = eater_radius + self.critters[victim_index].radius();
+                dx * dx + dy * dy < reach * reach
             });
             if let Some(victim_index) = victim_index {
                 // Paid up front, out of what the predator actually has. A
@@ -444,7 +449,6 @@ impl World {
         if count < 2 {
             return;
         }
-        let overlap_distance_squared = (2 * CRITTER_RADIUS) * (2 * CRITTER_RADIUS);
         let width = self.width as i32;
         let height = self.height as i32;
         let budget = OVERLAP_DETECTION_BUDGET.min(count);
@@ -463,7 +467,8 @@ impl World {
                 }
                 let dx = toroidal_delta(self.critters[i].x(), self.critters[j].x(), width);
                 let dy = toroidal_delta(self.critters[i].y(), self.critters[j].y(), height);
-                if dx * dx + dy * dy < overlap_distance_squared {
+                let reach = self.critters[i].radius() + self.critters[j].radius();
+                if dx * dx + dy * dy < reach * reach {
                     let i_color = self.critters[i].genome_color();
                     let j_color = self.critters[j].genome_color();
                     self.critters[i].mark_overlapping_critter_for(OVERLAP_INDICATOR_LINGER_TICKS);
@@ -1008,8 +1013,9 @@ mod tests {
 
         #[test]
         fn a_pellet_just_inside_the_eating_distance_is_consumed() {
-            let pellet = Pellet::at(100 + (CRITTER_RADIUS + PELLET_RADIUS - 1), 100);
-            let mut world = world_with(eating_critter(100, 100), pellet);
+            let eater = eating_critter(100, 100);
+            let pellet = Pellet::at(100 + (eater.radius() + PELLET_RADIUS - 1), 100);
+            let mut world = world_with(eater, pellet);
 
             world.tick(true);
 
@@ -1028,8 +1034,9 @@ mod tests {
 
         #[test]
         fn a_pellet_at_exactly_the_eating_distance_is_not_consumed() {
-            let pellet = Pellet::at(100 + CRITTER_RADIUS + PELLET_RADIUS, 100);
-            let mut world = world_with(eating_critter(100, 100), pellet);
+            let eater = eating_critter(100, 100);
+            let pellet = Pellet::at(100 + eater.radius() + PELLET_RADIUS, 100);
+            let mut world = world_with(eater, pellet);
 
             world.tick(true);
 
@@ -1063,8 +1070,11 @@ mod tests {
 
         #[test]
         fn a_critter_near_the_left_edge_can_eat_a_pellet_near_the_right_edge_via_wrap() {
-            let pellet = Pellet::at(TEST_WIDTH as i32 - 2, 100);
-            let mut world = world_with(eating_critter(2, 100), pellet);
+            // Placed within the eater's own reach of the far edge, so what
+            // is being tested is the wrap rather than the reach.
+            let eater = eating_critter(1, 100);
+            let pellet = Pellet::at(TEST_WIDTH as i32 - 1, 100);
+            let mut world = world_with(eater, pellet);
 
             world.tick(true);
 
@@ -1073,8 +1083,9 @@ mod tests {
 
         #[test]
         fn a_critter_near_the_top_edge_can_eat_a_pellet_near_the_bottom_edge_via_wrap() {
-            let pellet = Pellet::at(100, TEST_HEIGHT as i32 - 2);
-            let mut world = world_with(eating_critter(100, 2), pellet);
+            let eater = eating_critter(100, 1);
+            let pellet = Pellet::at(100, TEST_HEIGHT as i32 - 1);
+            let mut world = world_with(eater, pellet);
 
             world.tick(true);
 
@@ -1922,12 +1933,13 @@ mod tests {
 
         #[test]
         fn two_critters_just_inside_the_overlap_threshold_are_both_marked() {
-            // Centers one pixel closer than the 2 * CRITTER_RADIUS threshold,
-            // so the pair counts as overlapping. Sitting just inside the
-            // boundary kills threshold mutations whose squared cutoff drops
-            // below this separation.
+            // Centers one pixel closer than the two radii together, so the
+            // pair counts as overlapping. Sitting just inside the boundary
+            // kills threshold mutations whose squared cutoff drops below this
+            // separation.
             let a = idle_critter_at(100, 100);
-            let b = idle_critter_at(100 + 2 * CRITTER_RADIUS - 1, 100);
+            let gap = a.radius() + idle_critter_at(0, 0).radius() - 1;
+            let b = idle_critter_at(100 + gap, 100);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![a, b], vec![]);
 
@@ -2060,6 +2072,264 @@ mod tests {
             world.detect_critter_overlaps();
             world.detect_critter_overlaps();
             world
+        }
+    }
+
+    mod physical_size {
+        use super::*;
+        use crate::{Critter, Genome, Heading, Instruction, MIN_CRITTER_RADIUS, REFERENCE_ENERGY};
+
+        fn eater_with_energy(x: i32, y: i32, energy: u32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                1,
+                1,
+                energy,
+                0,
+                Genome::all(Instruction::Eat),
+            )
+        }
+
+        fn idle_with_energy(x: i32, y: i32, energy: u32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                u32::MAX,
+                1,
+                energy,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_large_critter_reaches_a_pellet_a_small_one_cannot() {
+            // Reach is the critter's own radius, so being well fed extends it.
+            let small = eater_with_energy(100, 100, REFERENCE_ENERGY / 4);
+            let large = eater_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let gap = large.radius() + PELLET_RADIUS - 1;
+            assert!(gap > small.radius() + PELLET_RADIUS);
+
+            let mut small_world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![small],
+                vec![Pellet::at(100 + gap, 100)],
+            );
+            let mut large_world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![large],
+                vec![Pellet::at(100 + gap, 100)],
+            );
+
+            small_world.tick(true);
+            large_world.tick(true);
+
+            assert_eq!(
+                small_world.pellets().len(),
+                1,
+                "small critter should not reach"
+            );
+            assert_eq!(large_world.pellets().len(), 0, "large critter should reach");
+        }
+
+        #[test]
+        fn two_critters_touch_when_the_gap_is_less_than_their_radii_together() {
+            // Each critter brings its own radius to the contact, so a fat one
+            // is easier to reach and easier to be reached by.
+            let eater = eater_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let victim = idle_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let gap = eater.radius() + victim.radius() - 1;
+            let victim_energy = victim.energy();
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, idle_with_energy(100 + gap, 100, victim_energy)],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert!(
+                world.critters()[1].energy() < victim_energy,
+                "a victim within the two radii should have been bitten"
+            );
+        }
+
+        #[test]
+        fn a_small_victim_at_the_same_gap_is_out_of_reach() {
+            // The same predator, the same distance, a smaller victim: now the
+            // radii do not meet.
+            let eater = eater_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let fat = idle_with_energy(0, 0, MAX_CRITTER_ENERGY);
+            let gap = eater.radius() + fat.radius() - 1;
+            let lean_energy = REFERENCE_ENERGY / 16;
+            let lean = idle_with_energy(100 + gap, 100, lean_energy);
+            assert!(eater.radius() + lean.radius() <= gap);
+
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, lean],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[1].energy(), lean_energy);
+        }
+
+        #[test]
+        fn a_large_critter_reaches_exactly_as_far_as_its_own_radius() {
+            // The boundary for a critter whose radius is not the reference
+            // one: a pellet one pixel inside is eaten, one exactly at the
+            // edge is not.
+            let eater = eater_with_energy(100, 100, MAX_CRITTER_ENERGY);
+            let reach = eater.radius() + PELLET_RADIUS;
+
+            let mut inside = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater_with_energy(100, 100, MAX_CRITTER_ENERGY)],
+                vec![Pellet::at(100 + reach - 1, 100)],
+            );
+            let mut at_edge = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater_with_energy(100, 100, MAX_CRITTER_ENERGY)],
+                vec![Pellet::at(100 + reach, 100)],
+            );
+
+            inside.tick(true);
+            at_edge.tick(true);
+
+            assert_eq!(inside.pellets().len(), 0, "one inside should be eaten");
+            assert_eq!(at_edge.pellets().len(), 1, "one at the edge should not");
+        }
+
+        #[test]
+        fn a_large_critter_touches_poison_at_exactly_its_own_radius() {
+            let probe = idle_with_energy(0, 0, MAX_CRITTER_ENERGY);
+            let reach = probe.radius() + PELLET_RADIUS;
+
+            let mut inside = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![idle_with_energy(100, 100, MAX_CRITTER_ENERGY)],
+                vec![Pellet::poison_at(100 + reach - 1, 100)],
+            );
+            let mut at_edge = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![idle_with_energy(100, 100, MAX_CRITTER_ENERGY)],
+                vec![Pellet::poison_at(100 + reach, 100)],
+            );
+
+            inside.tick(true);
+            at_edge.tick(true);
+
+            assert_eq!(inside.critters()[0].energy(), 0, "one inside should kill");
+            assert!(
+                at_edge.critters()[0].energy() > 0,
+                "one at the edge should not"
+            );
+        }
+
+        #[test]
+        fn a_large_critters_poison_reach_is_measured_by_true_distance() {
+            // Offset on both axes, just outside the reach. Measuring the axes
+            // by anything but the true diagonal would put this inside.
+            let probe = idle_with_energy(0, 0, MAX_CRITTER_ENERGY);
+            let reach = probe.radius() + PELLET_RADIUS;
+            let offset = reach - 4;
+            assert!(offset * offset * 2 > reach * reach, "must sit outside");
+
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![idle_with_energy(100, 100, MAX_CRITTER_ENERGY)],
+                vec![Pellet::poison_at(100 + offset, 100 + offset)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+        }
+
+        #[test]
+        fn two_large_critters_overlap_at_exactly_their_radii_together() {
+            let probe = idle_with_energy(0, 0, MAX_CRITTER_ENERGY);
+            let reach = probe.radius() * 2;
+
+            let mut inside = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![
+                    idle_with_energy(100, 100, MAX_CRITTER_ENERGY),
+                    idle_with_energy(100 + reach - 1, 100, MAX_CRITTER_ENERGY),
+                ],
+                vec![],
+            );
+            let mut at_edge = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![
+                    idle_with_energy(100, 100, MAX_CRITTER_ENERGY),
+                    idle_with_energy(100 + reach, 100, MAX_CRITTER_ENERGY),
+                ],
+                vec![],
+            );
+
+            inside.detect_critter_overlaps();
+            at_edge.detect_critter_overlaps();
+
+            assert!(inside.critters()[0].is_overlapping_critter());
+            assert!(!at_edge.critters()[0].is_overlapping_critter());
+        }
+
+        #[test]
+        fn a_large_predator_bites_at_exactly_the_two_radii() {
+            let probe = idle_with_energy(0, 0, MAX_CRITTER_ENERGY);
+            let reach = probe.radius() * 2;
+            let victim_energy = MAX_CRITTER_ENERGY;
+
+            let mut inside = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![
+                    eater_with_energy(100, 100, MAX_CRITTER_ENERGY),
+                    idle_with_energy(100 + reach - 1, 100, victim_energy),
+                ],
+                vec![],
+            );
+            let mut at_edge = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![
+                    eater_with_energy(100, 100, MAX_CRITTER_ENERGY),
+                    idle_with_energy(100 + reach, 100, victim_energy),
+                ],
+                vec![],
+            );
+
+            inside.tick(true);
+            at_edge.tick(true);
+
+            assert!(inside.critters()[1].energy() < victim_energy);
+            assert_eq!(at_edge.critters()[1].energy(), victim_energy);
+        }
+
+        #[test]
+        fn a_spent_critter_still_takes_up_space() {
+            // Size bottoms out rather than vanishing, so a corpse is still
+            // something a neighbor can run into.
+            let critter = idle_with_energy(0, 0, 0);
+
+            assert_eq!(critter.radius(), MIN_CRITTER_RADIUS);
         }
     }
 
@@ -2534,11 +2804,14 @@ mod tests {
 
         #[test]
         fn a_victim_just_inside_the_critter_eat_radius_is_bitten() {
-            // Centers one pixel closer than the 2 * CRITTER_RADIUS eat radius.
-            // Mutations that shrink the threshold below this separation would
-            // mistakenly classify the pair as out of range.
+            // Centers one pixel closer than the two radii together, which is
+            // where the eat threshold falls. Mutations that shrink the
+            // threshold below this separation would mistakenly classify the
+            // pair as out of range.
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(100 + 2 * CRITTER_RADIUS - 1, 100, 80);
+            let victim_probe = idle_critter_with_energy(0, 0, 80);
+            let gap = eater.radius() + victim_probe.radius() - 1;
+            let victim = idle_critter_with_energy(100 + gap, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2672,7 +2945,7 @@ mod tests {
         fn poison_just_inside_the_touch_radius_kills() {
             // One pixel closer than the boundary. Pins where the radius
             // falls, which a poison pellet sitting on the critter does not.
-            let touch = CRITTER_RADIUS + PELLET_RADIUS;
+            let touch = critter_at(0, 0).radius() + PELLET_RADIUS;
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
