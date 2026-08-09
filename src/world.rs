@@ -27,8 +27,10 @@ const PREDATION_DEATH_PERCENT: u32 = 10;
 // holds.
 const NUM_CRITTERS: usize = 4000;
 // How many critters a world starts with. Above MIN_POPULATION so a freshly
-// seeded world is not immediately judged too small and reset.
-const SEED_POPULATION: usize = 100;
+// seeded world is not immediately judged too small and reset. Small, because
+// the opening moments are the leanest: no food has been delivered yet, so
+// every critter alive is spending energy it has no way to replace.
+const SEED_POPULATION: usize = 50;
 // How much food a world's energy budget is sized for. Not a ceiling on
 // pellets: nothing caps the larder, which settles wherever consumption meets
 // the feed rate.

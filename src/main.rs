@@ -23,16 +23,21 @@ const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
 // A world ramps up to its target population instead of spawning it all at
-// once: this many critters are added every SEED_INTERVAL_FRAMES (~100ms at
+// once: this many critters are added every SEED_INTERVAL_FRAMES (~500ms at
 // 60 FPS), and only while the frame rate is holding, so a machine that
 // cannot keep up simply settles at a smaller population.
-const SEED_BATCH_SIZE: usize = 100;
-const SEED_INTERVAL_FRAMES: u32 = 6;
+//
+// The ramp is deliberately gentle. Seeding and feeding share the same frame
+// rate gate, so a population that arrives faster than the machine can draw
+// it stalls the very deliveries the new critters need: the world starves
+// itself at exactly the moment it is most crowded.
+const SEED_BATCH_SIZE: usize = 20;
+const SEED_INTERVAL_FRAMES: u32 = 30;
 // Seeding stops once a world is this old, whether or not it reached the
 // target. Long enough that critters keep arriving while the larder is still
 // filling: seeded critters that appear before there is food to find simply
 // starve, so the window outlasts the world's first stock of food.
-const SEED_WINDOW: Duration = Duration::from_secs(30);
+const SEED_WINDOW: Duration = Duration::from_secs(60);
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
