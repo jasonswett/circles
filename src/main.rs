@@ -1,5 +1,5 @@
 use circles::{
-    format_elapsed, format_snapshot_block, parse_cli, text_pixels, FeedingState, FpsCounter,
+    format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
     PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, WorldRecord,
     CRITTER_RADIUS,
 };
@@ -8,7 +8,6 @@ use rand::thread_rng;
 use std::time::{Duration, Instant, SystemTime};
 
 const FRAME_DURATION_MICROSECONDS: u64 = 16_667;
-const FRAMES_PER_SECOND: f32 = 60.0;
 const BACKGROUND_COLOR: u32 = 0x00_00_00;
 const TEXT_COLOR: u32 = 0xFF_FF_FF;
 const TEXT_SIZE: f32 = 28.0;
@@ -202,12 +201,6 @@ fn main() {
             format_elapsed(world_record.best_elapsed()),
             world_record.best_world()
         );
-        let food_text = match world.feeding_state() {
-            FeedingState::Filling => "Food: filling".to_string(),
-            FeedingState::Waiting(frames) => {
-                format!("Next food: {:.1}s", frames as f32 / FRAMES_PER_SECOND)
-            }
-        };
         draw_text_top_right(&energy_text, 0, &mut frame_pixels, width, height);
         draw_text_top_right(&max_energy_text, 1, &mut frame_pixels, width, height);
         draw_text_top_right(&fps_text, 2, &mut frame_pixels, width, height);
@@ -215,8 +208,7 @@ fn main() {
         draw_text_top_right(&pellets_text, 4, &mut frame_pixels, width, height);
         draw_text_top_right(&world_text, 5, &mut frame_pixels, width, height);
         draw_text_top_right(&time_text, 6, &mut frame_pixels, width, height);
-        draw_text_top_right(&food_text, 7, &mut frame_pixels, width, height);
-        draw_text_top_right(&record_text, 8, &mut frame_pixels, width, height);
+        draw_text_top_right(&record_text, 7, &mut frame_pixels, width, height);
 
         window
             .update_with_buffer(&frame_pixels, width, height)
