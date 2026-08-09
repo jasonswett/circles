@@ -27,6 +27,17 @@ const ERUPTION_SITE_TURN: f32 = 0.08;
 // attacking indiscriminately is punished while attacking the depleted is
 // nearly free. It is also how predation works: healthy prey fights back, and
 // wolves take the elk that cannot run.
+// What a predator spends to attack, charged whether or not the bite is worth
+// having. Eating a pellet is free: the charge falls on cannibalism alone.
+//
+// Firing Eat costs nothing, so a genome of nothing but Eat was close to
+// optimal -- it takes a pellet when one is there and bites a neighbor
+// otherwise, at no cost either way. Cannibalism was not a strategy so much as
+// the default, and nothing selected against it. Attacking now has to pay for
+// itself: the share taken from a depleted victim does not cover this, so
+// preying on the weak loses energy, while preying on the strong is profitable
+// but carries the death roll above.
+pub const PREDATION_ATTACK_COST: u32 = 15;
 const PREDATION_BASE_DEATH_PERCENT: u32 = 5;
 const PREDATION_ENERGY_DEATH_PERCENT: u32 = 30;
 
@@ -403,6 +414,7 @@ impl World {
             if let Some(victim_index) = victim_index {
                 let victim_energy = self.critters[victim_index].energy();
                 let bite = victim_energy * PREDATION_SHARE_PERCENT / 100;
+                self.critters[eater_index].lose_energy(PREDATION_ATTACK_COST);
                 self.critters[eater_index].gain_energy(bite);
                 self.critters[victim_index].lose_energy(bite.max(1));
                 self.critters[victim_index].mark_being_eaten_for(EATEN_INDICATOR_LINGER_TICKS);
@@ -2214,8 +2226,10 @@ mod tests {
         }
 
         #[test]
-        fn a_predator_takes_only_a_share_of_its_prey() {
-            let eater = eating_critter(100, 100);
+        fn attacking_a_critter_costs_the_predator_energy() {
+            // A bite is work: the predator pays for the attempt out of its own
+            // reserves, so a meal has to be worth more than the effort.
+            let eater = eating_critter_with_energy(100, 100, 300);
             let victim = idle_critter_with_energy(105, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -2229,7 +2243,79 @@ mod tests {
             let taken = 80 * PREDATION_SHARE_PERCENT / 100;
             assert_eq!(
                 world.critters()[0].energy(),
-                STARTING_AFTER_FAILED_EAT + taken
+                300 - 1 - PREDATION_ATTACK_COST + taken
+            );
+        }
+
+        #[test]
+        fn biting_spent_prey_leaves_the_predator_worse_off() {
+            // The share taken from a depleted victim does not cover the cost
+            // of attacking it, so preying on the weak is a losing move.
+            let eater = eating_critter_with_energy(100, 100, 300);
+            let victim = idle_critter_with_energy(105, 100, 4);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert!(
+                world.critters()[0].energy() < 300 - 1,
+                "expected the predator to end up down on the exchange"
+            );
+        }
+
+        #[test]
+        fn eating_a_pellet_carries_no_attack_cost() {
+            // The cost is on attacking a critter, not on firing Eat: foraging
+            // stays free, so the charge falls on cannibalism alone.
+            let eater = eating_critter_with_energy(100, 100, 300);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater],
+                vec![Pellet::at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 300 - 1 + crate::PELLET_ENERGY);
+        }
+
+        #[test]
+        fn a_fruitless_eat_costs_nothing_beyond_the_tick() {
+            // Nothing in range means no attack, so no attack cost.
+            let eater = eating_critter_with_energy(100, 100, 300);
+            let mut world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![eater], vec![]);
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 300 - 1);
+        }
+
+        #[test]
+        fn a_predator_takes_only_a_share_of_its_prey() {
+            // Energy enough to cover the attack cost, so what is measured here
+            // is the share taken rather than what the attempt cost.
+            let eater = eating_critter_with_energy(100, 100, 300);
+            let victim = idle_critter_with_energy(105, 100, 80);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            let taken = 80 * PREDATION_SHARE_PERCENT / 100;
+            assert_eq!(
+                world.critters()[0].energy(),
+                300 - 1 - PREDATION_ATTACK_COST + taken
             );
         }
 
