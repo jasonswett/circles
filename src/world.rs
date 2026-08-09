@@ -416,6 +416,15 @@ impl World {
                 dx * dx + dy * dy < critter_eat_distance_squared
             });
             if let Some(victim_index) = victim_index {
+                // Paid up front, out of what the predator actually has. A
+                // critter that cannot cover the attack spends everything
+                // trying and dies of the effort, taking nothing: netting the
+                // cost against the meal instead would let the bite refund it,
+                // so no cost however large could ever be fatal.
+                if self.critters[eater_index].energy() <= PREDATION_ATTACK_COST {
+                    self.critters[eater_index].die();
+                    continue;
+                }
                 let victim_energy = self.critters[victim_index].energy();
                 let bite = victim_energy * PREDATION_SHARE_PERCENT / 100;
                 self.critters[eater_index].lose_energy(PREDATION_ATTACK_COST);
@@ -2060,10 +2069,13 @@ mod tests {
         use crate::{Critter, Genome, Heading, Instruction, Pellet, MAX_CRITTER_ENERGY};
 
         const HUNGRY_INITIAL: u32 = 200;
-        const STARTING_ENERGY: u32 = 10;
+        // Comfortably more than PREDATION_ATTACK_COST, so a predator in these
+        // tests can afford to attack.
+        const SOLVENT_PREDATOR_ENERGY: u32 = 300;
         // Energy after a single Eat firing tick where no transfer happened —
-        // just the base 1-energy tick cost is paid since Eat itself is free.
-        const STARTING_AFTER_FAILED_EAT: u32 = STARTING_ENERGY - 1;
+        // just the base 1-energy tick cost, since firing Eat is free and
+        // nothing was attacked.
+        const STARTING_AFTER_FAILED_EAT: u32 = SOLVENT_PREDATOR_ENERGY - 1;
 
         fn eating_critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             Critter::with_genome(
@@ -2078,10 +2090,11 @@ mod tests {
             )
         }
 
+        // A predator with energy enough to cover the attack cost several
+        // times over, so tests of what a bite does to the victim are not
+        // derailed by the predator going broke.
         fn eating_critter(x: i32, y: i32) -> Critter {
-            let mut critter = eating_critter_with_energy(x, y, HUNGRY_INITIAL);
-            critter.lose_energy(HUNGRY_INITIAL - STARTING_ENERGY);
-            critter
+            eating_critter_with_energy(x, y, SOLVENT_PREDATOR_ENERGY)
         }
 
         // A passive critter that does not execute Eat itself. Its energy is
@@ -2299,6 +2312,43 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.critters()[0].energy(), 300 - 1);
+        }
+
+        #[test]
+        fn a_predator_that_cannot_afford_the_attack_dies_of_it() {
+            // The cost is paid before the meal, not netted against it. A
+            // critter without the energy to attack spends itself doing it,
+            // however rich the victim: otherwise the bite refunds the cost
+            // and attacking can never be fatal, no matter how dear it is.
+            let eater = eating_critter_with_energy(100, 100, PREDATION_ATTACK_COST);
+            let victim = idle_critter_with_energy(105, 100, MAX_CRITTER_ENERGY);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 0);
+        }
+
+        #[test]
+        fn a_predator_too_poor_to_attack_takes_no_bite() {
+            // It cannot pay, so it does not eat: the victim keeps everything.
+            let eater = eating_critter_with_energy(100, 100, 5);
+            let victim = idle_critter_with_energy(105, 100, 200);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![eater, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[1].energy(), 200);
         }
 
         #[test]
