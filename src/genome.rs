@@ -1,4 +1,4 @@
-use crate::Instruction;
+use crate::{Instruction, MAX_CRITTER_ENERGY};
 use rand::Rng;
 
 const INSTRUCTION_COUNT: usize = 9;
@@ -27,6 +27,13 @@ const MIN_SOFTNESS: f32 = 1.0;
 // sigmoid input on the touching=true side. Comparable in magnitude to a
 // healthy critter's energy, so a touching bit can meaningfully swing a
 // decision but not entirely dominate it.
+// Energy enters the sigmoid on the same scale as every other factor rather
+// than as its raw value. Raw energy ran to MAX_CRITTER_ENERGY while the
+// threshold opposing it is seven bits, so the strictest rule a genome could
+// express triggered at 127 -- an eighth of the range -- and every energy above
+// that read identically. "Hold out until nearly full" was not a rule evolution
+// was failing to find; it was one the genome had no way to say.
+const ENERGY_FACTOR_SCALE: f32 = 64.0;
 const TOUCHING_FACTOR_SCALE: f32 = 64.0;
 
 // When a color channel is enabled, the contribution scales from 0 (the
@@ -289,7 +296,8 @@ impl Genome {
     pub fn probability_of_acting(&self, instruction: Instruction, senses: &Senses) -> f32 {
         let (mask, threshold, softness) = self.params(instruction);
         let energy_contribution = if mask & ENERGY_FACTOR_BIT != 0 {
-            senses.energy as f32
+            ENERGY_FACTOR_SCALE * senses.energy.min(MAX_CRITTER_ENERGY) as f32
+                / MAX_CRITTER_ENERGY as f32
         } else {
             0.0
         };
@@ -799,6 +807,13 @@ mod tests {
     mod sigmoid {
         use super::*;
 
+        // The energy whose normalized contribution is `contribution`. Tests
+        // reason in the sigmoid's units; this converts back to the energy a
+        // critter would have to be holding.
+        fn energy_contributing(contribution: f32) -> u32 {
+            (contribution.max(0.0) / ENERGY_FACTOR_SCALE * MAX_CRITTER_ENERGY as f32).round() as u32
+        }
+
         fn genome_with_mask_for_split(mask: u32) -> Genome {
             // Threshold = 0, softness = 1 (raw bits 0). Just the mask varies.
             let mut bytes = [0u8; TOTAL_BYTES];
@@ -809,13 +824,14 @@ mod tests {
 
         #[test]
         fn the_always_act_test_constructor_returns_high_probability_at_typical_energy() {
-            // With threshold=0 and softness=1, sigmoid(60) ≈ 1.0 exactly.
+            // With threshold=0 and softness=1, a full critter's normalized
+            // energy is ENERGY_FACTOR_SCALE, and sigmoid of that is 1.0.
             let genome = Genome::all(Instruction::Split);
 
             let probability = genome.probability_of_acting(
                 Instruction::Split,
                 &Senses {
-                    energy: 60,
+                    energy: MAX_CRITTER_ENERGY,
                     touching_critter: false,
                     recent_repetition: 0.0,
                     ..Senses::default()
@@ -823,6 +839,93 @@ mod tests {
             );
 
             assert!(probability > 0.99);
+        }
+
+        #[test]
+        fn a_threshold_can_hold_out_for_most_of_the_energy_range() {
+            // Energy is normalized like every other factor, so the encodable
+            // thresholds span the whole range a critter's energy can reach.
+            // A rule that waits until a critter is nearly full has to be
+            // expressible: with raw energy against a 7-bit threshold, the
+            // strictest possible rule triggered at an eighth of the range and
+            // everything above it read the same.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            let split_window = header_window_offset(instruction_index(Instruction::Split));
+            write_bits(
+                &mut bytes,
+                split_window,
+                FACTOR_MASK_BITS,
+                ENERGY_FACTOR_BIT,
+            );
+            let max_threshold = (1u32 << THRESHOLD_BITS) - 1;
+            write_bits(
+                &mut bytes,
+                split_window + THRESHOLD_OFFSET,
+                THRESHOLD_BITS,
+                max_threshold,
+            );
+            let genome = Genome { bytes };
+
+            let at_three_quarters = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: MAX_CRITTER_ENERGY * 3 / 4,
+                    ..Senses::default()
+                },
+            );
+
+            assert!(
+                at_three_quarters < 0.5,
+                "the strictest rule should still be holding out at three \
+                 quarters energy, got {at_three_quarters}"
+            );
+        }
+
+        #[test]
+        fn the_energy_response_is_spread_across_the_whole_range() {
+            // Not merely bounded at the ends: the middle of the range has to
+            // move too, or genomes cannot tell a fed critter from a full one.
+            // Threshold at the middle of the range and softness broad enough
+            // that the curve is still moving at both ends.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            let split_window = header_window_offset(instruction_index(Instruction::Split));
+            write_bits(
+                &mut bytes,
+                split_window,
+                FACTOR_MASK_BITS,
+                ENERGY_FACTOR_BIT,
+            );
+            write_bits(
+                &mut bytes,
+                split_window + THRESHOLD_OFFSET,
+                THRESHOLD_BITS,
+                (ENERGY_FACTOR_SCALE / 2.0) as u32,
+            );
+            write_bits(
+                &mut bytes,
+                split_window + SOFTNESS_OFFSET,
+                SOFTNESS_BITS,
+                20,
+            );
+            let genome = Genome { bytes };
+            let probe = |energy: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        energy,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            let low_half = probe(MAX_CRITTER_ENERGY / 2) - probe(MAX_CRITTER_ENERGY / 4);
+            let high_half = probe(MAX_CRITTER_ENERGY) - probe(MAX_CRITTER_ENERGY * 3 / 4);
+
+            assert!(
+                low_half > 0.0 && high_half > 0.0,
+                "probability should still be climbing in both halves of the \
+                 range, got {low_half} and {high_half}"
+            );
         }
 
         #[test]
@@ -859,11 +962,16 @@ mod tests {
                 if mask & ENERGY_FACTOR_BIT == 0 {
                     continue;
                 }
-                let energy = (threshold + 20.0 * softness) as u32;
+                // Only usable when the genome's own scale leaves room to probe
+                // well above its threshold without exceeding a full critter.
+                let target = threshold + 20.0 * softness;
+                if target > ENERGY_FACTOR_SCALE {
+                    continue;
+                }
                 let probability = genome.probability_of_acting(
                     Instruction::Split,
                     &Senses {
-                        energy,
+                        energy: energy_contributing(target),
                         touching_critter: false,
                         recent_repetition: 0.0,
                         ..Senses::default()
