@@ -3,7 +3,7 @@ use crate::{Critter, Pellet, PELLET_RADIUS};
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
-pub const FRONT_DOT_RADIUS: i32 = 2;
+pub const FRONT_DOT_RADIUS: i32 = 4;
 
 struct Ring {
     cx: i32,
@@ -318,36 +318,34 @@ mod tests {
 
         #[test]
         fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_northeast() {
-            // For a diagonal heading, the dot's offset from center is scaled by √2/2
-            // along each axis. With (RADIUS - FRONT_DOT_RADIUS) = 18, scaled = round(12.73) = 13.
-            const DIAGONAL_DOT_OFFSET: i32 = 13;
+            // For a diagonal heading, the dot's offset from center is scaled
+            // by √2/2 along each axis. Derived rather than hard-coded: a dot
+            // wide enough to cover its neighbours would let a literal keep
+            // passing after the offset had moved.
+            let diagonal_offset = (((RADIUS - FRONT_DOT_RADIUS) as f32)
+                * std::f32::consts::FRAC_1_SQRT_2)
+                .round() as i32;
             let critter = stationary_critter(CENTER, CENTER, Heading::NorthEast);
 
             let buffer = render(&critter);
 
             assert_eq!(
-                pixel_at(
-                    &buffer,
-                    CENTER + DIAGONAL_DOT_OFFSET,
-                    CENTER - DIAGONAL_DOT_OFFSET
-                ),
+                pixel_at(&buffer, CENTER + diagonal_offset, CENTER - diagonal_offset),
                 critter.genome_color()
             );
         }
 
         #[test]
         fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_southwest() {
-            const DIAGONAL_DOT_OFFSET: i32 = 13;
+            let diagonal_offset = (((RADIUS - FRONT_DOT_RADIUS) as f32)
+                * std::f32::consts::FRAC_1_SQRT_2)
+                .round() as i32;
             let critter = stationary_critter(CENTER, CENTER, Heading::SouthWest);
 
             let buffer = render(&critter);
 
             assert_eq!(
-                pixel_at(
-                    &buffer,
-                    CENTER - DIAGONAL_DOT_OFFSET,
-                    CENTER + DIAGONAL_DOT_OFFSET
-                ),
+                pixel_at(&buffer, CENTER - diagonal_offset, CENTER + diagonal_offset),
                 critter.genome_color()
             );
         }
