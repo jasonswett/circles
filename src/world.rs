@@ -37,6 +37,11 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
+// Scanning every pellet for every critter is the most expensive thing the
+// world does, so poison is checked periodically rather than every tick. A
+// critter can cross poison between checks and survive; poison is a hazard,
+// not a guarantee, and the frame budget matters more than the precision.
+const POISON_CHECK_INTERVAL_TICKS: u32 = 10;
 // How often a replenishment begins. At ~60 FPS this is ten seconds: a
 // world starts feeding on this cadence and keeps at it until its energy is
 // restored, however long that takes.
@@ -76,6 +81,7 @@ pub struct World {
     /// How many pellets this world has emitted, so every PELLETS_PER_POISON
     /// of them can be poison.
     pellets_emitted: usize,
+    ticks: u32,
     /// Frames until the next replenishment, or zero while feeding.
     frames_until_feeding: u32,
     /// Where food is currently erupting from, and the heading it is
@@ -105,6 +111,7 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
+            ticks: 0,
             frames_until_feeding: 0,
             // Test-only constructor: a fixed site, since it has no rng.
             eruption_site: (
@@ -138,6 +145,7 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
+            ticks: 0,
             frames_until_feeding: 0,
             eruption_site: (
                 rng.gen_range(0.0..width as f32),
@@ -195,6 +203,7 @@ impl World {
             generation: 1,
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
+            ticks: 0,
             frames_until_feeding: 0,
             // Test-only constructor: a fixed site, since it has no rng.
             eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
@@ -278,6 +287,16 @@ impl World {
         }
     }
 
+    /// Adds a pellet to the world.
+    pub fn add_pellet(&mut self, pellet: Pellet) {
+        self.pellets.push(pellet);
+    }
+
+    /// Adds a critter to the world.
+    pub fn add_critter(&mut self, critter: Critter) {
+        self.critters.push(critter);
+    }
+
     /// Kills any critter touching poison, and consumes the poison with it.
     /// Contact alone is fatal: a critter need not be trying to eat, and
     /// nothing in its sensorium warns it.
@@ -348,7 +367,10 @@ impl World {
         for pellet in &mut self.pellets {
             pellet.drift(width, height);
         }
-        self.resolve_poison();
+        if self.ticks.is_multiple_of(POISON_CHECK_INTERVAL_TICKS) {
+            self.resolve_poison();
+        }
+        self.ticks = self.ticks.wrapping_add(1);
         self.resolve_eats(&eater_indices);
         self.detect_critter_overlaps();
     }
@@ -2513,6 +2535,51 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.critters()[0].energy(), 0);
+        }
+
+        #[test]
+        fn poison_is_not_checked_on_every_tick() {
+            // Scanning poison is the most expensive thing the world does, so
+            // it runs periodically rather than every tick. A critter can pass
+            // through poison between checks and live.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+            world.tick(true); // the world's first tick checks, consuming it
+            world.add_pellet(Pellet::poison_at(200, 200));
+            world.add_critter(critter_at(200, 200));
+
+            world.tick(true);
+
+            assert!(world.critters()[1].energy() > 0);
+        }
+
+        #[test]
+        fn poison_is_checked_again_once_the_interval_comes_round() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_at(100, 100)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+            world.tick(true);
+            world.add_pellet(Pellet::poison_at(200, 200));
+            world.add_critter(critter_at(200, 200));
+
+            for _ in 0..POISON_CHECK_INTERVAL_TICKS - 1 {
+                world.tick(true);
+            }
+            assert!(
+                world.critters()[1].energy() > 0,
+                "should have survived until the interval came round"
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[1].energy(), 0);
         }
 
         #[test]
