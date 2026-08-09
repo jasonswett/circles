@@ -887,7 +887,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);
@@ -907,7 +907,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![critter], vec![]);

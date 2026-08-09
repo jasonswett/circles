@@ -2,7 +2,7 @@ use rand::Rng;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Instruction {
-    MoveForward,
+    MoveSlow,
     RepeatPreviousMove,
     DoNothing,
     TurnLeft,
@@ -21,7 +21,7 @@ impl Instruction {
         // Each common instruction has weight 10; Split and Eat have weight 1
         // each. Total 52.
         match rng.gen_range(0..52) {
-            0..10 => Instruction::MoveForward,
+            0..10 => Instruction::MoveSlow,
             10..20 => Instruction::RepeatPreviousMove,
             20..30 => Instruction::DoNothing,
             30..40 => Instruction::TurnLeft,
@@ -72,7 +72,7 @@ mod tests {
                 .max()
                 .unwrap_or(0);
             for variant in [
-                Instruction::MoveForward,
+                Instruction::MoveSlow,
                 Instruction::RepeatPreviousMove,
                 Instruction::DoNothing,
                 Instruction::TurnLeft,

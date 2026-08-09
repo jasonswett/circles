@@ -500,7 +500,7 @@ fn write_bits(bytes: &mut [u8], bit_offset: usize, length: usize, value: u32) {
 /// Every instruction, in the order their weight fields appear in the genome.
 /// `instruction_index` gives each one's position here.
 const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
-    Instruction::MoveForward,
+    Instruction::MoveSlow,
     Instruction::TurnLeft,
     Instruction::TurnRight,
     Instruction::DoNothing,
@@ -519,7 +519,7 @@ fn header_window_offset(instruction_index: usize) -> usize {
 
 fn instruction_index(instruction: Instruction) -> usize {
     match instruction {
-        Instruction::MoveForward => 0,
+        Instruction::MoveSlow => 0,
         Instruction::TurnLeft => 1,
         Instruction::TurnRight => 2,
         Instruction::DoNothing => 3,
@@ -700,15 +700,15 @@ mod tests {
         #[test]
         fn from_instructions_cycles_through_the_given_sequence() {
             let genome = Genome::from_instructions(&[
-                Instruction::MoveForward,
+                Instruction::MoveSlow,
                 Instruction::TurnRight,
                 Instruction::Split,
             ]);
 
-            assert_eq!(genome.decode_at(0), Instruction::MoveForward);
+            assert_eq!(genome.decode_at(0), Instruction::MoveSlow);
             assert_eq!(genome.decode_at(1), Instruction::TurnRight);
             assert_eq!(genome.decode_at(2), Instruction::Split);
-            assert_eq!(genome.decode_at(3), Instruction::MoveForward);
+            assert_eq!(genome.decode_at(3), Instruction::MoveSlow);
         }
 
         #[test]
@@ -1025,7 +1025,7 @@ mod tests {
             }
             let genome = Genome { bytes };
 
-            assert_eq!(genome.params(Instruction::MoveForward).1, 10.0);
+            assert_eq!(genome.params(Instruction::MoveSlow).1, 10.0);
             assert_eq!(genome.params(Instruction::TurnLeft).1, 20.0);
             assert_eq!(genome.params(Instruction::TurnRight).1, 30.0);
             assert_eq!(genome.params(Instruction::DoNothing).1, 40.0);
@@ -1052,10 +1052,7 @@ mod tests {
             }
             let genome = Genome { bytes };
 
-            assert_eq!(
-                genome.params(Instruction::MoveForward).2,
-                MIN_SOFTNESS + 5.0
-            );
+            assert_eq!(genome.params(Instruction::MoveSlow).2, MIN_SOFTNESS + 5.0);
             assert_eq!(genome.params(Instruction::TurnLeft).2, MIN_SOFTNESS + 15.0);
             assert_eq!(genome.params(Instruction::Split).2, MIN_SOFTNESS + 55.0);
             assert_eq!(genome.params(Instruction::Eat).2, MIN_SOFTNESS + 65.0);
@@ -1396,7 +1393,7 @@ mod tests {
                 let energy = 250;
                 let probabilities = [
                     genome.probability_of_acting(
-                        Instruction::MoveForward,
+                        Instruction::MoveSlow,
                         &Senses {
                             energy,
                             touching_critter: false,
@@ -1689,7 +1686,7 @@ mod tests {
             let cloned = original.clone();
 
             for instruction in [
-                Instruction::MoveForward,
+                Instruction::MoveSlow,
                 Instruction::RepeatPreviousMove,
                 Instruction::DoNothing,
                 Instruction::TurnLeft,
@@ -1748,12 +1745,12 @@ mod tests {
             let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
             genome.set_instruction_weight_bits(Instruction::Eat, MAX_WEIGHT_BITS);
             let weight_before = genome.instruction_weight(Instruction::Eat);
-            let params_before = genome.params(Instruction::MoveForward);
+            let params_before = genome.params(Instruction::MoveSlow);
 
             genome.set_history_window_bits(u32::MAX >> (32 - HISTORY_WINDOW_BITS));
 
             assert_eq!(genome.instruction_weight(Instruction::Eat), weight_before);
-            assert_eq!(genome.params(Instruction::MoveForward), params_before);
+            assert_eq!(genome.params(Instruction::MoveSlow), params_before);
         }
 
         #[test]
@@ -1838,7 +1835,7 @@ mod tests {
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
             assert_eq!(share(Instruction::Eat), 11);
-            assert_eq!(share(Instruction::MoveForward), 1);
+            assert_eq!(share(Instruction::MoveSlow), 1);
             assert_eq!(share(Instruction::TurnLeft), 1);
             assert_eq!(share(Instruction::DoNothing), 1);
             assert_eq!(share(Instruction::RepeatPreviousMove), 1);

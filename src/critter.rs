@@ -359,7 +359,7 @@ impl Critter {
 
     fn execute(&mut self, instruction: Instruction) -> TickOutcome {
         match instruction {
-            Instruction::MoveForward => {
+            Instruction::MoveSlow => {
                 let (dx, dy) = self.heading.offset();
                 let step = if self.heading.is_diagonal() {
                     ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
@@ -368,7 +368,7 @@ impl Critter {
                 };
                 self.x += dx * step;
                 self.y += dy * step;
-                self.last_executed = Some(Instruction::MoveForward);
+                self.last_executed = Some(Instruction::MoveSlow);
                 TickOutcome::default()
             }
             Instruction::TurnLeft => {
@@ -742,7 +742,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             for _ in 0..(TICKS_PER_INSTRUCTION - 1) {
@@ -762,7 +762,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             for _ in 0..TICKS_PER_INSTRUCTION {
@@ -782,7 +782,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -801,7 +801,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -820,7 +820,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -841,7 +841,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -864,7 +864,7 @@ mod tests {
                 STEP_SIZE,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -993,7 +993,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::from_instructions(&[Instruction::MoveForward, Instruction::TurnRight]),
+                Genome::from_instructions(&[Instruction::MoveSlow, Instruction::TurnRight]),
             );
 
             critter.tick(true);
@@ -1013,7 +1013,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -1038,7 +1038,7 @@ mod tests {
                 u32::MAX,
                 0,
                 Genome::from_instructions(&[
-                    Instruction::MoveForward,
+                    Instruction::MoveSlow,
                     Instruction::RepeatPreviousMove,
                 ]),
             );
@@ -1218,7 +1218,7 @@ mod tests {
                 1,
                 0,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             critter.tick(true);
@@ -1236,7 +1236,7 @@ mod tests {
                 1,
                 0,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             for _ in 0..10 {
@@ -1502,7 +1502,7 @@ mod tests {
 
         #[test]
         fn an_ordinary_instruction_advances_the_playhead_by_one() {
-            let mut critter = player(&[Instruction::MoveForward]);
+            let mut critter = player(&[Instruction::MoveSlow]);
             let before = critter.genome_cursor;
 
             critter.tick(true);
@@ -1599,7 +1599,7 @@ mod tests {
         fn a_critter_remembers_no_more_actions_than_its_window_allows() {
             // Three set bits mean a window of three, so a critter that acts
             // ten times still remembers only its three most recent actions.
-            let mut critter = critter_with_window(0b111, Instruction::MoveForward);
+            let mut critter = critter_with_window(0b111, Instruction::MoveSlow);
 
             for _ in 0..10 {
                 critter.tick(true);
@@ -1610,7 +1610,7 @@ mod tests {
 
         #[test]
         fn a_critter_whose_window_is_zero_remembers_nothing() {
-            let mut critter = critter_with_window(0, Instruction::MoveForward);
+            let mut critter = critter_with_window(0, Instruction::MoveSlow);
 
             for _ in 0..10 {
                 critter.tick(true);
@@ -1621,40 +1621,40 @@ mod tests {
 
         #[test]
         fn repetition_is_the_share_of_remembered_actions_that_match() {
-            // Two of the four remembered actions are MoveForward, so the
+            // Two of the four remembered actions are MoveSlow, so the
             // share is one half — not a count, and not a share of the window.
-            let mut critter = critter_with_window(0b1111, Instruction::MoveForward);
+            let mut critter = critter_with_window(0b1111, Instruction::MoveSlow);
             critter.recent_actions.clear();
-            critter.recent_actions.push_back(Instruction::MoveForward);
+            critter.recent_actions.push_back(Instruction::MoveSlow);
             critter.recent_actions.push_back(Instruction::TurnLeft);
-            critter.recent_actions.push_back(Instruction::MoveForward);
+            critter.recent_actions.push_back(Instruction::MoveSlow);
             critter.recent_actions.push_back(Instruction::Eat);
 
-            assert_eq!(critter.recent_repetition_of(Instruction::MoveForward), 0.5);
+            assert_eq!(critter.recent_repetition_of(Instruction::MoveSlow), 0.5);
             assert_eq!(critter.recent_repetition_of(Instruction::TurnLeft), 0.25);
             assert_eq!(critter.recent_repetition_of(Instruction::Split), 0.0);
         }
 
         #[test]
         fn repetition_is_zero_when_nothing_is_remembered_yet() {
-            let critter = critter_with_window(0b1111, Instruction::MoveForward);
+            let critter = critter_with_window(0b1111, Instruction::MoveSlow);
 
-            assert_eq!(critter.recent_repetition_of(Instruction::MoveForward), 0.0);
+            assert_eq!(critter.recent_repetition_of(Instruction::MoveSlow), 0.0);
         }
 
         #[test]
         fn repetition_is_zero_when_the_window_is_closed() {
             // Even with actions in the buffer, a zero window means history is
             // not consulted at all.
-            let mut critter = critter_with_window(0, Instruction::MoveForward);
-            critter.recent_actions.push_back(Instruction::MoveForward);
+            let mut critter = critter_with_window(0, Instruction::MoveSlow);
+            critter.recent_actions.push_back(Instruction::MoveSlow);
 
-            assert_eq!(critter.recent_repetition_of(Instruction::MoveForward), 0.0);
+            assert_eq!(critter.recent_repetition_of(Instruction::MoveSlow), 0.0);
         }
 
         #[test]
         fn a_full_buffer_of_one_instruction_gives_complete_repetition() {
-            let mut critter = critter_with_window(0b11, Instruction::MoveForward);
+            let mut critter = critter_with_window(0b11, Instruction::MoveSlow);
             critter.recent_actions.push_back(Instruction::Eat);
             critter.recent_actions.push_back(Instruction::Eat);
 
@@ -1912,13 +1912,13 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::from_instructions(&[Instruction::Split, Instruction::MoveForward]),
+                Genome::from_instructions(&[Instruction::Split, Instruction::MoveSlow]),
             );
             parent.gain_energy(INITIAL_ENERGY);
 
             let mut child = divide_fully(&mut parent);
             let initial_child_x = child.x();
-            child.tick(true); // executes the second instruction (MoveForward)
+            child.tick(true); // executes the second instruction (MoveSlow)
 
             assert_eq!(child.x(), initial_child_x + 1);
         }
@@ -1933,7 +1933,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             );
 
             assert!(critter.tick(true).child.is_none());
@@ -2227,7 +2227,7 @@ mod tests {
                 1,
                 u32::MAX,
                 seed,
-                Genome::all(Instruction::MoveForward),
+                Genome::all(Instruction::MoveSlow),
             )
         }
 
