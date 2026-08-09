@@ -4,14 +4,6 @@ use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 
 pub const MAX_CRITTER_ENERGY: u32 = 500;
-// How much of the genome changes when a mutation fires. With 440 bits and a
-// mutation chance capped at MAX_MUTATION_CHANCE, this puts the ceiling at
-// roughly 0.2 changed bits per split. Higher rates crowd the error threshold,
-// the point past which selection cannot hold a genome together faster than
-// mutation degrades it: adaptations needing several bits get torn down before
-// they can pay off. Far hotter per bit than nature, which is correct for a
-// 440-bit genome whose generations are seconds long rather than years.
-const BIT_FLIP_RATE: f32 = 0.002;
 // Energy charged when a critter actually fires Split, regardless of whether
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
@@ -429,12 +421,11 @@ impl Critter {
         // parent immediately.
         let child_threshold = jitter_threshold(&mut child_rng, self.ticks_per_instruction);
         let mut child_genome = self.genome.clone();
-        // How often a split mutates the child is itself encoded in the
-        // parent's genome, so mutability evolves. When a mutation does fire,
-        // each bit independently flips with a fixed probability.
-        if self.roll_against(self.genome.mutation_chance()) {
-            child_genome.mutate(&mut child_rng, BIT_FLIP_RATE);
-        }
+        // How readily a split mutates the child is itself encoded in the
+        // parent's genome, so mutability evolves. Every split mutates: each
+        // bit is considered independently, the way replication errors happen
+        // per site rather than per offspring.
+        child_genome.mutate(&mut child_rng, self.genome.mutation_rate());
         Critter {
             x: self.x - dx * offset,
             y: self.y - dy * offset,
@@ -1955,6 +1946,41 @@ mod tests {
                     *child.genome() != parent_genome
                 })
                 .count() as u32
+        }
+
+        // How many bits differ between a parent and each of its children.
+        fn child_bit_distances(rate_bits: u32, attempts: u64) -> Vec<u32> {
+            (0..attempts)
+                .map(|seed| {
+                    let mut genome = Genome::all(Instruction::Split);
+                    genome.set_mutation_rate_bits(rate_bits);
+                    let mut parent =
+                        Critter::with_genome(10, 10, Heading::North, 1, 1, 10, seed, genome);
+                    parent.gain_energy(MAX_CRITTER_ENERGY - 10);
+                    let parent_genome = parent.genome().clone();
+                    let child = divide_fully(&mut parent);
+                    parent_genome
+                        .to_bits()
+                        .chars()
+                        .zip(child.genome().to_bits().chars())
+                        .filter(|(a, b)| a != b)
+                        .count() as u32
+                })
+                .collect()
+        }
+
+        #[test]
+        fn a_mutation_changes_only_a_few_bits_at_a_time() {
+            // Each bit is considered independently, so a mutation is a small
+            // edit rather than a burst: the genome drifts, it does not lurch.
+            let max_rate_bits = u32::MAX >> (32 - MUTATION_RATE_BITS);
+            let distances = child_bit_distances(max_rate_bits, 400);
+
+            let worst = distances.iter().copied().max().unwrap_or(0);
+            assert!(
+                worst < 10,
+                "expected mutations to change only a few bits, worst was {worst}"
+            );
         }
 
         #[test]

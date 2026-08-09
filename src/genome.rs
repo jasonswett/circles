@@ -6,7 +6,10 @@ const INSTRUCTION_COUNT: usize = 9;
 // child. Evolvable like everything else — it mutates along with the rest of
 // the genome, so a lineage's mutability drifts under selection.
 pub(crate) const MUTATION_RATE_BITS: usize = 8;
-const MAX_MUTATION_CHANCE: f32 = 0.25;
+// The highest per-bit flip rate a genome can encode. With 440 bits this caps
+// a split at roughly 0.2 changed bits, keeping the hottest possible lineage
+// below the error threshold while still leaving room to evolve mutability.
+const MAX_MUTATION_RATE: f32 = 0.0005;
 // Per-instruction header window: factor mask + threshold + softness.
 // The factor mask is three bits (one per factor), read in the order:
 // bit 0 = energy, bit 1 = is-touching-another-critter, bit 2 = the touched
@@ -375,13 +378,13 @@ impl Genome {
         );
     }
 
-    /// How often this genome's splits mutate the child, in [0, MAX_MUTATION_CHANCE].
-    /// The field is part of the genome, so it mutates like any other region and
-    /// a lineage's mutability evolves.
-    pub fn mutation_chance(&self) -> f32 {
+    /// The chance each bit flips when this genome is copied, in
+    /// [0, MAX_MUTATION_RATE]. The field is part of the genome, so it mutates
+    /// like any other region and a lineage's mutability evolves.
+    pub fn mutation_rate(&self) -> f32 {
         let bits = read_bits(&self.bytes, MUTATION_RATE_OFFSET, MUTATION_RATE_BITS);
         let max_value = ((1u32 << MUTATION_RATE_BITS) - 1) as f32;
-        bits as f32 / max_value * MAX_MUTATION_CHANCE
+        bits as f32 / max_value * MAX_MUTATION_RATE
     }
 
     fn params(&self, instruction: Instruction) -> (u32, f32, f32) {
@@ -1757,7 +1760,7 @@ mod tests {
         }
     }
 
-    mod mutation_chance {
+    mod mutation_rate {
         use super::*;
 
         fn genome_with_rate_bits(bits: u32) -> Genome {
@@ -1769,27 +1772,27 @@ mod tests {
         const MAX_RATE_BITS: u32 = (1 << MUTATION_RATE_BITS) - 1;
 
         #[test]
-        fn an_all_zero_mutation_rate_field_yields_a_zero_chance() {
+        fn an_all_zero_mutation_rate_field_yields_a_zero_rate() {
             let genome = genome_with_rate_bits(0);
 
-            assert_eq!(genome.mutation_chance(), 0.0);
+            assert_eq!(genome.mutation_rate(), 0.0);
         }
 
         #[test]
-        fn an_all_one_mutation_rate_field_yields_the_maximum_chance() {
+        fn an_all_one_mutation_rate_field_yields_the_maximum_rate() {
             let genome = genome_with_rate_bits(MAX_RATE_BITS);
 
-            assert_eq!(genome.mutation_chance(), MAX_MUTATION_CHANCE);
+            assert_eq!(genome.mutation_rate(), MAX_MUTATION_RATE);
         }
 
         #[test]
-        fn a_half_range_mutation_rate_field_yields_half_the_maximum_chance() {
+        fn a_half_range_mutation_rate_field_yields_half_the_maximum_rate() {
             // Pins the shape of the mapping between its endpoints: the rate
             // scales linearly with the field's value.
             let genome = genome_with_rate_bits(MAX_RATE_BITS / 2);
 
-            let expected = MAX_MUTATION_CHANCE * (MAX_RATE_BITS / 2) as f32 / MAX_RATE_BITS as f32;
-            assert!((genome.mutation_chance() - expected).abs() < f32::EPSILON);
+            let expected = MAX_MUTATION_RATE * (MAX_RATE_BITS / 2) as f32 / MAX_RATE_BITS as f32;
+            assert!((genome.mutation_rate() - expected).abs() < f32::EPSILON);
         }
     }
 
