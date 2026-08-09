@@ -1,7 +1,7 @@
 use crate::{Instruction, MAX_CRITTER_ENERGY};
 use rand::Rng;
 
-const INSTRUCTION_COUNT: usize = 9;
+const INSTRUCTION_COUNT: usize = 10;
 // The genome's leading field: how often this critter's splits mutate the
 // child. Evolvable like everything else — it mutates along with the rest of
 // the genome, so a lineage's mutability drifts under selection.
@@ -509,6 +509,10 @@ const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
     Instruction::Eat,
     Instruction::SkipAhead,
     Instruction::SkipBack,
+    // Appended rather than placed beside MoveSlow: an instruction's position
+    // here fixes where its weight and parameter windows sit in the genome, so
+    // adding to the end leaves every existing instruction's meaning intact.
+    Instruction::MoveFast,
 ];
 
 /// Bit offset of one instruction's parameter window, measured from the start
@@ -528,6 +532,7 @@ fn instruction_index(instruction: Instruction) -> usize {
         Instruction::Eat => 6,
         Instruction::SkipAhead => 7,
         Instruction::SkipBack => 8,
+        Instruction::MoveFast => 9,
     }
 }
 
@@ -956,7 +961,7 @@ mod tests {
 
         #[test]
         fn far_above_the_threshold_the_probability_approaches_one() {
-            for seed in 0..100 {
+            for seed in 0..2000 {
                 let genome = random_genome(seed);
                 let (mask, threshold, softness) = genome.params(Instruction::Split);
                 if mask & ENERGY_FACTOR_BIT == 0 {
@@ -980,7 +985,7 @@ mod tests {
                 assert!(probability > 0.99, "seed {seed}: probability {probability}");
                 return;
             }
-            panic!("no seed had the energy factor enabled on Split");
+            panic!("no seed had an energy-gated Split with room to probe above it");
         }
 
         #[test]
@@ -1824,14 +1829,14 @@ mod tests {
 
             let counts = decoded_counts(&genome);
 
-            // Weights are bits + 1: Eat holds 16, the other eight hold 1
-            // each, totalling 24. Opcode value c maps to position
-            // floor(c * 24 / 16), so Eat takes 11 of the 16 values and four
-            // minimum-weight instructions take one apiece — DoNothing's band
-            // is the one no opcode value lands in. Naming each instruction's
-            // share, rather than summing the non-Eat ones, is what pins the
-            // scaling arithmetic: formulas that shift which instructions get
-            // a slot preserve the totals but not this breakdown.
+            // Weights are bits + 1: Eat holds 16, the other nine hold 1 each,
+            // totalling 25. Opcode value c maps to position
+            // floor(c * 25 / 16), so Eat takes 11 of the 16 values and four
+            // minimum-weight instructions take one apiece — the rest fall in
+            // bands no opcode value lands in. Naming each instruction's share,
+            // rather than summing the non-Eat ones, is what pins the scaling
+            // arithmetic: formulas that shift which instructions get a slot
+            // preserve the totals but not this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
             assert_eq!(share(Instruction::Eat), 11);
@@ -1839,10 +1844,11 @@ mod tests {
             assert_eq!(share(Instruction::TurnLeft), 1);
             assert_eq!(share(Instruction::DoNothing), 1);
             assert_eq!(share(Instruction::RepeatPreviousMove), 1);
-            assert_eq!(share(Instruction::SkipAhead), 1);
+            assert_eq!(share(Instruction::SkipBack), 1);
             assert_eq!(share(Instruction::TurnRight), 0);
             assert_eq!(share(Instruction::Split), 0);
-            assert_eq!(share(Instruction::SkipBack), 0);
+            assert_eq!(share(Instruction::SkipAhead), 0);
+            assert_eq!(share(Instruction::MoveFast), 0);
         }
 
         #[test]

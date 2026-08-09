@@ -3,6 +3,10 @@ use rand::Rng;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Instruction {
     MoveSlow,
+    /// Covers twice the ground of MoveSlow for four times the energy. Speed
+    /// costs more than it returns, so hurrying is a gamble on getting
+    /// somewhere worth the fare.
+    MoveFast,
     RepeatPreviousMove,
     DoNothing,
     TurnLeft,

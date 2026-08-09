@@ -34,6 +34,16 @@ pub const SPLIT_DURATION_TICKS: u32 = 1;
 // controls whether a critter jumps, through the usual weights and sigmoid,
 // but not yet how far.
 pub const SKIP_DISTANCE: usize = 4;
+// What a step costs at each pace. Moving fast covers twice the ground of
+// moving slow, but the cost of covering it rises with the square of the
+// pace, the way drag does in any real medium: twice the speed, four times
+// the price. Ground is therefore bought at a worsening exchange rate, so
+// hurrying is a choice with a real cost rather than a strictly better
+// option.
+pub const MOVE_SLOW_COST: u32 = 1;
+pub const MOVE_FAST_COST: u32 = 4;
+// How much further a fast step carries than a slow one.
+const FAST_STEP_MULTIPLIER: i32 = 2;
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -357,19 +367,32 @@ impl Critter {
         roll < probability
     }
 
+    /// Moves `multiplier` steps along the heading for `cost` energy, if the
+    /// critter can pay. A critter that cannot afford the fare stays put: the
+    /// pace has to be earned, so exhaustion slows a critter rather than
+    /// letting it run itself to death in one stride.
+    fn travel(&mut self, multiplier: i32, cost: u32, instruction: Instruction) -> TickOutcome {
+        if self.energy <= cost {
+            return TickOutcome::default();
+        }
+        self.energy -= cost;
+        let (dx, dy) = self.heading.offset();
+        let step = if self.heading.is_diagonal() {
+            ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
+        } else {
+            self.step_size
+        } * multiplier;
+        self.x += dx * step;
+        self.y += dy * step;
+        self.last_executed = Some(instruction);
+        TickOutcome::default()
+    }
+
     fn execute(&mut self, instruction: Instruction) -> TickOutcome {
         match instruction {
-            Instruction::MoveSlow => {
-                let (dx, dy) = self.heading.offset();
-                let step = if self.heading.is_diagonal() {
-                    ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
-                } else {
-                    self.step_size
-                };
-                self.x += dx * step;
-                self.y += dy * step;
-                self.last_executed = Some(Instruction::MoveSlow);
-                TickOutcome::default()
+            Instruction::MoveSlow => self.travel(1, MOVE_SLOW_COST, Instruction::MoveSlow),
+            Instruction::MoveFast => {
+                self.travel(FAST_STEP_MULTIPLIER, MOVE_FAST_COST, Instruction::MoveFast)
             }
             Instruction::TurnLeft => {
                 self.heading = self.heading.turn_left();
@@ -1021,6 +1044,96 @@ mod tests {
             critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 3);
+        }
+    }
+
+    mod speeds {
+        use super::*;
+
+        const STEP: i32 = 5;
+        const PLENTY: u32 = 10_000;
+
+        fn critter_running(instruction: Instruction, energy: u32) -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                STEP,
+                energy,
+                0,
+                Genome::all(instruction),
+            )
+        }
+
+        #[test]
+        fn moving_fast_covers_twice_the_ground_of_moving_slow() {
+            let mut slow = critter_running(Instruction::MoveSlow, PLENTY);
+            let mut fast = critter_running(Instruction::MoveFast, PLENTY);
+
+            slow.tick(true);
+            fast.tick(true);
+
+            let slow_distance = START_Y - slow.y();
+            let fast_distance = START_Y - fast.y();
+            assert_eq!(fast_distance, slow_distance * 2);
+        }
+
+        #[test]
+        fn moving_fast_costs_four_times_what_moving_slow_costs() {
+            // Twice the speed for four times the price: the cost of covering
+            // ground rises with the square of the pace, the way drag does.
+            let mut slow = critter_running(Instruction::MoveSlow, PLENTY);
+            let mut fast = critter_running(Instruction::MoveFast, PLENTY);
+
+            slow.tick(true);
+            fast.tick(true);
+
+            let slow_spent = PLENTY - slow.energy();
+            let fast_spent = PLENTY - fast.energy();
+            // Both also pay the flat cost of living for the tick.
+            assert_eq!(fast_spent - 1, (slow_spent - 1) * 4);
+        }
+
+        #[test]
+        fn hurrying_is_dearer_per_unit_of_ground_covered() {
+            // The property that makes the choice a real one: speed buys
+            // distance at a worsening exchange rate rather than a fixed one.
+            let mut slow = critter_running(Instruction::MoveSlow, PLENTY);
+            let mut fast = critter_running(Instruction::MoveFast, PLENTY);
+
+            slow.tick(true);
+            fast.tick(true);
+
+            let slow_rate = (PLENTY - slow.energy()) as f32 / (START_Y - slow.y()) as f32;
+            let fast_rate = (PLENTY - fast.energy()) as f32 / (START_Y - fast.y()) as f32;
+            assert!(
+                fast_rate > slow_rate,
+                "fast should cost more per pixel: {fast_rate} vs {slow_rate}"
+            );
+        }
+
+        #[test]
+        fn a_critter_too_spent_to_hurry_stays_put() {
+            // The pace has to be affordable. A critter that cannot pay for
+            // the sprint does not take it.
+            let cost = MOVE_FAST_COST;
+            let mut critter = critter_running(Instruction::MoveFast, cost);
+
+            critter.tick(true);
+
+            assert_eq!(critter.y(), START_Y);
+        }
+
+        #[test]
+        fn a_critter_too_spent_to_hurry_can_still_walk() {
+            // Slow movement remains available to a critter that cannot afford
+            // to run, so exhaustion changes the pace rather than stopping it.
+            let mut critter = critter_running(Instruction::MoveSlow, MOVE_FAST_COST);
+
+            critter.tick(true);
+
+            assert!(critter.y() < START_Y);
         }
     }
 
