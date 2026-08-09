@@ -36,7 +36,7 @@ const SEED_WINDOW: Duration = Duration::from_secs(30);
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.
-const MIN_FPS_FOR_GROWTH: u32 = 40;
+const MIN_FPS_FOR_GROWTH: u32 = 50;
 const FPS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(30);
 
