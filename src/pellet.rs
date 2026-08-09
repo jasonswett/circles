@@ -77,7 +77,7 @@ pub const POISON_COLOR: u32 = 0xFF_00_00;
 pub const PELLETS_PER_POISON: usize = 25;
 pub const PELLET_ENERGY: u32 = 100;
 /// How long a pellet lasts before rotting away, in ticks. At 60 ticks per
-/// second this is 10 seconds. Uneaten food does not accumulate forever, so
+/// second this is 20 seconds. Uneaten food does not accumulate forever, so
 /// the larder reflects recent deliveries rather than the world's whole
 /// history of them.
-pub const PELLET_LIFESPAN_TICKS: u32 = 600;
+pub const PELLET_LIFESPAN_TICKS: u32 = 1200;
