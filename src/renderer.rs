@@ -521,6 +521,9 @@ mod tests {
             }
 
             fn critter_with_energy(current_energy: u32) -> Critter {
+                // Drained in one step rather than by ticking it down: upkeep
+                // takes a share of what a critter holds, so ticking away a
+                // fixed amount would overshoot and never land where asked.
                 let mut critter = Critter::with_genome(
                     CENTER,
                     CENTER,
@@ -531,9 +534,7 @@ mod tests {
                     0,
                     Genome::all(Instruction::DoNothing),
                 );
-                for _ in 0..(INITIAL_ENERGY - current_energy) {
-                    critter.tick(true);
-                }
+                critter.lose_energy(INITIAL_ENERGY - current_energy);
                 critter
             }
         }

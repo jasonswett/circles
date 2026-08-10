@@ -43,12 +43,13 @@ pub const SKIP_DISTANCE: usize = 4;
 // the price. Ground is therefore bought at a worsening exchange rate, so
 // hurrying is a choice with a real cost rather than a strictly better
 // option.
-// On top of the flat cost, a critter pays this share of its own energy for
-// every step it takes, doubled for the longer stride of a fast step. Hauling
-// a large body costs more than hauling a small one, so the tax is the same
-// share at any size and nobody outgrows it -- with nothing capping what a
-// critter can bank, a flat cost alone would be a rounding error to the rich.
-pub const MOVE_COST_PERCENT: u32 = 10;
+// What a critter pays out of its own reserves each turn it acts, whatever it
+// does with the turn. Running a large body costs more than running a small
+// one, so the charge is the same share at any size and nobody outgrows it --
+// with nothing capping what a critter can bank, a flat cost alone would be a
+// rounding error to the rich. Charged for acting rather than for moving, so
+// that standing still is not a way to avoid it.
+pub const UPKEEP_PERCENT: u32 = 10;
 pub const MOVE_SLOW_COST: u32 = 1;
 pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
@@ -344,7 +345,7 @@ impl Critter {
             Instruction::SkipBack if acted => self.genome_cursor.saturating_sub(SKIP_DISTANCE),
             _ => self.genome_cursor + 1,
         };
-        self.energy = self.energy.saturating_sub(1);
+        self.energy = self.energy.saturating_sub(self.upkeep());
         outcome
     }
 
@@ -390,6 +391,31 @@ impl Critter {
         roll < probability
     }
 
+    /// What a turn costs a critter holding `energy`, simply for acting.
+    /// Exposed so callers and tests can reckon in intent rather than
+    /// arithmetic.
+    //
+    // The `>` is an equivalent mutant: integer division means the share is
+    // zero below one hundred energy and UPKEEP_PERCENT at or above it, so it
+    // is never exactly one and `>=` would pick the same branch every time.
+    #[mutants::skip]
+    pub const fn upkeep_for(energy: u32) -> u32 {
+        let share = energy / 100 * UPKEEP_PERCENT;
+        if share > 1 {
+            share
+        } else {
+            1
+        }
+    }
+
+    /// What this turn costs the critter simply for acting: a share of its own
+    /// energy, never less than one so a spent critter still winds down.
+    /// Divides before multiplying, since a percentage taken the other way
+    /// round overflows for a critter holding near u32::MAX.
+    fn upkeep(&self) -> u32 {
+        Self::upkeep_for(self.energy)
+    }
+
     /// Moves `multiplier` steps along the heading for `cost` energy, if the
     /// critter can pay. A critter that cannot afford the fare stays put: the
     /// pace has to be earned, so exhaustion slows a critter rather than
@@ -397,7 +423,7 @@ impl Critter {
     fn travel(&mut self, multiplier: i32, cost: u32, instruction: Instruction) -> TickOutcome {
         // Charged per unit of distance, so a longer stride costs proportionally
         // more of the body being hauled.
-        let hauling = self.energy / 100 * MOVE_COST_PERCENT * multiplier as u32;
+        let hauling = self.energy / 100 * UPKEEP_PERCENT * multiplier as u32;
         let cost = cost + hauling;
         if self.energy <= cost {
             return TickOutcome::default();
@@ -471,7 +497,9 @@ impl Critter {
     /// way, so a critter can starve mid-division.
     fn continue_dividing(&mut self) -> TickOutcome {
         self.dividing_ticks_remaining -= 1;
-        self.energy = self.energy.saturating_sub(1);
+        // Dividing is work, and the critter is committed to it, so it pays the
+        // same upkeep as a turn spent doing anything else.
+        self.energy = self.energy.saturating_sub(self.upkeep());
         if self.is_dividing() || self.energy == 0 {
             return TickOutcome::default();
         }
@@ -1131,6 +1159,122 @@ mod tests {
         }
     }
 
+    mod upkeep {
+        use super::*;
+
+        fn critter_doing(instruction: Instruction, energy: u32) -> Critter {
+            Critter::with_genome(
+                START_X,
+                START_Y,
+                Heading::North,
+                1,
+                5,
+                energy,
+                0,
+                Genome::all(instruction),
+            )
+        }
+
+        #[test]
+        fn acting_costs_a_share_of_a_critters_energy_whatever_the_action() {
+            // The charge is for being a large critter doing something, not for
+            // any particular something: standing still is not a way out of it.
+            for instruction in [
+                Instruction::DoNothing,
+                Instruction::TurnLeft,
+                Instruction::TurnRight,
+                Instruction::RepeatPreviousMove,
+                Instruction::SkipAhead,
+                Instruction::SkipBack,
+                Instruction::Eat,
+            ] {
+                let start = 10_000;
+                let mut critter = critter_doing(instruction, start);
+
+                critter.tick(true);
+
+                let spent = start - critter.energy();
+                let expected = start / 100 * UPKEEP_PERCENT;
+                assert!(
+                    spent >= expected,
+                    "{instruction:?} should cost at least {expected}, cost {spent}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_rich_critter_pays_more_to_act_than_a_poor_one() {
+            let mut poor = critter_doing(Instruction::DoNothing, 200);
+            let mut rich = critter_doing(Instruction::DoNothing, 20_000);
+
+            poor.tick(true);
+            rich.tick(true);
+
+            let poor_spent = 200 - poor.energy();
+            let rich_spent = 20_000 - rich.energy();
+            assert!(
+                rich_spent > poor_spent * 10,
+                "the rich critter should pay far more: {rich_spent} vs {poor_spent}"
+            );
+        }
+
+        #[test]
+        fn upkeep_is_the_same_share_at_any_size() {
+            let share = |energy: u32| {
+                let mut critter = critter_doing(Instruction::DoNothing, energy);
+                critter.tick(true);
+                (energy - critter.energy()) as f32 / energy as f32
+            };
+
+            let modest = share(10_000);
+            let vast = share(100_000);
+            let expected = UPKEEP_PERCENT as f32 / 100.0;
+
+            assert!(
+                (modest - expected).abs() < 0.005 && (vast - expected).abs() < 0.005,
+                "expected a {expected} share, got {modest} and {vast}"
+            );
+        }
+
+        #[test]
+        fn standing_still_is_cheaper_than_travelling() {
+            // Upkeep applies to everything, but moving still costs more on top
+            // of it, so the choice of what to do with a turn still matters.
+            let start = 10_000;
+            let mut idle = critter_doing(Instruction::DoNothing, start);
+            let mut walker = critter_doing(Instruction::MoveSlow, start);
+
+            idle.tick(true);
+            walker.tick(true);
+
+            assert!(walker.energy() < idle.energy());
+        }
+
+        #[test]
+        fn upkeep_never_falls_below_one() {
+            // A critter too poor for its share to round to anything still
+            // winds down, so nothing can idle indefinitely on a scrap.
+            for energy in 1..=20u32 {
+                assert!(
+                    Critter::upkeep_for(energy) >= 1,
+                    "upkeep at {energy} should be at least one"
+                );
+            }
+            // The floor holds right up to where the share overtakes it.
+            assert_eq!(Critter::upkeep_for(99), 1);
+            assert_eq!(Critter::upkeep_for(100), UPKEEP_PERCENT);
+        }
+
+        #[test]
+        fn a_poor_critter_still_pays_something_to_act() {
+            let mut critter = critter_doing(Instruction::DoNothing, 5);
+
+            critter.tick(true);
+
+            assert!(critter.energy() < 5);
+        }
+    }
+
     mod speeds {
         use super::*;
 
@@ -1180,24 +1324,35 @@ mod tests {
             let slow_spent = TOO_POOR_TO_HAUL - slow.energy();
             let fast_spent = TOO_POOR_TO_HAUL - fast.energy();
             // Both also pay the flat cost of living for the tick.
-            assert_eq!(fast_spent - 1, (slow_spent - 1) * 4);
+            let upkeep = Critter::upkeep_for(TOO_POOR_TO_HAUL);
+            assert_eq!(fast_spent - upkeep, (slow_spent - upkeep) * 4);
         }
 
         #[test]
         fn hurrying_is_dearer_per_unit_of_ground_covered() {
             // The property that makes the choice a real one: speed buys
             // distance at a worsening exchange rate rather than a fixed one.
-            let mut slow = critter_running(Instruction::MoveSlow, PLENTY);
-            let mut fast = critter_running(Instruction::MoveFast, PLENTY);
+            //
+            // Measured against the flat cost alone, on a critter too poor for
+            // the proportional charges to round to anything. Those are levied
+            // once a turn rather than once a step, so on a rich critter a
+            // longer stride spreads the turn's upkeep over more ground and
+            // hides the penalty that the flat cost expresses.
+            const TOO_POOR_TO_HAUL: u32 = 40;
+            let mut slow = critter_running(Instruction::MoveSlow, TOO_POOR_TO_HAUL);
+            let mut fast = critter_running(Instruction::MoveFast, TOO_POOR_TO_HAUL);
 
             slow.tick(true);
             fast.tick(true);
 
-            let slow_rate = (PLENTY - slow.energy()) as f32 / (START_Y - slow.y()) as f32;
-            let fast_rate = (PLENTY - fast.energy()) as f32 / (START_Y - fast.y()) as f32;
+            let upkeep = Critter::upkeep_for(TOO_POOR_TO_HAUL) as f32;
+            let slow_rate = (TOO_POOR_TO_HAUL - slow.energy()) as f32 - upkeep;
+            let fast_rate = (TOO_POOR_TO_HAUL - fast.energy()) as f32 - upkeep;
+            let slow_per_pixel = slow_rate / (START_Y - slow.y()) as f32;
+            let fast_per_pixel = fast_rate / (START_Y - fast.y()) as f32;
             assert!(
-                fast_rate > slow_rate,
-                "fast should cost more per pixel: {fast_rate} vs {slow_rate}"
+                fast_per_pixel > slow_per_pixel,
+                "fast should cost more per pixel: {fast_per_pixel} vs {slow_per_pixel}"
             );
         }
 
@@ -1231,7 +1386,10 @@ mod tests {
 
             let modest = share(10_000);
             let vast = share(100_000);
-            let expected = MOVE_COST_PERCENT as f32 / 100.0;
+            // A walker pays the hauling charge and then the turn's upkeep on
+            // what is left, so the two compound rather than simply adding.
+            let rate = UPKEEP_PERCENT as f32 / 100.0;
+            let expected = rate + (1.0 - rate) * rate;
 
             // Pinned against the expected share, not merely against each
             // other: two costs of zero would agree just as closely.
@@ -1452,7 +1610,10 @@ mod tests {
 
             critter.tick(true);
 
-            assert_eq!(critter.energy(), INITIAL_ENERGY - 1);
+            assert_eq!(
+                critter.energy(),
+                INITIAL_ENERGY - Critter::upkeep_for(INITIAL_ENERGY)
+            );
         }
 
         #[test]
@@ -1946,12 +2107,21 @@ mod tests {
         use crate::Genome;
 
         const INITIAL_ENERGY: u32 = 60;
-        // The split flow: pay SPLIT_ATTEMPT_COST and the firing tick's own
-        // energy, then burn one energy for each tick of the division, and
-        // finally halve what remains between parent and child.
+        // The split flow: pay SPLIT_ATTEMPT_COST and the firing turn's upkeep,
+        // then upkeep again for each tick of the division, and finally halve
+        // what remains between parent and child. Upkeep is a share of what the
+        // critter is holding at the time, so it is walked rather than
+        // multiplied out.
         const SPLITTER_ENERGY: u32 = 2 * INITIAL_ENERGY;
-        const ENERGY_AT_DIVISION_END: u32 =
-            SPLITTER_ENERGY - SPLIT_ATTEMPT_COST - 1 - SPLIT_DURATION_TICKS;
+
+        fn energy_at_division_end() -> u32 {
+            let mut energy = SPLITTER_ENERGY - SPLIT_ATTEMPT_COST;
+            energy -= Critter::upkeep_for(energy);
+            for _ in 0..SPLIT_DURATION_TICKS {
+                energy -= Critter::upkeep_for(energy);
+            }
+            energy
+        }
 
         fn splitter() -> Critter {
             let mut critter = Critter::with_genome(
@@ -2055,7 +2225,7 @@ mod tests {
 
             let child = divide_fully(&mut parent);
 
-            assert_eq!(child.energy(), ENERGY_AT_DIVISION_END / 2);
+            assert_eq!(child.energy(), energy_at_division_end() / 2);
         }
 
         #[test]
@@ -2066,7 +2236,10 @@ mod tests {
 
             parent.tick(true);
 
-            assert_eq!(parent.energy(), SPLITTER_ENERGY - SPLIT_ATTEMPT_COST - 1);
+            assert_eq!(
+                parent.energy(),
+                SPLITTER_ENERGY - SPLIT_ATTEMPT_COST - Critter::upkeep_for(SPLITTER_ENERGY)
+            );
         }
 
         #[test]
@@ -2075,7 +2248,7 @@ mod tests {
 
             divide_fully(&mut parent);
 
-            assert_eq!(parent.energy(), ENERGY_AT_DIVISION_END / 2);
+            assert_eq!(parent.energy(), energy_at_division_end() / 2);
         }
 
         #[test]
@@ -2423,13 +2596,16 @@ mod tests {
         }
 
         #[test]
-        fn when_split_is_disallowed_the_parent_still_pays_the_one_energy_cost() {
+        fn when_split_is_disallowed_the_parent_still_pays_the_turns_upkeep() {
             let mut parent = ready_to_split(0);
             let energy_before = parent.energy();
 
             parent.tick(false);
 
-            assert_eq!(parent.energy(), energy_before - 1);
+            assert_eq!(
+                parent.energy(),
+                energy_before - Critter::upkeep_for(energy_before)
+            );
         }
 
         #[test]

@@ -927,7 +927,8 @@ mod tests {
         const STARTING_ENERGY: u32 = 10;
         // Energy after a single Eat firing tick where no pellet was found —
         // just the base 1-energy tick cost is paid since Eat itself is free.
-        const STARTING_AFTER_FAILED_EAT: u32 = STARTING_ENERGY - 1;
+        const STARTING_AFTER_FAILED_EAT: u32 =
+            STARTING_ENERGY - Critter::upkeep_for(STARTING_ENERGY);
 
         // A critter whose genome decodes to Eat at every cursor and which fires
         // an instruction every tick. Energy is set just above zero so that
@@ -999,7 +1000,10 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.pellets().len(), 1);
-            assert_eq!(world.critters()[0].energy(), STARTING_ENERGY - 1);
+            assert_eq!(
+                world.critters()[0].energy(),
+                STARTING_ENERGY - Critter::upkeep_for(STARTING_ENERGY)
+            );
         }
 
         #[test]
@@ -1065,7 +1069,7 @@ mod tests {
 
             assert_eq!(
                 world.critters()[0].energy(),
-                HUNGRY_INITIAL - 1 + PELLET_ENERGY
+                HUNGRY_INITIAL - Critter::upkeep_for(HUNGRY_INITIAL) + PELLET_ENERGY
             );
         }
 
@@ -2353,7 +2357,8 @@ mod tests {
         // Energy after a single Eat firing tick where no transfer happened —
         // just the base 1-energy tick cost, since firing Eat is free and
         // nothing was attacked.
-        const STARTING_AFTER_FAILED_EAT: u32 = SOLVENT_PREDATOR_ENERGY - 1;
+        const STARTING_AFTER_FAILED_EAT: u32 =
+            SOLVENT_PREDATOR_ENERGY - Critter::upkeep_for(SOLVENT_PREDATOR_ENERGY);
 
         fn eating_critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             Critter::with_genome(
@@ -2538,7 +2543,7 @@ mod tests {
             let taken = 80 * PREDATION_SHARE_PERCENT / 100;
             assert_eq!(
                 world.critters()[0].energy(),
-                300 - 1 - PREDATION_ATTACK_COST + taken
+                300 - Critter::upkeep_for(300) - PREDATION_ATTACK_COST + taken
             );
         }
 
@@ -2558,7 +2563,7 @@ mod tests {
             world.tick(true);
 
             assert!(
-                world.critters()[0].energy() < 300 - 1,
+                world.critters()[0].energy() < 300 - Critter::upkeep_for(300),
                 "expected the predator to end up down on the exchange"
             );
         }
@@ -2577,7 +2582,10 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), 300 - 1 + crate::PELLET_ENERGY);
+            assert_eq!(
+                world.critters()[0].energy(),
+                300 - Critter::upkeep_for(300) + crate::PELLET_ENERGY
+            );
         }
 
         #[test]
@@ -2589,7 +2597,7 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), 300 - 1);
+            assert_eq!(world.critters()[0].energy(), 300 - Critter::upkeep_for(300));
         }
 
         #[test]
@@ -2647,7 +2655,7 @@ mod tests {
             let taken = 80 * PREDATION_SHARE_PERCENT / 100;
             assert_eq!(
                 world.critters()[0].energy(),
-                300 - 1 - PREDATION_ATTACK_COST + taken
+                300 - Critter::upkeep_for(300) - PREDATION_ATTACK_COST + taken
             );
         }
 
@@ -2730,7 +2738,7 @@ mod tests {
             let bite = MAX_CRITTER_ENERGY * PREDATION_SHARE_PERCENT / 100;
             assert_eq!(
                 world.critters()[0].energy(),
-                start - 1 - PREDATION_ATTACK_COST + bite
+                start - Critter::upkeep_for(start) - PREDATION_ATTACK_COST + bite
             );
             assert!(world.critters()[1].energy() > 0);
         }
