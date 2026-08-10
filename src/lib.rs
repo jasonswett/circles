@@ -21,7 +21,9 @@ pub use critter::{
 pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;
 pub use genome::{Genome, GenomeParseError, Senses};
-pub use heading::Heading;
+pub use heading::{
+    Heading, EAST, NORTH, NORTH_EAST, NORTH_WEST, SOUTH, SOUTH_EAST, SOUTH_WEST, WEST,
+};
 pub use instruction::Instruction;
 pub use pellet::{
     Pellet, PELLETS_PER_POISON, PELLET_COLOR, PELLET_ENERGY, PELLET_LIFESPAN_TICKS,

@@ -60,16 +60,11 @@ impl Renderer {
         Self::fill_ring_with_wrap(&body, &mut canvas, color);
 
         let heading = critter.heading();
-        let (offset_x, offset_y) = heading.offset();
-        let raw_dot_offset = radius - FRONT_DOT_RADIUS;
-        let dot_offset = if heading.is_diagonal() {
-            ((raw_dot_offset as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
-        } else {
-            raw_dot_offset
-        };
+        let (offset_x, offset_y) = heading.unit();
+        let dot_offset = (radius - FRONT_DOT_RADIUS) as f32;
         let dot = Ring {
-            cx: cx + offset_x * dot_offset,
-            cy: cy + offset_y * dot_offset,
+            cx: cx + (offset_x * dot_offset).round() as i32,
+            cy: cy + (offset_y * dot_offset).round() as i32,
             radius: FRONT_DOT_RADIUS,
             inner_squared: -1,
         };
@@ -164,7 +159,9 @@ fn lerp(from: u8, to: u8, ratio: f32) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Critter, Genome, Heading, Instruction};
+    use crate::{
+        Critter, Genome, Heading, Instruction, EAST, NORTH, NORTH_EAST, SOUTH, SOUTH_WEST, WEST,
+    };
 
     mod interpolate_color_tests {
         use crate::renderer::interpolate_color;
@@ -202,7 +199,7 @@ mod tests {
 
         #[test]
         fn the_center_of_the_critter_is_not_filled() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -212,7 +209,7 @@ mod tests {
         #[test]
         fn a_point_well_inside_the_outline_is_not_filled() {
             // 5 pixels in from center is well inside the inner_radius of 18.
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -221,7 +218,7 @@ mod tests {
 
         #[test]
         fn the_pixel_just_inside_the_outer_radius_is_drawn_in_outline_color() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -237,7 +234,7 @@ mod tests {
             // The inner_radius is `radius - thickness`. A pixel exactly at distance
             // `inner_radius` has distance² == inner_squared, which fails the strict
             // `distance_squared > inner_squared` check, so it's outside the ring.
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -249,7 +246,7 @@ mod tests {
 
         #[test]
         fn the_pixel_one_step_outside_the_inner_radius_is_drawn_in_outline_color() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -262,7 +259,7 @@ mod tests {
 
         #[test]
         fn a_point_outside_the_outer_radius_is_not_drawn() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -271,7 +268,7 @@ mod tests {
 
         #[test]
         fn the_front_dot_is_drawn_north_of_center_when_facing_north() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -285,7 +282,7 @@ mod tests {
         fn the_front_dot_extends_to_its_full_radius_inside_the_ring() {
             // The pixel at the dot's bottom edge sits inside the ring's hollow center,
             // so it's only lit if the dot itself is at full radius.
-            let critter = stationary_critter(CENTER, CENTER, Heading::North);
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -298,7 +295,7 @@ mod tests {
 
         #[test]
         fn the_front_dot_is_drawn_east_of_center_when_facing_east() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::East);
+            let critter = stationary_critter(CENTER, CENTER, EAST);
 
             let buffer = render(&critter);
 
@@ -310,7 +307,7 @@ mod tests {
 
         #[test]
         fn the_front_dot_is_drawn_south_of_center_when_facing_south() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::South);
+            let critter = stationary_critter(CENTER, CENTER, SOUTH);
 
             let buffer = render(&critter);
 
@@ -322,7 +319,7 @@ mod tests {
 
         #[test]
         fn the_front_dot_is_drawn_west_of_center_when_facing_west() {
-            let critter = stationary_critter(CENTER, CENTER, Heading::West);
+            let critter = stationary_critter(CENTER, CENTER, WEST);
 
             let buffer = render(&critter);
 
@@ -341,7 +338,7 @@ mod tests {
             let diagonal_offset = (((RADIUS - FRONT_DOT_RADIUS) as f32)
                 * std::f32::consts::FRAC_1_SQRT_2)
                 .round() as i32;
-            let critter = stationary_critter(CENTER, CENTER, Heading::NorthEast);
+            let critter = stationary_critter(CENTER, CENTER, NORTH_EAST);
 
             let buffer = render(&critter);
 
@@ -356,7 +353,7 @@ mod tests {
             let diagonal_offset = (((RADIUS - FRONT_DOT_RADIUS) as f32)
                 * std::f32::consts::FRAC_1_SQRT_2)
                 .round() as i32;
-            let critter = stationary_critter(CENTER, CENTER, Heading::SouthWest);
+            let critter = stationary_critter(CENTER, CENTER, SOUTH_WEST);
 
             let buffer = render(&critter);
 
@@ -368,7 +365,7 @@ mod tests {
 
         #[test]
         fn the_ring_extends_all_the_way_to_the_top_edge_when_the_critter_is_against_it() {
-            let critter = stationary_critter(CENTER, NEAR_TOP, Heading::East);
+            let critter = stationary_critter(CENTER, NEAR_TOP, EAST);
 
             let buffer = render(&critter);
 
@@ -377,7 +374,7 @@ mod tests {
 
         #[test]
         fn the_ring_extends_all_the_way_to_the_left_edge_when_the_critter_is_against_it() {
-            let critter = stationary_critter(NEAR_LEFT, CENTER, Heading::North);
+            let critter = stationary_critter(NEAR_LEFT, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -386,7 +383,7 @@ mod tests {
 
         #[test]
         fn the_ring_extends_all_the_way_to_the_right_edge_when_the_critter_is_against_it() {
-            let critter = stationary_critter(NEAR_RIGHT, CENTER, Heading::North);
+            let critter = stationary_critter(NEAR_RIGHT, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -398,7 +395,7 @@ mod tests {
 
         #[test]
         fn the_ring_extends_all_the_way_to_the_bottom_edge_when_the_critter_is_against_it() {
-            let critter = stationary_critter(CENTER, NEAR_BOTTOM, Heading::North);
+            let critter = stationary_critter(CENTER, NEAR_BOTTOM, NORTH);
 
             let buffer = render(&critter);
 
@@ -411,7 +408,7 @@ mod tests {
         #[test]
         fn the_ring_is_still_drawn_when_part_of_the_critter_is_above_the_top_edge() {
             // Critter centered at y=0: top half of the ring is off-canvas, bottom half visible.
-            let critter = stationary_critter(CENTER, 0, Heading::East);
+            let critter = stationary_critter(CENTER, 0, EAST);
 
             let buffer = render(&critter);
 
@@ -421,7 +418,7 @@ mod tests {
 
         #[test]
         fn the_ring_is_still_drawn_when_part_of_the_critter_is_left_of_the_left_edge() {
-            let critter = stationary_critter(0, CENTER, Heading::North);
+            let critter = stationary_critter(0, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -430,7 +427,7 @@ mod tests {
 
         #[test]
         fn the_ring_is_still_drawn_when_part_of_the_critter_is_right_of_the_right_edge() {
-            let critter = stationary_critter(CANVAS as i32 - 1, CENTER, Heading::North);
+            let critter = stationary_critter(CANVAS as i32 - 1, CENTER, NORTH);
 
             let buffer = render(&critter);
 
@@ -443,7 +440,7 @@ mod tests {
 
         #[test]
         fn the_ring_is_still_drawn_when_part_of_the_critter_is_below_the_bottom_edge() {
-            let critter = stationary_critter(CENTER, CANVAS as i32 - 1, Heading::North);
+            let critter = stationary_critter(CENTER, CANVAS as i32 - 1, NORTH);
 
             let buffer = render(&critter);
 
@@ -543,7 +540,7 @@ mod tests {
                 let mut critter = Critter::with_genome(
                     CENTER,
                     CENTER,
-                    Heading::North,
+                    NORTH,
                     1,
                     1,
                     INITIAL_ENERGY,
@@ -636,7 +633,7 @@ mod tests {
             fn a_critter_against_the_right_edge_renders_pixels_on_the_left_edge_too() {
                 // Critter at x = CANVAS - 1: ring extends from x = CANVAS - 1 - RADIUS to
                 // x = CANVAS - 1 + RADIUS, the latter wrapping into [0, RADIUS - 1].
-                let critter = stationary_critter(CANVAS as i32 - 1, CENTER, Heading::North);
+                let critter = stationary_critter(CANVAS as i32 - 1, CENTER, NORTH);
 
                 let buffer = render(&critter);
 
@@ -653,7 +650,7 @@ mod tests {
                 // The case the skip must not break: at a corner four copies
                 // are genuinely on the canvas at once, so a test that only
                 // proved the far ones were dropped would be the wrong test.
-                let critter = stationary_critter(0, 0, Heading::North);
+                let critter = stationary_critter(0, 0, NORTH);
 
                 let buffer = render(&critter);
 
@@ -670,7 +667,7 @@ mod tests {
 
             #[test]
             fn a_critter_against_the_bottom_edge_renders_pixels_on_the_top_edge_too() {
-                let critter = stationary_critter(CENTER, CANVAS as i32 - 1, Heading::North);
+                let critter = stationary_critter(CENTER, CANVAS as i32 - 1, NORTH);
 
                 let buffer = render(&critter);
 

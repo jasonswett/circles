@@ -702,7 +702,7 @@ mod tests {
 
     mod tick {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, NORTH};
 
         #[test]
         fn ticking_a_world_decreases_total_critter_energy() {
@@ -733,7 +733,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 100,
                 100,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 100,
@@ -759,7 +759,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 100,
                 100,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 100,
@@ -845,7 +845,7 @@ mod tests {
 
     mod splitting {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, NORTH};
 
         #[test]
         fn a_critter_that_splits_appears_twice_once_its_division_finishes() {
@@ -855,7 +855,7 @@ mod tests {
             let splitter = Critter::with_genome(
                 100,
                 100,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 crate::MAX_CRITTER_ENERGY,
@@ -876,14 +876,14 @@ mod tests {
 
     mod wrapping {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, EAST, NORTH};
 
         #[test]
         fn a_critter_that_walks_past_the_right_edge_wraps_to_the_left() {
             let critter = Critter::with_genome(
                 TEST_WIDTH as i32 - 1,
                 50,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -903,7 +903,7 @@ mod tests {
             let critter = Critter::with_genome(
                 50,
                 0,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -921,7 +921,7 @@ mod tests {
 
     mod eating {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, Pellet, PELLET_ENERGY};
+        use crate::{Critter, Genome, Instruction, Pellet, NORTH, PELLET_ENERGY};
 
         const HUNGRY_INITIAL: u32 = 200;
         const STARTING_ENERGY: u32 = 10;
@@ -937,7 +937,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 1, // fire every tick
                 1,
                 HUNGRY_INITIAL,
@@ -955,7 +955,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 HUNGRY_INITIAL,
@@ -1056,7 +1056,7 @@ mod tests {
             let critter = Critter::with_genome(
                 100,
                 100,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 HUNGRY_INITIAL,
@@ -1228,7 +1228,7 @@ mod tests {
 
     mod total_energy {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, Pellet, PELLET_ENERGY};
+        use crate::{Critter, Genome, Instruction, Pellet, NORTH, PELLET_ENERGY};
 
         #[test]
         fn an_empty_world_has_zero_total_energy() {
@@ -1242,7 +1242,7 @@ mod tests {
             let critter_a = Critter::with_genome(
                 50,
                 50,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 30,
@@ -1252,7 +1252,7 @@ mod tests {
             let critter_b = Critter::with_genome(
                 70,
                 70,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 25,
@@ -1282,7 +1282,7 @@ mod tests {
             let critter = Critter::with_genome(
                 50,
                 50,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 40,
@@ -1303,13 +1303,13 @@ mod tests {
 
     mod reap_dead_critters {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, NORTH};
 
         fn critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             let mut critter = Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 100,
@@ -1405,7 +1405,7 @@ mod tests {
 
     mod replenish_pellets {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, MAX_CRITTER_ENERGY, PELLET_ENERGY};
+        use crate::{Critter, Genome, Instruction, MAX_CRITTER_ENERGY, NORTH, PELLET_ENERGY};
 
         // Empty of critters and food, but budgeted for a full world, so it
         // is hungry. The test-only constructor sizes its budget from actual
@@ -1708,7 +1708,7 @@ mod tests {
             world.critters.push(Critter::with_genome(
                 10,
                 10,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 MAX_CRITTER_ENERGY,
@@ -1822,7 +1822,7 @@ mod tests {
             let critter = Critter::with_genome(
                 50,
                 50,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 100,
@@ -1842,13 +1842,13 @@ mod tests {
 
     mod detect_critter_overlaps {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, NORTH};
 
         fn idle_critter_at(x: i32, y: i32) -> Critter {
             Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 100,
@@ -2084,26 +2084,17 @@ mod tests {
 
     mod physical_size {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, REFERENCE_ENERGY};
+        use crate::{Critter, Genome, Instruction, NORTH, REFERENCE_ENERGY};
 
         fn eater_with_energy(x: i32, y: i32, energy: u32) -> Critter {
-            Critter::with_genome(
-                x,
-                y,
-                Heading::North,
-                1,
-                1,
-                energy,
-                0,
-                Genome::all(Instruction::Eat),
-            )
+            Critter::with_genome(x, y, NORTH, 1, 1, energy, 0, Genome::all(Instruction::Eat))
         }
 
         fn idle_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 energy,
@@ -2348,7 +2339,7 @@ mod tests {
 
     mod eating_critters {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, Pellet, MAX_CRITTER_ENERGY};
+        use crate::{Critter, Genome, Instruction, Pellet, MAX_CRITTER_ENERGY, NORTH};
 
         const HUNGRY_INITIAL: u32 = 200;
         // Comfortably more than PREDATION_ATTACK_COST, so a predator in these
@@ -2361,16 +2352,7 @@ mod tests {
             SOLVENT_PREDATOR_ENERGY - Critter::upkeep_for(SOLVENT_PREDATOR_ENERGY);
 
         fn eating_critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
-            Critter::with_genome(
-                x,
-                y,
-                Heading::North,
-                1,
-                1,
-                energy,
-                0,
-                Genome::all(Instruction::Eat),
-            )
+            Critter::with_genome(x, y, NORTH, 1, 1, energy, 0, Genome::all(Instruction::Eat))
         }
 
         // A predator with energy enough to cover the attack cost several
@@ -2386,7 +2368,7 @@ mod tests {
             Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 u32::MAX,
                 1,
                 energy,
@@ -2417,7 +2399,7 @@ mod tests {
                     let eater = Critter::with_genome(
                         100,
                         100,
-                        Heading::North,
+                        NORTH,
                         1,
                         1,
                         HUNGRY_INITIAL,
@@ -2474,7 +2456,7 @@ mod tests {
                 let eater = Critter::with_genome(
                     100,
                     100,
-                    Heading::North,
+                    NORTH,
                     1,
                     1,
                     HUNGRY_INITIAL,
@@ -2505,7 +2487,7 @@ mod tests {
                 let eater = Critter::with_genome(
                     100,
                     100,
-                    Heading::North,
+                    NORTH,
                     1,
                     1,
                     HUNGRY_INITIAL,
@@ -2906,7 +2888,7 @@ mod tests {
 
     mod poison {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction, PELLETS_PER_POISON};
+        use crate::{Critter, Genome, Instruction, NORTH, PELLETS_PER_POISON};
         use rand::rngs::StdRng;
         use rand::SeedableRng;
 
@@ -2917,7 +2899,7 @@ mod tests {
             Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 u32::MAX, // never fires, so any harm is from contact alone
                 1,
                 energy,
@@ -2930,7 +2912,7 @@ mod tests {
             Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 u32::MAX, // never fires, so any harm is from contact alone
                 1,
                 POISONED_START,
@@ -3408,7 +3390,7 @@ mod tests {
 
     mod population_too_low {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, NORTH};
 
         fn world_with_critter_count(count: usize) -> World {
             let critters = (0..count)
@@ -3416,7 +3398,7 @@ mod tests {
                     Critter::with_genome(
                         i as i32,
                         0,
-                        Heading::North,
+                        NORTH,
                         1,
                         1,
                         100,
@@ -3487,10 +3469,10 @@ mod tests {
 
     mod dominant_genome {
         use super::*;
-        use crate::{Critter, Genome, Heading, Instruction};
+        use crate::{Critter, Genome, Instruction, EAST};
 
         fn critter_with(x: i32, genome: Genome) -> Critter {
-            Critter::with_genome(x, 0, Heading::East, 1, 1, 10, 0, genome)
+            Critter::with_genome(x, 0, EAST, 1, 1, 10, 0, genome)
         }
 
         #[test]

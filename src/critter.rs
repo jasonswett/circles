@@ -37,6 +37,10 @@ pub const SPLIT_DURATION_TICKS: u32 = 1;
 // controls whether a critter jumps, through the usual weights and sigmoid,
 // but not yet how far.
 pub const SKIP_DISTANCE: usize = 4;
+// How far one turn instruction turns a critter. Kept at an eighth of a circle
+// for now, which is what a turn was when a heading was one of eight compass
+// points.
+const TURN_DEGREES: f32 = 45.0;
 // What a step costs at each pace. Moving fast covers twice the ground of
 // moving slow, but the cost of covering it rises with the square of the
 // pace, the way drag does in any real medium: twice the speed, four times
@@ -440,14 +444,13 @@ impl Critter {
         // stood still until something ate it. Being poor should slow a
         // critter down, not strand it.
         self.energy = self.energy.saturating_sub(cost + hauling);
-        let (dx, dy) = self.heading.offset();
-        let step = if self.heading.is_diagonal() {
-            ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
-        } else {
-            self.step_size
-        } * multiplier;
-        self.x += dx * step;
-        self.y += dy * step;
+        // Rounded to whole pixels, so a critter on a shallow angle drifts
+        // rather than tracking the line exactly. The unit vector is already
+        // one long, so nothing has to correct a diagonal.
+        let (dx, dy) = self.heading.unit();
+        let step = (self.step_size * multiplier) as f32;
+        self.x += (dx * step).round() as i32;
+        self.y += (dy * step).round() as i32;
         self.last_executed = Some(instruction);
         TickOutcome::default()
     }
@@ -459,12 +462,12 @@ impl Critter {
                 self.travel(FAST_STEP_MULTIPLIER, MOVE_FAST_COST, Instruction::MoveFast)
             }
             Instruction::TurnLeft => {
-                self.heading = self.heading.turn_left();
+                self.heading = self.heading.turned_left(TURN_DEGREES);
                 self.last_executed = Some(Instruction::TurnLeft);
                 TickOutcome::default()
             }
             Instruction::TurnRight => {
-                self.heading = self.heading.turn_right();
+                self.heading = self.heading.turned_right(TURN_DEGREES);
                 self.last_executed = Some(Instruction::TurnRight);
                 TickOutcome::default()
             }
@@ -523,12 +526,8 @@ impl Critter {
     }
 
     fn spawn_child(&mut self) -> Critter {
-        let (dx, dy) = self.heading.offset();
-        let offset = if self.heading.is_diagonal() {
-            ((self.step_size as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
-        } else {
-            self.step_size
-        };
+        let (dx, dy) = self.heading.unit();
+        let offset = self.step_size as f32;
         let child_seed: u64 = self.rng.gen();
         let mut child_rng = SmallRng::seed_from_u64(child_seed);
         // Children's first firing is jittered, so they desynchronize from the
@@ -541,8 +540,8 @@ impl Critter {
         // per site rather than per offspring.
         child_genome.mutate(&mut child_rng, self.genome.mutation_rate());
         Critter {
-            x: self.x - dx * offset,
-            y: self.y - dy * offset,
+            x: self.x - (dx * offset).round() as i32,
+            y: self.y - (dy * offset).round() as i32,
             heading: self.heading,
             genome: child_genome,
             genome_cursor: self.genome_cursor,
@@ -574,7 +573,7 @@ fn jitter_threshold<R: Rng>(rng: &mut R, base: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Heading, Instruction};
+    use crate::{Instruction, EAST, NORTH, NORTH_EAST, NORTH_WEST, SOUTH, SOUTH_EAST, SOUTH_WEST};
 
     // Fires Split and runs the division out, returning the child. Since
     // division takes time, a single tick no longer yields one.
@@ -599,7 +598,7 @@ mod tests {
             let critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -615,7 +614,7 @@ mod tests {
             let critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -623,7 +622,7 @@ mod tests {
                 Genome::all(Instruction::DoNothing),
             );
 
-            assert_eq!(critter.heading(), Heading::North);
+            assert_eq!(critter.heading(), NORTH);
         }
     }
 
@@ -634,7 +633,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -708,16 +707,8 @@ mod tests {
         fn it_matches_the_underlying_genomes_digest_color() {
             let mut rng = SmallRng::seed_from_u64(42);
             let genome = Genome::random(&mut rng);
-            let critter = Critter::with_genome(
-                START_X,
-                START_Y,
-                Heading::North,
-                1,
-                1,
-                100,
-                0,
-                genome.clone(),
-            );
+            let critter =
+                Critter::with_genome(START_X, START_Y, NORTH, 1, 1, 100, 0, genome.clone());
 
             assert_eq!(critter.genome_color(), genome.digest_color());
         }
@@ -730,7 +721,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 100,
@@ -773,7 +764,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -827,7 +818,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 TICKS_PER_INSTRUCTION,
                 1,
                 u32::MAX,
@@ -847,7 +838,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 TICKS_PER_INSTRUCTION,
                 1,
                 u32::MAX,
@@ -867,7 +858,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -886,7 +877,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 STEP_SIZE,
                 u32::MAX,
@@ -905,7 +896,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::South,
+                SOUTH,
                 1,
                 STEP_SIZE,
                 u32::MAX,
@@ -926,7 +917,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::SouthEast,
+                SOUTH_EAST,
                 1,
                 STEP_SIZE,
                 u32::MAX,
@@ -949,7 +940,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::NorthWest,
+                NORTH_WEST,
                 1,
                 STEP_SIZE,
                 u32::MAX,
@@ -970,7 +961,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -980,7 +971,7 @@ mod tests {
 
             critter.tick(true);
 
-            assert_eq!(critter.heading(), Heading::NorthWest);
+            assert_eq!(critter.heading(), NORTH_WEST);
         }
 
         #[test]
@@ -988,7 +979,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1006,7 +997,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1016,7 +1007,7 @@ mod tests {
 
             critter.tick(true);
 
-            assert_eq!(critter.heading(), Heading::NorthEast);
+            assert_eq!(critter.heading(), NORTH_EAST);
         }
 
         #[test]
@@ -1024,7 +1015,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1042,7 +1033,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1060,7 +1051,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1070,7 +1061,7 @@ mod tests {
 
             critter.tick(true);
 
-            assert_eq!(critter.heading(), Heading::North);
+            assert_eq!(critter.heading(), NORTH);
         }
 
         #[test]
@@ -1078,7 +1069,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -1090,7 +1081,7 @@ mod tests {
             critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 1);
-            assert_eq!(critter.heading(), Heading::SouthEast);
+            assert_eq!(critter.heading(), SOUTH_EAST);
         }
 
         #[test]
@@ -1098,7 +1089,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -1121,7 +1112,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1155,7 +1146,7 @@ mod tests {
             let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 MAX_CRITTER_ENERGY,
@@ -1177,7 +1168,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 5,
                 energy,
@@ -1296,7 +1287,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 STEP,
                 energy,
@@ -1502,7 +1493,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -1524,7 +1515,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -1542,7 +1533,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -1552,7 +1543,7 @@ mod tests {
 
             critter.tick(true);
 
-            assert_eq!(critter.heading(), Heading::East);
+            assert_eq!(critter.heading(), EAST);
         }
 
         #[test]
@@ -1565,7 +1556,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 u32::MAX,
@@ -1581,7 +1572,7 @@ mod tests {
             critter.tick(true);
             critter.tick(true);
 
-            assert_eq!(critter.heading(), Heading::SouthWest);
+            assert_eq!(critter.heading(), SOUTH_WEST);
         }
     }
 
@@ -1595,7 +1586,7 @@ mod tests {
             let critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -1611,7 +1602,7 @@ mod tests {
             let critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -1627,7 +1618,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -1645,7 +1636,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -1666,7 +1657,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 TICKS_PER_INSTRUCTION,
                 1,
                 INITIAL_ENERGY,
@@ -1686,7 +1677,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 0,
@@ -1704,7 +1695,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 0,
@@ -1727,7 +1718,7 @@ mod tests {
             Critter::with_genome(
                 0,
                 0,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 energy,
@@ -1810,7 +1801,7 @@ mod tests {
             Critter::with_genome(
                 x,
                 y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 u32::MAX,
@@ -1884,7 +1875,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 MAX_CRITTER_ENERGY,
@@ -1934,16 +1925,8 @@ mod tests {
             // A never-act genome leaves every roll failing.
             let mut genome = Genome::from_instructions(&[Instruction::SkipAhead]);
             genome.set_never_act_header();
-            let mut critter = Critter::with_genome(
-                START_X,
-                START_Y,
-                Heading::North,
-                1,
-                1,
-                MAX_CRITTER_ENERGY,
-                0,
-                genome,
-            );
+            let mut critter =
+                Critter::with_genome(START_X, START_Y, NORTH, 1, 1, MAX_CRITTER_ENERGY, 0, genome);
             let before = critter.genome_cursor;
 
             critter.tick(true);
@@ -1955,16 +1938,8 @@ mod tests {
         fn a_skip_back_whose_roll_fails_also_walks_on_by_one() {
             let mut genome = Genome::from_instructions(&[Instruction::SkipBack]);
             genome.set_never_act_header();
-            let mut critter = Critter::with_genome(
-                START_X,
-                START_Y,
-                Heading::North,
-                1,
-                1,
-                MAX_CRITTER_ENERGY,
-                0,
-                genome,
-            );
+            let mut critter =
+                Critter::with_genome(START_X, START_Y, NORTH, 1, 1, MAX_CRITTER_ENERGY, 0, genome);
             critter.genome_cursor = SKIP_DISTANCE * 2;
             let before = critter.genome_cursor;
 
@@ -2013,7 +1988,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 60,
@@ -2056,16 +2031,7 @@ mod tests {
         fn critter_with_window(window_bits: u32, instruction: Instruction) -> Critter {
             let mut genome = Genome::all(instruction);
             genome.set_history_window_bits(window_bits);
-            Critter::with_genome(
-                START_X,
-                START_Y,
-                Heading::North,
-                1,
-                1,
-                MAX_CRITTER_ENERGY,
-                0,
-                genome,
-            )
+            Critter::with_genome(START_X, START_Y, NORTH, 1, 1, MAX_CRITTER_ENERGY, 0, genome)
         }
 
         #[test]
@@ -2172,7 +2138,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -2316,7 +2282,7 @@ mod tests {
 
             let child = divide_fully(&mut parent);
 
-            assert_eq!(child.heading(), Heading::North);
+            assert_eq!(child.heading(), NORTH);
         }
 
         #[test]
@@ -2345,7 +2311,7 @@ mod tests {
             let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 STEP_SIZE,
                 INITIAL_ENERGY,
@@ -2368,7 +2334,7 @@ mod tests {
             let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::SouthEast,
+                SOUTH_EAST,
                 1,
                 STEP_SIZE,
                 INITIAL_ENERGY,
@@ -2392,7 +2358,7 @@ mod tests {
             let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -2413,7 +2379,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -2429,7 +2395,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -2445,7 +2411,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -2461,7 +2427,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 10,
                 1,
                 INITIAL_ENERGY,
@@ -2477,7 +2443,7 @@ mod tests {
             let mut parent = Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 INITIAL_ENERGY,
@@ -2508,7 +2474,7 @@ mod tests {
             let mut parent = Critter::with_genome(
                 10,
                 10,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 10,
@@ -2528,8 +2494,7 @@ mod tests {
                 .filter(|&seed| {
                     let mut genome = Genome::all(Instruction::Split);
                     genome.set_mutation_rate_bits(rate_bits);
-                    let mut parent =
-                        Critter::with_genome(10, 10, Heading::North, 1, 1, 10, seed, genome);
+                    let mut parent = Critter::with_genome(10, 10, NORTH, 1, 1, 10, seed, genome);
                     parent.gain_energy(MAX_CRITTER_ENERGY - 10);
                     let parent_genome = parent.genome().clone();
                     let child = divide_fully(&mut parent);
@@ -2544,8 +2509,7 @@ mod tests {
                 .map(|seed| {
                     let mut genome = Genome::all(Instruction::Split);
                     genome.set_mutation_rate_bits(rate_bits);
-                    let mut parent =
-                        Critter::with_genome(10, 10, Heading::North, 1, 1, 10, seed, genome);
+                    let mut parent = Critter::with_genome(10, 10, NORTH, 1, 1, 10, seed, genome);
                     parent.gain_energy(MAX_CRITTER_ENERGY - 10);
                     let parent_genome = parent.genome().clone();
                     let child = divide_fully(&mut parent);
@@ -2620,7 +2584,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 10,
                 10,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 10,
@@ -2710,7 +2674,7 @@ mod tests {
             Critter::with_genome(
                 START_X,
                 START_Y,
-                Heading::East,
+                EAST,
                 BASE_TICKS,
                 1,
                 u32::MAX,
@@ -2765,7 +2729,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 0,
                 0,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 MAX_CRITTER_ENERGY - 10,
@@ -2783,7 +2747,7 @@ mod tests {
             let mut critter = Critter::with_genome(
                 0,
                 0,
-                Heading::North,
+                NORTH,
                 1,
                 1,
                 100,
