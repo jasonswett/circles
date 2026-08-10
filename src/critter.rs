@@ -48,7 +48,7 @@ pub const SKIP_DISTANCE: usize = 4;
 // a large body costs more than hauling a small one, so the tax is the same
 // share at any size and nobody outgrows it -- with nothing capping what a
 // critter can bank, a flat cost alone would be a rounding error to the rich.
-pub const MOVE_COST_PERCENT: u32 = 2;
+pub const MOVE_COST_PERCENT: u32 = 10;
 pub const MOVE_SLOW_COST: u32 = 1;
 pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
