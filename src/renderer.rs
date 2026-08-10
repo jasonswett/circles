@@ -4,6 +4,10 @@ pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
 pub const FRONT_DOT_RADIUS: i32 = 4;
+/// How far a feeler is drawn beyond the body. The sense reaches further than
+/// this from the critter's centre; what is drawn is an antenna showing which
+/// way the critter is reaching, not the whole area it can feel.
+pub const FEELER_DRAW_LENGTH: i32 = 10;
 
 struct Ring {
     cx: i32,
@@ -27,6 +31,15 @@ struct Canvas<'a> {
     buffer: &'a mut [u32],
     width: usize,
     height: usize,
+}
+
+impl Canvas<'_> {
+    /// Lights one pixel, wrapping around the edges the way the world does.
+    fn set_with_wrap(&mut self, x: i32, y: i32, color: u32) {
+        let x = x.rem_euclid(self.width as i32) as usize;
+        let y = y.rem_euclid(self.height as i32) as usize;
+        self.buffer[y * self.width + x] = color;
+    }
 }
 
 pub struct Renderer;
@@ -74,6 +87,22 @@ impl Renderer {
             inner_squared: -1,
         };
         Self::fill_ring_with_wrap(&dot, &mut canvas, color);
+
+        // One to either side of the heading, matching where the critter's
+        // feelers actually reach. Drawn from the body's edge outward so they
+        // read as antennae rather than as spokes through the middle.
+        for feeler in [heading.turn_left(), heading.turn_right()] {
+            let (fx, fy) = feeler.offset();
+            for step in 0..FEELER_DRAW_LENGTH {
+                let distance = radius + step;
+                let along = if feeler.is_diagonal() {
+                    ((distance as f32) * std::f32::consts::FRAC_1_SQRT_2).round() as i32
+                } else {
+                    distance
+                };
+                canvas.set_with_wrap(cx + fx * along, cy + fy * along, color);
+            }
+        }
     }
 
     pub fn draw_pellet(pellet: &Pellet, buffer: &mut [u32], width: usize, height: usize) {
@@ -552,6 +581,89 @@ mod tests {
                 );
                 critter.lose_energy(INITIAL_ENERGY - current_energy);
                 critter
+            }
+        }
+
+        mod feelers {
+            use super::*;
+
+            #[test]
+            fn a_critter_draws_a_line_to_either_side_of_its_heading() {
+                // Facing north, the feelers point north-west and north-east.
+                let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+                let buffer = render(&critter);
+
+                // A point partway along each feeler, beyond the body so the
+                // body itself cannot be what lit it.
+                let along = RADIUS + 4;
+                let diagonal = (along as f32 * std::f32::consts::FRAC_1_SQRT_2).round() as i32;
+                assert_eq!(
+                    pixel_at(&buffer, CENTER - diagonal, CENTER - diagonal),
+                    critter.genome_color(),
+                    "left feeler"
+                );
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + diagonal, CENTER - diagonal),
+                    critter.genome_color(),
+                    "right feeler"
+                );
+            }
+
+            #[test]
+            fn the_feelers_are_drawn_in_the_critters_own_colour() {
+                // Not a colour of their own: a feeler is part of the body and
+                // dims with it as the critter runs down.
+                let mut critter = stationary_critter(CENTER, CENTER, Heading::East);
+                critter.lose_energy(critter.energy() / 2);
+
+                let buffer = render(&critter);
+
+                // Diagonal feelers are foreshortened the same way a diagonal
+                // step is, so the sample has to be taken where one lands.
+                let along = RADIUS + 4;
+                let diagonal = (along as f32 * std::f32::consts::FRAC_1_SQRT_2).round() as i32;
+                let lit = pixel_at(&buffer, CENTER + diagonal, CENTER - diagonal);
+                let body = pixel_at(&buffer, CENTER + RADIUS - 1, CENTER);
+                assert_eq!(lit, body);
+            }
+
+            #[test]
+            fn the_feelers_turn_with_the_critter() {
+                // Facing east, they point north-east and south-east, so
+                // nothing is drawn where a north-facing critter's would be.
+                let critter = stationary_critter(CENTER, CENTER, Heading::East);
+
+                let buffer = render(&critter);
+
+                let along = RADIUS + 4;
+                let diagonal = (along as f32 * std::f32::consts::FRAC_1_SQRT_2).round() as i32;
+                assert_eq!(
+                    pixel_at(&buffer, CENTER + diagonal, CENTER - diagonal),
+                    critter.genome_color(),
+                    "north-east feeler"
+                );
+                assert_eq!(
+                    pixel_at(&buffer, CENTER - diagonal, CENTER - diagonal),
+                    0,
+                    "nothing to the north-west"
+                );
+            }
+
+            #[test]
+            fn a_feeler_reaches_past_the_body() {
+                // Long enough to be seen sticking out, which is the point of
+                // drawing it at all.
+                let critter = stationary_critter(CENTER, CENTER, Heading::North);
+
+                let buffer = render(&critter);
+
+                let beyond = RADIUS + FEELER_DRAW_LENGTH - 1;
+                let diagonal = (beyond as f32 * std::f32::consts::FRAC_1_SQRT_2).round() as i32;
+                assert_eq!(
+                    pixel_at(&buffer, CENTER - diagonal, CENTER - diagonal),
+                    critter.genome_color()
+                );
             }
         }
 
