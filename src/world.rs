@@ -1,6 +1,6 @@
 use crate::{
     Critter, Genome, Heading, Pellet, CRITTER_RADIUS, MAX_CRITTER_ENERGY, PELLETS_PER_POISON,
-    PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS,
+    PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS, POISON_DAMAGE,
 };
 use rand::Rng;
 
@@ -312,7 +312,7 @@ impl World {
                 dx * dx + dy * dy < touch_distance_squared
             });
             if let Some(index) = touched {
-                critter.die();
+                critter.lose_energy(POISON_DAMAGE);
                 if !spent.contains(&index) {
                     spent.push(index);
                 }
@@ -2234,9 +2234,15 @@ mod tests {
             inside.tick(true);
             at_edge.tick(true);
 
-            assert_eq!(inside.critters()[0].energy(), 0, "one inside should kill");
+            // What is being pinned is the reach, so this asks whether contact
+            // happened at all rather than what the contact cost.
             assert!(
-                at_edge.critters()[0].energy() > 0,
+                inside.critters()[0].energy() < MAX_CRITTER_ENERGY,
+                "one inside should be touched"
+            );
+            assert_eq!(
+                at_edge.critters()[0].energy(),
+                MAX_CRITTER_ENERGY,
                 "one at the edge should not"
             );
         }
@@ -2895,6 +2901,19 @@ mod tests {
         use rand::rngs::StdRng;
         use rand::SeedableRng;
 
+        fn critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                Heading::North,
+                u32::MAX, // never fires, so any harm is from contact alone
+                1,
+                energy,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
         fn critter_at(x: i32, y: i32) -> Critter {
             Critter::with_genome(
                 x,
@@ -3060,6 +3079,57 @@ mod tests {
             world.tick(true);
 
             assert_eq!(world.critters()[1].energy(), 0);
+        }
+
+        #[test]
+        fn poison_takes_energy_rather_than_life() {
+            // A critter with reserves survives what it eats, poorer for it.
+            let start = POISON_DAMAGE * 3;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_with_energy(100, 100, start)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            world.tick(true);
+
+            // No living cost here: this critter never fires an instruction,
+            // so what it lost is the poison alone.
+            assert_eq!(world.critters()[0].energy(), start - POISON_DAMAGE);
+        }
+
+        #[test]
+        fn poison_kills_a_critter_that_cannot_afford_it() {
+            // Fatal only to a critter with nothing to spare, so being well
+            // fed is what survives it rather than luck.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_with_energy(100, 100, POISON_DAMAGE / 2)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert_eq!(world.critters()[0].energy(), 0);
+        }
+
+        #[test]
+        fn surviving_poison_still_consumes_it() {
+            // The pellet is spent on the critter that took it, whether or not
+            // it proved fatal, so one poison cannot harm a crowd.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_with_energy(100, 100, POISON_DAMAGE * 3)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+            assert!(world.pellets().is_empty());
         }
 
         #[test]
