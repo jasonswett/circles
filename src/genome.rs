@@ -17,7 +17,7 @@ const MAX_MUTATION_RATE: f32 = 0.0005;
 // factor contributes to the sigmoid input; off means it is ignored. This is
 // the "stair-step" mechanism: a single mutation can enable or disable a
 // whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 7;
+const FACTOR_MASK_BITS: usize = 9;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -61,6 +61,8 @@ const GREEN_FACTOR_BIT: u32 = 0b0001_0000;
 const BLUE_FACTOR_BIT: u32 = 0b0010_0000;
 const HISTORY_FACTOR_BIT: u32 = 0b0000_1000;
 const AGE_FACTOR_BIT: u32 = 0b0100_0000;
+const LEFT_FEELER_FACTOR_BIT: u32 = 0b1000_0000;
+const RIGHT_FEELER_FACTOR_BIT: u32 = 0b1_0000_0000;
 
 // When the history factor is enabled, the contribution scales from 0 (none of
 // the remembered actions were this instruction) up to this value (all of them
@@ -117,12 +119,34 @@ const ACTIVATION_MASK_BITS: usize = OPCODE_POOL_SIZE;
 const OPCODE_BITS: usize = OPCODE_POOL_SIZE * OPCODE_BITS_PER_OPCODE;
 const ACTIVATION_MASK_OFFSET: usize = HEADER_OFFSET + HEADER_BITS;
 const OPCODE_STREAM_OFFSET: usize = ACTIVATION_MASK_OFFSET + ACTIVATION_MASK_BITS;
+// How a critter's feelers are shaped: how far they reach, how far apart they
+// are held, and how big a patch each one feels. All three evolve, so a lineage
+// can settle on long thin feelers held wide, or short fat ones pointed
+// forward, or anything between.
+//
+// The disc is capped well short of the omnidirectional: at its largest it
+// covers a little more ground than the critter's own body, so a feeler stays
+// something a critter points rather than a sense of everything around it.
+const FEELER_FIELD_BITS: usize = 4;
+const FEELER_LENGTH_OFFSET: usize = OPCODE_STREAM_OFFSET + OPCODE_BITS;
+const FEELER_ANGLE_OFFSET: usize = FEELER_LENGTH_OFFSET + FEELER_FIELD_BITS;
+const FEELER_DISC_OFFSET: usize = FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS;
+const FEELER_BITS: usize = 3 * FEELER_FIELD_BITS;
+/// How far a feeler reaches beyond the body, in pixels.
+pub const MIN_FEELER_LENGTH: f32 = 8.0;
+pub const MAX_FEELER_LENGTH: f32 = 68.0;
+/// How far to either side of the heading a feeler is held, in degrees.
+pub const MAX_FEELER_ANGLE: f32 = 90.0;
+/// The radius of the patch at a feeler's tip that actually senses.
+pub const MIN_FEELER_DISC: f32 = 2.0;
+pub const MAX_FEELER_DISC: f32 = 8.0;
 const TOTAL_BITS: usize = MUTATION_RATE_BITS
     + WEIGHT_BITS
     + HISTORY_WINDOW_BITS
     + HEADER_BITS
     + ACTIVATION_MASK_BITS
-    + OPCODE_BITS;
+    + OPCODE_BITS
+    + FEELER_BITS;
 const TOTAL_BYTES: usize = TOTAL_BITS.div_ceil(8);
 
 /// Everything a critter can perceive when deciding whether to act. Grouped
@@ -139,6 +163,9 @@ pub struct Senses {
     pub recent_repetition: f32,
     /// How many ticks the critter has lived.
     pub age: u32,
+    /// What each feeler's disc is touching, black for nothing.
+    pub left_color: u32,
+    pub right_color: u32,
 }
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -362,7 +389,26 @@ impl Genome {
         } else {
             0.0
         };
-        let input = age_contribution
+        // The green channel, which is what tells food from poison: food is
+        // green and poison red, so the brightest channel of either would
+        // report the same thing for both and leave poison unlearnable.
+        let feeler = |lit: u32| {
+            let [_, _, green, _] = lit.to_be_bytes();
+            COLOR_CHANNEL_SCALE * green as f32 / 255.0
+        };
+        let left_feeler_contribution = if mask & LEFT_FEELER_FACTOR_BIT != 0 {
+            feeler(senses.left_color)
+        } else {
+            0.0
+        };
+        let right_feeler_contribution = if mask & RIGHT_FEELER_FACTOR_BIT != 0 {
+            feeler(senses.right_color)
+        } else {
+            0.0
+        };
+        let input = left_feeler_contribution
+            + right_feeler_contribution
+            + age_contribution
             + energy_contribution
             + touching_contribution
             + red_contribution
@@ -430,6 +476,67 @@ impl Genome {
         let bits = read_bits(&self.bytes, MUTATION_RATE_OFFSET, MUTATION_RATE_BITS);
         let max_value = ((1u32 << MUTATION_RATE_BITS) - 1) as f32;
         bits as f32 / max_value * MAX_MUTATION_RATE
+    }
+
+    /// Sets the feeler shape directly. Test-only: in a running world these
+    /// change only through mutation.
+    #[cfg(test)]
+    pub fn set_feeler_shape(&mut self, length: f32, angle: f32, disc: f32) {
+        let field = |value: f32, low: f32, high: f32| {
+            let most = ((1u32 << FEELER_FIELD_BITS) - 1) as f32;
+            (((value - low) / (high - low)) * most).round() as u32
+        };
+        write_bits(
+            &mut self.bytes,
+            FEELER_LENGTH_OFFSET,
+            FEELER_FIELD_BITS,
+            field(length, MIN_FEELER_LENGTH, MAX_FEELER_LENGTH),
+        );
+        write_bits(
+            &mut self.bytes,
+            FEELER_ANGLE_OFFSET,
+            FEELER_FIELD_BITS,
+            field(angle, 0.0, MAX_FEELER_ANGLE),
+        );
+        write_bits(
+            &mut self.bytes,
+            FEELER_DISC_OFFSET,
+            FEELER_FIELD_BITS,
+            field(disc, MIN_FEELER_DISC, MAX_FEELER_DISC),
+        );
+    }
+
+    /// How far this critter's feelers reach beyond its body.
+    pub fn feeler_length(&self) -> f32 {
+        Self::scaled(
+            read_bits(&self.bytes, FEELER_LENGTH_OFFSET, FEELER_FIELD_BITS),
+            MIN_FEELER_LENGTH,
+            MAX_FEELER_LENGTH,
+        )
+    }
+
+    /// How far to either side of the heading the feelers are held.
+    pub fn feeler_angle(&self) -> f32 {
+        Self::scaled(
+            read_bits(&self.bytes, FEELER_ANGLE_OFFSET, FEELER_FIELD_BITS),
+            0.0,
+            MAX_FEELER_ANGLE,
+        )
+    }
+
+    /// The radius of the sensing patch at each feeler's tip.
+    pub fn feeler_disc(&self) -> f32 {
+        Self::scaled(
+            read_bits(&self.bytes, FEELER_DISC_OFFSET, FEELER_FIELD_BITS),
+            MIN_FEELER_DISC,
+            MAX_FEELER_DISC,
+        )
+    }
+
+    /// A field's bits spread evenly across the range it stands for.
+    fn scaled(bits: u32, low: f32, high: f32) -> f32 {
+        let most = ((1u32 << FEELER_FIELD_BITS) - 1) as f32;
+        low + (high - low) * bits as f32 / most
     }
 
     fn params(&self, instruction: Instruction) -> (u32, f32, f32) {
@@ -707,7 +814,8 @@ mod tests {
                 + HISTORY_WINDOW_BITS
                 + HEADER_BITS
                 + ACTIVATION_MASK_BITS
-                + OPCODE_BITS;
+                + OPCODE_BITS
+                + FEELER_BITS;
             assert_eq!(genome.bytes.len(), bits_needed.div_ceil(8));
         }
 
@@ -891,6 +999,149 @@ mod tests {
             );
 
             assert!(probability > 0.99);
+        }
+
+        #[test]
+        fn a_full_critters_energy_contributes_the_whole_scale() {
+            // Pins the size of the contribution rather than its direction.
+            // Threshold and softness keep the curve climbing at a full
+            // critter's energy: at the defaults the true scale and a much
+            // smaller one both saturate at one and agree.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            let window = header_window_offset(instruction_index(Instruction::Split));
+            write_bits(&mut bytes, window, FACTOR_MASK_BITS, ENERGY_FACTOR_BIT);
+            write_bits(
+                &mut bytes,
+                window + THRESHOLD_OFFSET,
+                THRESHOLD_BITS,
+                ENERGY_FACTOR_SCALE as u32,
+            );
+            write_bits(&mut bytes, window + SOFTNESS_OFFSET, SOFTNESS_BITS, 40);
+            let genome = Genome { bytes };
+
+            let at_full = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    energy: MAX_CRITTER_ENERGY,
+                    ..Senses::default()
+                },
+            );
+
+            let (_, threshold, softness) = genome.params(Instruction::Split);
+            let expected = sigmoid((ENERGY_FACTOR_SCALE - threshold) / softness);
+            assert!((at_full - expected).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn a_feeler_on_food_pushes_a_decision() {
+            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
+            let probe = |left_color: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        left_color,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            assert!(probe(crate::PELLET_COLOR) > probe(0));
+        }
+
+        #[test]
+        fn a_feeler_tells_food_from_poison() {
+            // The point of sensing colour rather than mere presence. Poison is
+            // red and food green, so a sense that took the brightest channel
+            // of either would report the same for both.
+            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
+            let probe = |left_color: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        left_color,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            assert!(probe(crate::PELLET_COLOR) > probe(crate::POISON_COLOR));
+        }
+
+        #[test]
+        fn food_on_both_sides_counts_twice() {
+            // The two contributions add. Probed with a threshold and softness
+            // that keep the curve climbing, since at the defaults both
+            // readings saturate at one and nothing can be told apart.
+            let mut bytes = [0u8; TOTAL_BYTES];
+            let window = header_window_offset(instruction_index(Instruction::Split));
+            write_bits(
+                &mut bytes,
+                window,
+                FACTOR_MASK_BITS,
+                LEFT_FEELER_FACTOR_BIT | RIGHT_FEELER_FACTOR_BIT,
+            );
+            write_bits(
+                &mut bytes,
+                window + THRESHOLD_OFFSET,
+                THRESHOLD_BITS,
+                (1.5 * COLOR_CHANNEL_SCALE) as u32,
+            );
+            write_bits(&mut bytes, window + SOFTNESS_OFFSET, SOFTNESS_BITS, 40);
+            let genome = Genome { bytes };
+            let probe = |left: u32, right: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        left_color: left,
+                        right_color: right,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            let both = probe(crate::PELLET_COLOR, crate::PELLET_COLOR);
+            let one = probe(crate::PELLET_COLOR, 0);
+
+            assert!(both > one, "both sides should push harder: {both} vs {one}");
+            let (_, threshold, softness) = genome.params(Instruction::Split);
+            let expected = sigmoid((2.0 * COLOR_CHANNEL_SCALE - threshold) / softness);
+            assert!((both - expected).abs() < f32::EPSILON);
+        }
+
+        #[test]
+        fn the_two_feelers_are_sensed_separately() {
+            // Each side has its own bit, so a genome can tell food on its left
+            // from food on its right and turn towards one of them.
+            let left_only = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
+
+            let with_food_right = left_only.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    right_color: crate::PELLET_COLOR,
+                    ..Senses::default()
+                },
+            );
+            let with_nothing =
+                left_only.probability_of_acting(Instruction::Split, &Senses::default());
+
+            assert_eq!(with_food_right, with_nothing);
+        }
+
+        #[test]
+        fn feelers_are_ignored_unless_the_genome_asks_for_them() {
+            let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
+            let probe = |left_color: u32| {
+                genome.probability_of_acting(
+                    Instruction::Split,
+                    &Senses {
+                        left_color,
+                        energy: 100,
+                        ..Senses::default()
+                    },
+                )
+            };
+
+            assert_eq!(probe(crate::PELLET_COLOR), probe(0));
         }
 
         #[test]
@@ -1180,10 +1431,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 7 bits + threshold 7 bits = 14)
+            // Use a hard-coded offset (mask 9 bits + threshold 7 bits = 16)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 14;
+            const SOFTNESS_OFFSET_LITERAL: usize = 16;
             assert_eq!(
                 SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
                 "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
@@ -2056,6 +2307,129 @@ mod tests {
                 after > before,
                 "expected Eat to claim more opcode values once up-weighted, got {after} vs {before}"
             );
+        }
+    }
+
+    mod feelers {
+        use super::*;
+
+        fn genome_with_feeler_bits(length: u32, angle: u32, disc: u32) -> Genome {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            write_bits(
+                &mut genome.bytes,
+                FEELER_LENGTH_OFFSET,
+                FEELER_FIELD_BITS,
+                length,
+            );
+            write_bits(
+                &mut genome.bytes,
+                FEELER_ANGLE_OFFSET,
+                FEELER_FIELD_BITS,
+                angle,
+            );
+            write_bits(
+                &mut genome.bytes,
+                FEELER_DISC_OFFSET,
+                FEELER_FIELD_BITS,
+                disc,
+            );
+            genome
+        }
+
+        const MAX_FIELD: u32 = (1 << FEELER_FIELD_BITS) - 1;
+
+        #[test]
+        fn the_feeler_fields_sit_past_everything_else_in_the_genome() {
+            // Where the fields begin, not merely how they are read. Tests that
+            // write and read through the same offsets agree wherever those
+            // point, including on top of the opcode stream.
+            assert_eq!(FEELER_LENGTH_OFFSET, OPCODE_STREAM_OFFSET + OPCODE_BITS);
+            assert_eq!(FEELER_LENGTH_OFFSET + FEELER_BITS, TOTAL_BITS);
+        }
+
+        #[test]
+        fn setting_a_feeler_field_leaves_the_opcode_stream_alone() {
+            // The fields sit past the stream, so shaping a critter's feelers
+            // must not rewrite what it does.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(4);
+            use rand::SeedableRng;
+            let genome = Genome::random(&mut rng);
+            let before: Vec<Instruction> = (0..OPCODE_POOL_SIZE)
+                .map(|slot| genome.decode_at(slot))
+                .collect();
+
+            let mut shaped = genome.clone();
+            shaped.set_feeler_shape(MAX_FEELER_LENGTH, MAX_FEELER_ANGLE, MAX_FEELER_DISC);
+
+            let after: Vec<Instruction> = (0..OPCODE_POOL_SIZE)
+                .map(|slot| shaped.decode_at(slot))
+                .collect();
+            assert_eq!(before, after);
+        }
+
+        #[test]
+        fn an_all_zero_length_field_gives_the_shortest_feelers() {
+            assert_eq!(
+                genome_with_feeler_bits(0, 0, 0).feeler_length(),
+                MIN_FEELER_LENGTH
+            );
+        }
+
+        #[test]
+        fn an_all_one_length_field_gives_the_longest() {
+            assert_eq!(
+                genome_with_feeler_bits(MAX_FIELD, 0, 0).feeler_length(),
+                MAX_FEELER_LENGTH
+            );
+        }
+
+        #[test]
+        fn length_scales_evenly_between_the_two() {
+            // Pins the shape of the mapping rather than only its ends.
+            let middling = genome_with_feeler_bits(MAX_FIELD / 2, 0, 0).feeler_length();
+
+            let span = MAX_FEELER_LENGTH - MIN_FEELER_LENGTH;
+            let expected = MIN_FEELER_LENGTH + span * (MAX_FIELD / 2) as f32 / MAX_FIELD as f32;
+            assert!((middling - expected).abs() < 0.01);
+        }
+
+        #[test]
+        fn an_all_zero_angle_field_points_both_feelers_straight_ahead() {
+            assert_eq!(genome_with_feeler_bits(0, 0, 0).feeler_angle(), 0.0);
+        }
+
+        #[test]
+        fn an_all_one_angle_field_points_them_out_to_the_sides() {
+            assert_eq!(
+                genome_with_feeler_bits(0, MAX_FIELD, 0).feeler_angle(),
+                MAX_FEELER_ANGLE
+            );
+        }
+
+        #[test]
+        fn an_all_zero_disc_field_gives_the_smallest_disc() {
+            assert_eq!(
+                genome_with_feeler_bits(0, 0, 0).feeler_disc(),
+                MIN_FEELER_DISC
+            );
+        }
+
+        #[test]
+        fn an_all_one_disc_field_gives_the_largest() {
+            assert_eq!(
+                genome_with_feeler_bits(0, 0, MAX_FIELD).feeler_disc(),
+                MAX_FEELER_DISC
+            );
+        }
+
+        #[test]
+        fn the_three_fields_are_read_from_their_own_places() {
+            // Each has its own bits: setting one must not move the others.
+            let genome = genome_with_feeler_bits(MAX_FIELD, 0, 0);
+
+            assert_eq!(genome.feeler_length(), MAX_FEELER_LENGTH);
+            assert_eq!(genome.feeler_angle(), 0.0);
+            assert_eq!(genome.feeler_disc(), MIN_FEELER_DISC);
         }
     }
 

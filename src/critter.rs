@@ -105,6 +105,10 @@ pub struct Critter {
     /// How many ticks this critter has lived. Its own, not inherited: a child
     /// begins at nothing however old its parent is.
     age: u32,
+    /// What each feeler's disc last touched, black for nothing. Filled in by
+    /// the world, since a critter cannot see past itself.
+    left_color: u32,
+    right_color: u32,
     rng: SmallRng,
 }
 
@@ -186,6 +190,8 @@ impl Critter {
             recent_actions: VecDeque::new(),
             dividing_ticks_remaining: 0,
             age: 0,
+            left_color: 0,
+            right_color: 0,
             rng,
         }
     }
@@ -209,6 +215,45 @@ impl Critter {
     /// How many ticks this critter has lived.
     pub fn age(&self) -> u32 {
         self.age
+    }
+
+    /// What each feeler's disc last touched, black for nothing.
+    pub fn left_color(&self) -> u32 {
+        self.left_color
+    }
+
+    pub fn right_color(&self) -> u32 {
+        self.right_color
+    }
+
+    pub fn set_feeler_colors(&mut self, left: u32, right: u32) {
+        self.left_color = left;
+        self.right_color = right;
+    }
+
+    /// Where the two feelers' sensing discs sit, left first. The genome says
+    /// how far out and how far apart they are held; both start at the body's
+    /// edge, so a critter's reach grows with it rather than shrinking as it
+    /// fattens.
+    pub fn feeler_tips(&self) -> ((i32, i32), (i32, i32)) {
+        let angle = self.genome.feeler_angle();
+        let out = self.radius() as f32 + self.genome.feeler_length();
+        let tip = |heading: Heading| {
+            let (dx, dy) = heading.unit();
+            (
+                self.x + (dx * out).round() as i32,
+                self.y + (dy * out).round() as i32,
+            )
+        };
+        (
+            tip(self.heading.turned_left(angle)),
+            tip(self.heading.turned_right(angle)),
+        )
+    }
+
+    /// How big a patch each feeler senses.
+    pub fn feeler_disc(&self) -> f32 {
+        self.genome.feeler_disc()
     }
 
     pub fn initial_energy(&self) -> u32 {
@@ -340,6 +385,8 @@ impl Critter {
             touched_color: self.most_recent_overlap_color.unwrap_or(0),
             recent_repetition: self.recent_repetition_of(instruction),
             age: self.age,
+            left_color: self.left_color,
+            right_color: self.right_color,
         };
         let probability = self.genome.probability_of_acting(instruction, &senses);
         let split_blocked = instruction == Instruction::Split && !allow_split;
@@ -564,6 +611,8 @@ impl Critter {
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
             age: 0,
+            left_color: 0,
+            right_color: 0,
             overlap_indicator_ticks: 0,
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,
@@ -1754,6 +1803,85 @@ mod tests {
             }
 
             assert_eq!(critter.energy(), 0);
+        }
+    }
+
+    mod feeler_geometry {
+        use super::*;
+        use crate::{MAX_FEELER_ANGLE, MIN_FEELER_DISC};
+
+        fn shaped(length: f32, angle: f32) -> Critter {
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(length, angle, MIN_FEELER_DISC);
+            Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome)
+        }
+
+        #[test]
+        fn feelers_held_straight_ahead_reach_the_body_plus_their_length() {
+            // Pinned to a distance rather than compared with another tip: a
+            // geometry that scaled everything wrongly would still satisfy a
+            // comparison.
+            let critter = shaped(30.0, 0.0);
+
+            let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+            // The genome's own length, not the one asked for: a four-bit
+            // field lands on the nearest value it can hold.
+            let expected = critter.radius() + critter.genome().feeler_length().round() as i32;
+            assert_eq!((lx, ly), (100, 100 - expected));
+            assert_eq!((rx, ry), (100, 100 - expected));
+        }
+
+        #[test]
+        fn feelers_held_at_a_right_angle_point_straight_out_to_the_sides() {
+            let critter = shaped(30.0, MAX_FEELER_ANGLE);
+
+            let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+            let expected = critter.radius() + critter.genome().feeler_length().round() as i32;
+            assert_eq!((lx, ly), (100 - expected, 100));
+            assert_eq!((rx, ry), (100 + expected, 100));
+        }
+
+        #[test]
+        fn the_feelers_turn_with_the_critter() {
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+            let critter = Critter::with_genome(100, 100, EAST, u32::MAX, 1, 60, 0, genome);
+
+            let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+            // Facing east, a right angle either side points north and south.
+            let expected = critter.radius() + critter.genome().feeler_length().round() as i32;
+            assert_eq!((lx, ly), (100, 100 - expected));
+            assert_eq!((rx, ry), (100, 100 + expected));
+        }
+
+        #[test]
+        fn feelers_start_at_the_body_so_a_fat_critter_reaches_further() {
+            let mut lean_genome = Genome::all(Instruction::DoNothing);
+            lean_genome.set_feeler_shape(30.0, 0.0, MIN_FEELER_DISC);
+            let mut fat_genome = lean_genome.clone();
+            fat_genome.set_feeler_shape(30.0, 0.0, MIN_FEELER_DISC);
+            let lean = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, lean_genome);
+            let fat = Critter::with_genome(
+                100,
+                100,
+                NORTH,
+                u32::MAX,
+                1,
+                MAX_CRITTER_ENERGY * 4,
+                0,
+                fat_genome,
+            );
+
+            let lean_tip = lean.feeler_tips().0 .1;
+            let fat_tip = fat.feeler_tips().0 .1;
+
+            assert!(
+                fat_tip < lean_tip,
+                "the fatter critter's tip should sit further out"
+            );
         }
     }
 

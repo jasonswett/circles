@@ -20,7 +20,10 @@ pub use critter::{
 };
 pub use elapsed_format::format_elapsed;
 pub use fps_counter::FpsCounter;
-pub use genome::{Genome, GenomeParseError, Senses};
+pub use genome::{
+    Genome, GenomeParseError, Senses, MAX_FEELER_ANGLE, MAX_FEELER_DISC, MAX_FEELER_LENGTH,
+    MIN_FEELER_DISC, MIN_FEELER_LENGTH,
+};
 pub use heading::{
     Heading, EAST, NORTH, NORTH_EAST, NORTH_WEST, SOUTH, SOUTH_EAST, SOUTH_WEST, WEST,
 };

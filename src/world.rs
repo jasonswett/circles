@@ -62,6 +62,15 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
+// Feelers are read on the same schedule as poison, and for the same reason:
+// asking every pellet about every critter is the costliest thing the world
+// can do, and what a feeler touched a few ticks ago is close enough when a
+// critter moves a few pixels a tick.
+const FEELER_INTERVAL_TICKS: u32 = 10;
+// How tall a band of the pellet index is. Only has to cover a feeler's disc,
+// not its length: a tip's position is worked out before the index is asked,
+// so what is looked up is a small patch and not the whole reach.
+const FEELER_BAND_HEIGHT: i32 = 24;
 // Scanning every pellet for every critter is the most expensive thing the
 // world does, so poison is checked periodically rather than every tick. A
 // critter can cross poison between checks and survive; poison is a hazard,
@@ -290,6 +299,34 @@ impl World {
         self.critters.push(critter);
     }
 
+    /// Fills in what each critter's feelers are touching: the colour of a
+    /// pellet under the disc at either tip, or black for nothing. A critter's
+    /// only sense of anything it is not already standing on.
+    pub fn sense_feelers(&mut self) {
+        let (width, height) = (self.width as i32, self.height as i32);
+        // Bucketed by row band first. Asking every pellet about every critter
+        // is tens of millions of distance checks a tick at a full world, which
+        // costs more than everything else the world does put together.
+        let bands = PelletBands::build(&self.pellets, height);
+
+        for critter in &mut self.critters {
+            let (left, right) = critter.feeler_tips();
+            let disc = critter.feeler_disc();
+            let disc_squared = (disc * disc) as i32;
+            let under = |(tx, ty): (i32, i32)| {
+                bands
+                    .near(ty, &self.pellets, height, |pellet| {
+                        let dx = toroidal_delta(tx, pellet.x.round() as i32, width);
+                        let dy = toroidal_delta(ty, pellet.y.round() as i32, height);
+                        dx * dx + dy * dy <= disc_squared
+                    })
+                    .map_or(0, |pellet| pellet.color())
+            };
+            let (l, r) = (under(left), under(right));
+            critter.set_feeler_colors(l, r);
+        }
+    }
+
     /// Kills any critter touching poison, and consumes the poison with it.
     /// Contact alone is fatal: a critter need not be trying to eat, and
     /// nothing in its sensorium warns it.
@@ -364,6 +401,9 @@ impl World {
         self.pellets.retain(|pellet| !pellet.is_expired());
         if self.ticks.is_multiple_of(POISON_CHECK_INTERVAL_TICKS) {
             self.resolve_poison();
+        }
+        if self.ticks.is_multiple_of(FEELER_INTERVAL_TICKS) {
+            self.sense_feelers();
         }
         self.ticks = self.ticks.wrapping_add(1);
         self.resolve_eats(&eater_indices);
@@ -611,6 +651,64 @@ fn predation_death_percent(victim_energy: u32) -> u32 {
     let scaled =
         PREDATION_ENERGY_DEATH_PERCENT * victim_energy.min(MAX_CRITTER_ENERGY) / MAX_CRITTER_ENERGY;
     PREDATION_BASE_DEATH_PERCENT + scaled
+}
+
+/// Pellet indices grouped into horizontal bands. A feeler's disc can only
+/// touch what is within a band or two of it vertically, so a critter looks at
+/// three bands rather than the whole larder. Purely a filter: what it offers
+/// is still checked by true distance, so a band too generous costs time and
+/// never correctness.
+struct PelletBands {
+    bands: Vec<Vec<u32>>,
+}
+
+impl PelletBands {
+    fn band_of(y: i32, height: i32) -> usize {
+        (y.rem_euclid(height) / FEELER_BAND_HEIGHT) as usize
+    }
+
+    // The `/` is an equivalent mutant: multiplying instead over-allocates
+    // bands rather than under-allocating them, and band_of indexes within
+    // either, so the filter still answers correctly and only wastes room.
+    #[mutants::skip]
+    fn count(height: i32) -> usize {
+        (height / FEELER_BAND_HEIGHT).max(1) as usize + 1
+    }
+
+    fn build(pellets: &[Pellet], height: i32) -> Self {
+        let mut bands = vec![Vec::new(); Self::count(height)];
+        for (index, pellet) in pellets.iter().enumerate() {
+            bands[Self::band_of(pellet.y.round() as i32, height)].push(index as u32);
+        }
+        Self { bands }
+    }
+
+    /// The first pellet in the bands around `y` that `wanted` accepts.
+    //
+    // The `+` on the offset is an equivalent mutant: the offsets run
+    // symmetrically about zero, so subtracting them visits the same three
+    // bands in the other order.
+    #[mutants::skip]
+    fn near<'a, F>(
+        &self,
+        y: i32,
+        pellets: &'a [Pellet],
+        height: i32,
+        wanted: F,
+    ) -> Option<&'a Pellet>
+    where
+        F: Fn(&Pellet) -> bool,
+    {
+        let count = self.bands.len() as i32;
+        let middle = Self::band_of(y, height) as i32;
+        (-1..=1)
+            .flat_map(|offset| {
+                let band = (middle + offset).rem_euclid(count) as usize;
+                self.bands[band].iter()
+            })
+            .map(|&index| &pellets[index as usize])
+            .find(|pellet| wanted(pellet))
+    }
 }
 
 fn spawn_pellet_of_kind<R: Rng>(site: (f32, f32), poisonous: bool, rng: &mut R) -> Pellet {
@@ -2883,6 +2981,299 @@ mod tests {
             world.tick(true);
 
             assert!(world.critters()[1].energy() < 80);
+        }
+    }
+
+    mod feelers {
+        use super::*;
+        use crate::{
+            Critter, Genome, Instruction, MAX_FEELER_ANGLE, MAX_FEELER_DISC, MAX_FEELER_LENGTH,
+            MIN_FEELER_DISC, MIN_FEELER_LENGTH, NORTH,
+        };
+
+        // A critter whose feelers are held at `angle` degrees either side, of
+        // the given length and disc size, facing north.
+        fn feeler_critter(x: i32, y: i32, length: f32, angle: f32, disc: f32) -> Critter {
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(length, angle, disc);
+            Critter::with_genome(x, y, NORTH, u32::MAX, 1, 60, 0, genome)
+        }
+
+        // Where a critter's left feeler tip sits, by the genome's shape.
+        fn left_tip(critter: &Critter) -> (i32, i32) {
+            critter.feeler_tips().0
+        }
+
+        #[test]
+        fn a_feeler_feels_food_under_its_own_tip() {
+            let critter = feeler_critter(100, 100, 30.0, 45.0, 4.0);
+            let (tx, ty) = left_tip(&critter);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx, ty)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn a_feeler_feels_nothing_along_its_own_length() {
+            // The disc at the tip is what senses, not the whole line: food
+            // halfway along a feeler is not touched by it.
+            let critter = feeler_critter(100, 100, 60.0, 45.0, 4.0);
+            let (tx, ty) = left_tip(&critter);
+            let halfway = ((100 + tx) / 2, (100 + ty) / 2);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(halfway.0, halfway.1)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn the_two_feelers_sense_their_own_sides() {
+            let critter = feeler_critter(100, 100, 30.0, 45.0, 4.0);
+            let (tx, ty) = left_tip(&critter);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx, ty)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+            assert_eq!(world.critters()[0].right_color(), 0);
+        }
+
+        #[test]
+        fn the_bands_narrow_the_search_to_what_is_nearby() {
+            // The filter's whole purpose, and the only thing about it a test
+            // can see: a pellet far away vertically is never offered for a
+            // distance check. Without this the band arithmetic could put every
+            // pellet in one band, stay correct, and cost what it was written
+            // to save.
+            let height = TEST_HEIGHT as i32;
+            let pellets: Vec<Pellet> = (0..height / 4).map(|r| Pellet::at(100, r * 4)).collect();
+            let total = pellets.len();
+            let bands = PelletBands::build(&pellets, height);
+
+            let offered = std::cell::Cell::new(0usize);
+            bands.near(0, &pellets, height, |_| {
+                offered.set(offered.get() + 1);
+                false
+            });
+
+            assert!(
+                offered.get() * 2 < total,
+                "should have looked at a small share of {total}, looked at {}",
+                offered.get()
+            );
+        }
+
+        #[test]
+        fn the_bands_cover_a_full_sized_world() {
+            // Enough bands for every row of a real field. Too few and a pellet
+            // near the bottom indexes past the end of them.
+            let height = 1080;
+            let pellets: Vec<Pellet> = (0..height / 8).map(|r| Pellet::at(10, r * 8)).collect();
+
+            let bands = PelletBands::build(&pellets, height);
+
+            let filed: usize = (0..PelletBands::count(height))
+                .map(|band| bands.bands[band].len())
+                .sum();
+            assert_eq!(filed, pellets.len());
+        }
+
+        #[test]
+        fn a_feeler_feels_food_far_down_the_field() {
+            // Away from the origin on the axis the bands divide, so the band
+            // arithmetic has to be right and not merely small.
+            let y = TEST_HEIGHT as i32 - 60;
+            let critter = feeler_critter(100, y, 30.0, 45.0, 4.0);
+            let (tx, ty) = left_tip(&critter);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx, ty)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn a_discs_reach_is_measured_by_true_distance() {
+            // Offset on both axes, inside the disc on each one alone but
+            // outside it diagonally. Squaring and summing both is what tells
+            // them apart.
+            let disc = MAX_FEELER_DISC;
+            let critter = feeler_critter(100, 100, 30.0, 45.0, disc);
+            let (tx, ty) = left_tip(&critter);
+            let offset = disc as i32 - 1;
+            assert!(
+                offset * offset * 2 > (disc * disc) as i32,
+                "must sit outside"
+            );
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx + offset, ty + offset)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn a_disc_feels_food_just_inside_its_edge_on_both_axes() {
+            // The other side of the same boundary, so the comparison cannot
+            // simply be too strict.
+            let disc = MAX_FEELER_DISC;
+            let critter = feeler_critter(100, 100, 30.0, 45.0, disc);
+            let (tx, ty) = left_tip(&critter);
+            // Far enough out that the disc's radius has to be squared to
+            // admit it: a radius merely doubled would put this outside.
+            let offset = 5;
+            assert!(offset * offset < (disc * disc) as i32, "must sit inside");
+            assert!(
+                offset * offset > (disc + disc) as i32,
+                "must sit outside a radius that was doubled rather than squared"
+            );
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx + offset, ty + offset)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn the_right_feeler_reports_what_it_touches() {
+            // Its own test rather than only appearing as the side that felt
+            // nothing: a reader stuck at black would satisfy every test that
+            // merely checks the other side.
+            let critter = feeler_critter(100, 100, 30.0, 45.0, 4.0);
+            let (tx, ty) = critter.feeler_tips().1;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx, ty)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].right_color(), crate::PELLET_COLOR);
+            assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn a_feeler_reaching_nothing_reports_darkness() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, 30.0, 45.0, 4.0)],
+                vec![],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+            assert_eq!(world.critters()[0].right_color(), 0);
+        }
+
+        #[test]
+        fn a_feeler_tells_poison_from_food() {
+            let critter = feeler_critter(100, 100, 30.0, 45.0, 4.0);
+            let (tx, ty) = left_tip(&critter);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::poison_at(tx, ty)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::POISON_COLOR);
+        }
+
+        #[test]
+        fn a_bigger_disc_feels_what_a_smaller_one_misses() {
+            // The disc's size is the critter's own, so a lineage can trade
+            // precision for the chance of touching anything at all.
+            let narrow = feeler_critter(100, 100, 30.0, 45.0, MIN_FEELER_DISC);
+            let wide = feeler_critter(100, 100, 30.0, 45.0, MAX_FEELER_DISC);
+            let (tx, ty) = left_tip(&narrow);
+            // Just outside the small disc, inside the large one.
+            let offset = MIN_FEELER_DISC as i32 + 2;
+            let pellet = Pellet::at(tx + offset, ty);
+
+            let mut narrow_world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![narrow],
+                vec![pellet],
+            );
+            let mut wide_world =
+                World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![wide], vec![pellet]);
+
+            narrow_world.sense_feelers();
+            wide_world.sense_feelers();
+
+            assert_eq!(narrow_world.critters()[0].left_color(), 0);
+            assert_eq!(wide_world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn longer_feelers_reach_further_out() {
+            let short = feeler_critter(100, 100, MIN_FEELER_LENGTH, 45.0, 4.0);
+            let long = feeler_critter(100, 100, MAX_FEELER_LENGTH, 45.0, 4.0);
+
+            let (sx, sy) = left_tip(&short);
+            let (lx, ly) = left_tip(&long);
+
+            let short_reach = (sx - 100).pow(2) + (sy - 100).pow(2);
+            let long_reach = (lx - 100).pow(2) + (ly - 100).pow(2);
+            assert!(long_reach > short_reach);
+        }
+
+        #[test]
+        fn a_wider_angle_holds_the_feelers_further_apart() {
+            let narrow = feeler_critter(100, 100, 30.0, 0.0, 4.0);
+            let wide = feeler_critter(100, 100, 30.0, MAX_FEELER_ANGLE, 4.0);
+
+            let (nlx, nly) = narrow.feeler_tips().0;
+            let (nrx, nry) = narrow.feeler_tips().1;
+            let (wlx, wly) = wide.feeler_tips().0;
+            let (wrx, wry) = wide.feeler_tips().1;
+
+            let narrow_gap = (nlx - nrx).pow(2) + (nly - nry).pow(2);
+            let wide_gap = (wlx - wrx).pow(2) + (wly - wry).pow(2);
+            assert!(
+                wide_gap > narrow_gap,
+                "wide {wide_gap} should exceed narrow {narrow_gap}"
+            );
         }
     }
 
