@@ -17,7 +17,7 @@ const MAX_MUTATION_RATE: f32 = 0.0005;
 // factor contributes to the sigmoid input; off means it is ignored. This is
 // the "stair-step" mechanism: a single mutation can enable or disable a
 // whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 9;
+const FACTOR_MASK_BITS: usize = 7;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -61,8 +61,6 @@ const GREEN_FACTOR_BIT: u32 = 0b0001_0000;
 const BLUE_FACTOR_BIT: u32 = 0b0010_0000;
 const HISTORY_FACTOR_BIT: u32 = 0b0000_1000;
 const AGE_FACTOR_BIT: u32 = 0b0100_0000;
-const LEFT_FEELER_FACTOR_BIT: u32 = 0b1000_0000;
-const RIGHT_FEELER_FACTOR_BIT: u32 = 0b1_0000_0000;
 
 // When the history factor is enabled, the contribution scales from 0 (none of
 // the remembered actions were this instruction) up to this value (all of them
@@ -137,10 +135,6 @@ pub struct Senses {
     pub recent_repetition: f32,
     /// How many ticks the critter has lived.
     pub age: u32,
-    /// What each feeler is touching, black for nothing. The critter's only
-    /// sense of anything it is not already standing on.
-    pub left_color: u32,
-    pub right_color: u32,
 }
 
 /// A binary genome that encodes both the critter's instruction stream and the
@@ -364,29 +358,7 @@ impl Genome {
         } else {
             0.0
         };
-        // A feeler contributes what it is touching, scaled the same way the
-        // colour of a touched body is. Green food therefore reads differently
-        // from red poison, which is what makes avoiding poison learnable.
-        // The green channel, which is what tells food from poison: food is
-        // green and poison is red, so taking the brightest channel of either
-        // would report the same thing for both and leave poison unlearnable.
-        let feeler = |lit: u32| {
-            let [_, _, green, _] = lit.to_be_bytes();
-            COLOR_CHANNEL_SCALE * green as f32 / 255.0
-        };
-        let left_feeler_contribution = if mask & LEFT_FEELER_FACTOR_BIT != 0 {
-            feeler(senses.left_color)
-        } else {
-            0.0
-        };
-        let right_feeler_contribution = if mask & RIGHT_FEELER_FACTOR_BIT != 0 {
-            feeler(senses.right_color)
-        } else {
-            0.0
-        };
-        let input = left_feeler_contribution
-            + right_feeler_contribution
-            + age_contribution
+        let input = age_contribution
             + energy_contribution
             + touching_contribution
             + red_contribution
@@ -943,169 +915,6 @@ mod tests {
         }
 
         #[test]
-        fn a_feeler_on_food_pushes_a_decision_the_way_the_energy_sense_does() {
-            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
-            let probe = |left_color: u32| {
-                genome.probability_of_acting(
-                    Instruction::Split,
-                    &Senses {
-                        left_color,
-                        ..Senses::default()
-                    },
-                )
-            };
-
-            assert!(probe(crate::PELLET_COLOR) > probe(0));
-        }
-
-        #[test]
-        fn a_full_critters_energy_contributes_the_whole_scale() {
-            // Pins the size of the energy contribution rather than its
-            // direction. Comparisons alone leave the scaling free: readings
-            // taken where the sigmoid has saturated agree whatever it is.
-            // Threshold and softness set so the curve is still climbing at a
-            // full critter's energy. With the defaults of zero and one both
-            // the true scale and a much smaller one saturate at one.
-            let mut bytes = [0u8; TOTAL_BYTES];
-            let window = header_window_offset(instruction_index(Instruction::Split));
-            write_bits(&mut bytes, window, FACTOR_MASK_BITS, ENERGY_FACTOR_BIT);
-            write_bits(
-                &mut bytes,
-                window + THRESHOLD_OFFSET,
-                THRESHOLD_BITS,
-                ENERGY_FACTOR_SCALE as u32,
-            );
-            write_bits(&mut bytes, window + SOFTNESS_OFFSET, SOFTNESS_BITS, 40);
-            let genome = Genome { bytes };
-            let at_full = genome.probability_of_acting(
-                Instruction::Split,
-                &Senses {
-                    energy: MAX_CRITTER_ENERGY,
-                    ..Senses::default()
-                },
-            );
-
-            let (_, threshold, softness) = genome.params(Instruction::Split);
-            let expected = sigmoid((ENERGY_FACTOR_SCALE - threshold) / softness);
-            assert!((at_full - expected).abs() < f32::EPSILON);
-        }
-
-        #[test]
-        fn a_feeler_tells_food_from_poison() {
-            // The point of sensing colour rather than mere presence: a critter
-            // that treats the two alike has learned nothing worth having.
-            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
-            let probe = |left_color: u32| {
-                genome.probability_of_acting(
-                    Instruction::Split,
-                    &Senses {
-                        left_color,
-                        ..Senses::default()
-                    },
-                )
-            };
-
-            assert!(probe(crate::PELLET_COLOR) > probe(crate::POISON_COLOR));
-        }
-
-        #[test]
-        fn a_feeler_on_food_contributes_the_full_colour_scale() {
-            // Pins the size of the contribution, not merely its direction: a
-            // feeler on food pushes as hard as any other sense at full tilt.
-            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
-            let on_food = genome.probability_of_acting(
-                Instruction::Split,
-                &Senses {
-                    left_color: crate::PELLET_COLOR,
-                    ..Senses::default()
-                },
-            );
-
-            let (_, threshold, softness) = genome.params(Instruction::Split);
-            let expected = sigmoid((COLOR_CHANNEL_SCALE - threshold) / softness);
-            assert!((on_food - expected).abs() < f32::EPSILON);
-        }
-
-        #[test]
-        fn food_on_both_sides_counts_twice() {
-            // The two contributions add. With only one feeler tested, a sum
-            // that subtracted the other would look the same.
-            let mut bytes = [0u8; TOTAL_BYTES];
-            let window = header_window_offset(instruction_index(Instruction::Split));
-            write_bits(
-                &mut bytes,
-                window,
-                FACTOR_MASK_BITS,
-                LEFT_FEELER_FACTOR_BIT | RIGHT_FEELER_FACTOR_BIT,
-            );
-            // Threshold above one feeler's contribution and a broad softness,
-            // so the curve is still climbing where the two are compared. At
-            // the default of zero both readings saturate at one and nothing
-            // can be told apart.
-            write_bits(
-                &mut bytes,
-                window + THRESHOLD_OFFSET,
-                THRESHOLD_BITS,
-                (1.5 * COLOR_CHANNEL_SCALE) as u32,
-            );
-            write_bits(&mut bytes, window + SOFTNESS_OFFSET, SOFTNESS_BITS, 40);
-            let genome = Genome { bytes };
-            let probe = |left: u32, right: u32| {
-                genome.probability_of_acting(
-                    Instruction::Split,
-                    &Senses {
-                        left_color: left,
-                        right_color: right,
-                        ..Senses::default()
-                    },
-                )
-            };
-
-            let both = probe(crate::PELLET_COLOR, crate::PELLET_COLOR);
-            let one = probe(crate::PELLET_COLOR, 0);
-
-            assert!(both > one, "both sides should push harder: {both} vs {one}");
-            let (_, threshold, softness) = genome.params(Instruction::Split);
-            let expected = sigmoid((2.0 * COLOR_CHANNEL_SCALE - threshold) / softness);
-            assert!((both - expected).abs() < f32::EPSILON);
-        }
-
-        #[test]
-        fn the_two_feelers_are_sensed_separately() {
-            // Each side has its own bit, so a genome can tell food on its left
-            // from food on its right and turn towards one of them.
-            let left_only = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
-            let senses = Senses {
-                right_color: crate::PELLET_COLOR,
-                ..Senses::default()
-            };
-
-            let with_food_on_the_right =
-                left_only.probability_of_acting(Instruction::Split, &senses);
-            let with_nothing =
-                left_only.probability_of_acting(Instruction::Split, &Senses::default());
-
-            assert_eq!(with_food_on_the_right, with_nothing);
-        }
-
-        #[test]
-        fn feelers_are_ignored_unless_the_genome_asks_for_them() {
-            let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
-            let probe = |left_color: u32| {
-                genome.probability_of_acting(
-                    Instruction::Split,
-                    &Senses {
-                        left_color,
-                        energy: 100,
-                        ..Senses::default()
-                    },
-                )
-            };
-
-            assert_eq!(probe(crate::PELLET_COLOR), probe(0));
-        }
-
-        #[test]
         fn age_is_ignored_unless_the_genome_asks_for_it() {
             let genome = genome_with_mask_for_split(ENERGY_FACTOR_BIT);
             let probe = |age: u32| {
@@ -1357,10 +1166,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 9 bits + threshold 7 bits = 16)
+            // Use a hard-coded offset (mask 7 bits + threshold 7 bits = 14)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 16;
+            const SOFTNESS_OFFSET_LITERAL: usize = 14;
             assert_eq!(
                 SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
                 "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
