@@ -12,6 +12,17 @@ struct Ring {
     inner_squared: i32,
 }
 
+impl Ring {
+    /// Whether any part of this ring's bounding box falls on the canvas.
+    /// Cheap enough to be worth asking before walking the box row by row.
+    fn touches(&self, canvas: &Canvas) -> bool {
+        self.cx + self.radius >= 0
+            && self.cy + self.radius >= 0
+            && self.cx - self.radius < canvas.width as i32
+            && self.cy - self.radius < canvas.height as i32
+    }
+}
+
 struct Canvas<'a> {
     buffer: &'a mut [u32],
     width: usize,
@@ -95,7 +106,12 @@ impl Renderer {
                     radius: ring.radius,
                     inner_squared: ring.inner_squared,
                 };
-                Self::fill_ring(&shifted, canvas, color);
+                // Of the nine copies only those overlapping the canvas can
+                // show, and for a critter clear of the edges that is one. The
+                // rest used to be walked row by row to draw nothing.
+                if shifted.touches(canvas) {
+                    Self::fill_ring(&shifted, canvas, color);
+                }
             }
         }
     }
@@ -539,6 +555,80 @@ mod tests {
             }
         }
 
+        mod offscreen_copies {
+            use super::*;
+
+            fn canvas_of(buffer: &mut Vec<u32>) -> Canvas<'_> {
+                Canvas {
+                    buffer,
+                    width: CANVAS,
+                    height: CANVAS,
+                }
+            }
+
+            fn ring_at(cx: i32, cy: i32) -> Ring {
+                Ring {
+                    cx,
+                    cy,
+                    radius: RADIUS,
+                    inner_squared: -1,
+                }
+            }
+
+            #[test]
+            fn a_ring_on_the_canvas_is_drawn() {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let canvas = canvas_of(&mut buffer);
+
+                assert!(ring_at(CENTER, CENTER).touches(&canvas));
+            }
+
+            #[test]
+            fn a_ring_a_whole_canvas_away_is_not() {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let canvas = canvas_of(&mut buffer);
+
+                assert!(!ring_at(CENTER - CANVAS as i32, CENTER).touches(&canvas));
+                assert!(!ring_at(CENTER + CANVAS as i32, CENTER).touches(&canvas));
+                assert!(!ring_at(CENTER, CENTER - CANVAS as i32).touches(&canvas));
+                assert!(!ring_at(CENTER, CENTER + CANVAS as i32).touches(&canvas));
+            }
+
+            #[test]
+            fn a_ring_reaching_the_canvas_by_one_pixel_is_drawn() {
+                // The boundary: its edge lands on the first column, so it has
+                // something to show and must not be skipped.
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let canvas = canvas_of(&mut buffer);
+
+                assert!(ring_at(-RADIUS, CENTER).touches(&canvas));
+                assert!(ring_at(CANVAS as i32 + RADIUS - 1, CENTER).touches(&canvas));
+            }
+
+            #[test]
+            fn a_ring_one_pixel_short_of_the_canvas_is_not() {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let canvas = canvas_of(&mut buffer);
+
+                assert!(!ring_at(-RADIUS - 1, CENTER).touches(&canvas));
+                assert!(!ring_at(CANVAS as i32 + RADIUS, CENTER).touches(&canvas));
+            }
+
+            #[test]
+            fn the_vertical_edges_are_judged_the_same_way() {
+                // The same boundary along y. Tested separately because the two
+                // axes are separate comparisons, and one can be got wrong
+                // while the other is right.
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let canvas = canvas_of(&mut buffer);
+
+                assert!(ring_at(CENTER, -RADIUS).touches(&canvas));
+                assert!(!ring_at(CENTER, -RADIUS - 1).touches(&canvas));
+                assert!(ring_at(CENTER, CANVAS as i32 + RADIUS - 1).touches(&canvas));
+                assert!(!ring_at(CENTER, CANVAS as i32 + RADIUS).touches(&canvas));
+            }
+        }
+
         mod wrap_rendering {
             use super::*;
 
@@ -556,6 +646,26 @@ mod tests {
                     pixel_at(&buffer, RADIUS - 2, CENTER),
                     critter.genome_color()
                 );
+            }
+
+            #[test]
+            fn a_critter_straddling_a_corner_lights_all_four_corners() {
+                // The case the skip must not break: at a corner four copies
+                // are genuinely on the canvas at once, so a test that only
+                // proved the far ones were dropped would be the wrong test.
+                let critter = stationary_critter(0, 0, Heading::North);
+
+                let buffer = render(&critter);
+
+                // Sampled on the ring itself rather than at the corner pixel,
+                // which sits in the hollow centre of a body that is a ring and
+                // not a disc.
+                let on_ring = RADIUS - 1;
+                let wrapped = CANVAS as i32 - on_ring;
+                assert_eq!(pixel_at(&buffer, on_ring, 0), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, wrapped, 0), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, 0, on_ring), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, 0, wrapped), critter.genome_color());
             }
 
             #[test]
