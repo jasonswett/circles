@@ -3,6 +3,9 @@ use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use std::collections::VecDeque;
 
+// The energy a critter is reckoned against rather than a ceiling it cannot
+// pass. Nothing stops a critter banking more; this is the scale that senses
+// and size are measured on, so a critter beyond it simply reads as full.
 pub const MAX_CRITTER_ENERGY: u32 = 1000;
 // A critter's area is proportional to its energy, so its radius goes as the
 // square root: four times the energy makes a critter twice as wide, not four
@@ -199,7 +202,7 @@ impl Critter {
     /// the critter's energy, so the radius grows as the square root: four
     /// times the energy makes a critter twice as wide, not four times.
     pub fn radius(&self) -> i32 {
-        let energy = self.energy.min(MAX_CRITTER_ENERGY) as f32;
+        let energy = self.energy as f32;
         let reference = REFERENCE_ENERGY as f32;
         let scaled = CRITTER_RADIUS as f32 * ((energy + reference) / reference).sqrt();
         scaled.round() as i32
@@ -213,7 +216,7 @@ impl Critter {
     }
 
     pub fn gain_energy(&mut self, amount: u32) {
-        self.energy = self.energy.saturating_add(amount).min(MAX_CRITTER_ENERGY);
+        self.energy = self.energy.saturating_add(amount);
     }
 
     pub fn lose_energy(&mut self, amount: u32) {
@@ -1503,11 +1506,11 @@ mod tests {
         }
 
         #[test]
-        fn a_critters_size_is_capped() {
+        fn a_critter_keeps_growing_past_the_reference_energy() {
             let full = critter_with_energy(MAX_CRITTER_ENERGY);
-            let overfull = critter_with_energy(MAX_CRITTER_ENERGY * 2);
+            let overfull = critter_with_energy(MAX_CRITTER_ENERGY * 4);
 
-            assert_eq!(overfull.radius(), full.radius());
+            assert!(overfull.radius() > full.radius());
         }
     }
 
@@ -2457,7 +2460,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn gain_energy_caps_the_total_at_max_critter_energy() {
+        fn gain_energy_is_not_capped() {
             let mut critter = Critter::with_genome(
                 0,
                 0,
@@ -2471,7 +2474,7 @@ mod tests {
 
             critter.gain_energy(1_000);
 
-            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY);
+            assert_eq!(critter.energy(), MAX_CRITTER_ENERGY - 10 + 1_000);
         }
 
         #[test]

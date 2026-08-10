@@ -2705,9 +2705,11 @@ mod tests {
         }
 
         #[test]
-        fn an_eaters_gain_still_stops_at_its_cap() {
-            // A quarter of the prey's energy exceeds the eater's headroom.
-            let eater = eating_critter_with_energy(100, 100, MAX_CRITTER_ENERGY - 5);
+        fn a_well_fed_eater_keeps_taking_on_energy() {
+            // Nothing caps what a critter can hold, so a bite lands in full
+            // however much the eater already has.
+            let start = MAX_CRITTER_ENERGY - 5;
+            let eater = eating_critter_with_energy(100, 100, start);
             let victim = idle_critter_with_energy(105, 100, MAX_CRITTER_ENERGY);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -2718,8 +2720,11 @@ mod tests {
 
             world.tick(true);
 
-            // The eater fills up; the prey loses only what was taken.
-            assert_eq!(world.critters()[0].energy(), MAX_CRITTER_ENERGY);
+            let bite = MAX_CRITTER_ENERGY * PREDATION_SHARE_PERCENT / 100;
+            assert_eq!(
+                world.critters()[0].energy(),
+                start - 1 - PREDATION_ATTACK_COST + bite
+            );
             assert!(world.critters()[1].energy() > 0);
         }
 
