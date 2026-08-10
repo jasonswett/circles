@@ -43,6 +43,12 @@ pub const SKIP_DISTANCE: usize = 4;
 // the price. Ground is therefore bought at a worsening exchange rate, so
 // hurrying is a choice with a real cost rather than a strictly better
 // option.
+// On top of the flat cost, a critter pays this share of its own energy for
+// every step it takes, doubled for the longer stride of a fast step. Hauling
+// a large body costs more than hauling a small one, so the tax is the same
+// share at any size and nobody outgrows it -- with nothing capping what a
+// critter can bank, a flat cost alone would be a rounding error to the rich.
+pub const MOVE_COST_PERCENT: u32 = 2;
 pub const MOVE_SLOW_COST: u32 = 1;
 pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
@@ -389,6 +395,10 @@ impl Critter {
     /// pace has to be earned, so exhaustion slows a critter rather than
     /// letting it run itself to death in one stride.
     fn travel(&mut self, multiplier: i32, cost: u32, instruction: Instruction) -> TickOutcome {
+        // Charged per unit of distance, so a longer stride costs proportionally
+        // more of the body being hauled.
+        let hauling = self.energy / 100 * MOVE_COST_PERCENT * multiplier as u32;
+        let cost = cost + hauling;
         if self.energy <= cost {
             return TickOutcome::default();
         }
@@ -1157,14 +1167,18 @@ mod tests {
         fn moving_fast_costs_four_times_what_moving_slow_costs() {
             // Twice the speed for four times the price: the cost of covering
             // ground rises with the square of the pace, the way drag does.
-            let mut slow = critter_running(Instruction::MoveSlow, PLENTY);
-            let mut fast = critter_running(Instruction::MoveFast, PLENTY);
+            //
+            // Probed with a critter too poor for the proportional charge to
+            // round to anything, so what is measured is the flat cost alone.
+            const TOO_POOR_TO_HAUL: u32 = 40;
+            let mut slow = critter_running(Instruction::MoveSlow, TOO_POOR_TO_HAUL);
+            let mut fast = critter_running(Instruction::MoveFast, TOO_POOR_TO_HAUL);
 
             slow.tick(true);
             fast.tick(true);
 
-            let slow_spent = PLENTY - slow.energy();
-            let fast_spent = PLENTY - fast.energy();
+            let slow_spent = TOO_POOR_TO_HAUL - slow.energy();
+            let fast_spent = TOO_POOR_TO_HAUL - fast.energy();
             // Both also pay the flat cost of living for the tick.
             assert_eq!(fast_spent - 1, (slow_spent - 1) * 4);
         }
@@ -1185,6 +1199,72 @@ mod tests {
                 fast_rate > slow_rate,
                 "fast should cost more per pixel: {fast_rate} vs {slow_rate}"
             );
+        }
+
+        #[test]
+        fn a_rich_critter_pays_more_to_move_than_a_poor_one() {
+            // Hauling a large body costs more than hauling a small one, the
+            // way an animal's cost of travel goes with its mass.
+            let mut poor = critter_running(Instruction::MoveSlow, 200);
+            let mut rich = critter_running(Instruction::MoveSlow, 20_000);
+
+            poor.tick(true);
+            rich.tick(true);
+
+            let poor_spent = 200 - poor.energy();
+            let rich_spent = 20_000 - rich.energy();
+            assert!(
+                rich_spent > poor_spent * 10,
+                "the rich critter should pay far more: {rich_spent} vs {poor_spent}"
+            );
+        }
+
+        #[test]
+        fn moving_costs_the_same_share_of_energy_at_any_size() {
+            // Proportional rather than flat: what changes with wealth is the
+            // amount, not the share, so no reserve makes travel free.
+            let share = |energy: u32| {
+                let mut critter = critter_running(Instruction::MoveSlow, energy);
+                critter.tick(true);
+                (energy - critter.energy()) as f32 / energy as f32
+            };
+
+            let modest = share(10_000);
+            let vast = share(100_000);
+            let expected = MOVE_COST_PERCENT as f32 / 100.0;
+
+            // Pinned against the expected share, not merely against each
+            // other: two costs of zero would agree just as closely.
+            assert!(
+                (modest - expected).abs() < 0.005 && (vast - expected).abs() < 0.005,
+                "expected a {expected} share, got {modest} and {vast}"
+            );
+        }
+
+        #[test]
+        fn a_poor_critter_still_pays_something_to_move() {
+            // The flat cost survives underneath, so travel is never free even
+            // for a critter with almost nothing.
+            let mut critter = critter_running(Instruction::MoveSlow, 50);
+
+            critter.tick(true);
+
+            assert!(critter.energy() < 50);
+        }
+
+        #[test]
+        fn covering_more_ground_costs_more_of_a_rich_critters_energy() {
+            // The proportional charge is per unit of distance, so hurrying
+            // costs a large critter more than walking does.
+            let mut walker = critter_running(Instruction::MoveSlow, 20_000);
+            let mut runner = critter_running(Instruction::MoveFast, 20_000);
+
+            walker.tick(true);
+            runner.tick(true);
+
+            let walked = 20_000 - walker.energy();
+            let ran = 20_000 - runner.energy();
+            assert!(ran > walked, "running should cost more: {ran} vs {walked}");
         }
 
         #[test]
