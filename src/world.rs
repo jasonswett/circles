@@ -1,6 +1,6 @@
 use crate::{
     Critter, Genome, Heading, Pellet, CRITTER_RADIUS, MAX_CRITTER_ENERGY, PELLETS_PER_POISON,
-    PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS, POISON_DAMAGE,
+    PELLET_MAX_DRIFT, PELLET_MIN_DRIFT, PELLET_RADIUS, POISON_DAMAGE_PERCENT,
 };
 use rand::Rng;
 
@@ -312,7 +312,8 @@ impl World {
                 dx * dx + dy * dy < touch_distance_squared
             });
             if let Some(index) = touched {
-                critter.lose_energy(POISON_DAMAGE);
+                let toll = critter.energy() * POISON_DAMAGE_PERCENT / 100;
+                critter.lose_energy(toll.max(1));
                 if !spent.contains(&index) {
                     spent.push(index);
                 }
@@ -2901,6 +2902,9 @@ mod tests {
         use rand::rngs::StdRng;
         use rand::SeedableRng;
 
+        // What critter_at starts with, so tests can say what poison cost it.
+        const POISONED_START: u32 = 60;
+
         fn critter_with_energy(x: i32, y: i32, energy: u32) -> Critter {
             Critter::with_genome(
                 x,
@@ -2919,9 +2923,9 @@ mod tests {
                 x,
                 y,
                 Heading::North,
-                u32::MAX, // never fires, so any death is from contact alone
+                u32::MAX, // never fires, so any harm is from contact alone
                 1,
-                60,
+                POISONED_START,
                 0,
                 Genome::all(Instruction::DoNothing),
             )
@@ -2941,7 +2945,7 @@ mod tests {
         }
 
         #[test]
-        fn a_critter_touching_poison_dies() {
+        fn a_critter_touching_poison_is_harmed_by_it() {
             // No eating involved: the critter never fires an instruction.
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -2952,7 +2956,7 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), 0);
+            assert!(world.critters()[0].energy() < POISONED_START);
         }
 
         #[test]
@@ -2970,7 +2974,7 @@ mod tests {
         }
 
         #[test]
-        fn poison_just_inside_the_touch_radius_kills() {
+        fn poison_just_inside_the_touch_radius_harms() {
             // One pixel closer than the boundary. Pins where the radius
             // falls, which a poison pellet sitting on the critter does not.
             let touch = critter_at(0, 0).radius() + PELLET_RADIUS;
@@ -2983,7 +2987,7 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), 0);
+            assert!(world.critters()[0].energy() < POISONED_START);
         }
 
         #[test]
@@ -3004,24 +3008,29 @@ mod tests {
 
         #[test]
         fn poison_offset_on_both_axes_is_measured_by_true_distance() {
-            // dx = dy = touch - 1 puts the poison well beyond the radius
+            // dx = dy = touch - 2 puts the poison well beyond the radius
             // diagonally even though each axis alone is inside it. Squaring
-            // and summing both axes is what tells them apart.
-            let touch = CRITTER_RADIUS + PELLET_RADIUS;
+            // and summing both axes is what tells them apart: any other way
+            // of combining the axes reads this as a hit.
+            let touch = critter_at(0, 0).radius() + PELLET_RADIUS;
+            let offset = touch - 2;
+            assert!(offset * offset * 2 > touch * touch, "must sit outside");
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
                 vec![critter_at(100, 100)],
-                vec![Pellet::poison_at(100 + touch - 1, 100 + touch - 1)],
+                vec![Pellet::poison_at(100 + offset, 100 + offset)],
             );
 
             world.tick(true);
 
-            assert!(world.critters()[0].energy() > 0);
+            // Untouched, not merely alive: halving never reaches zero, so
+            // "still has energy" would hold whether or not the poison landed.
+            assert_eq!(world.critters()[0].energy(), POISONED_START);
         }
 
         #[test]
-        fn poison_kills_across_the_toroidal_wrap() {
+        fn poison_reaches_across_the_toroidal_wrap() {
             // The critter sits against the left edge, the poison against the
             // right: they touch the short way round.
             let mut world = World::with_critters_and_pellets(
@@ -3033,7 +3042,7 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), 0);
+            assert!(world.critters()[0].energy() < POISONED_START);
         }
 
         #[test]
@@ -3071,20 +3080,22 @@ mod tests {
             for _ in 0..POISON_CHECK_INTERVAL_TICKS - 1 {
                 world.tick(true);
             }
-            assert!(
-                world.critters()[1].energy() > 0,
-                "should have survived until the interval came round"
+            assert_eq!(
+                world.critters()[1].energy(),
+                POISONED_START,
+                "should have been untouched until the interval came round"
             );
 
             world.tick(true);
 
-            assert_eq!(world.critters()[1].energy(), 0);
+            assert!(world.critters()[1].energy() < POISONED_START);
         }
 
         #[test]
-        fn poison_takes_energy_rather_than_life() {
-            // A critter with reserves survives what it eats, poorer for it.
-            let start = POISON_DAMAGE * 3;
+        fn poison_takes_half_of_what_a_critter_has() {
+            // No living cost here: this critter never fires an instruction,
+            // so what it lost is the poison alone.
+            let start = 800;
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -3094,19 +3105,61 @@ mod tests {
 
             world.tick(true);
 
-            // No living cost here: this critter never fires an instruction,
-            // so what it lost is the poison alone.
-            assert_eq!(world.critters()[0].energy(), start - POISON_DAMAGE);
+            assert_eq!(world.critters()[0].energy(), start / 2);
         }
 
         #[test]
-        fn poison_kills_a_critter_that_cannot_afford_it() {
-            // Fatal only to a critter with nothing to spare, so being well
-            // fed is what survives it rather than luck.
+        fn poison_costs_the_rich_more_than_the_poor() {
+            // Proportional rather than flat, so poison stays worth avoiding
+            // however much a critter has banked: no reserve makes it trivial.
+            let mut rich = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_with_energy(100, 100, 4000)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+            let mut poor = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_with_energy(100, 100, 400)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            rich.tick(true);
+            poor.tick(true);
+
+            let rich_loss = 4000 - rich.critters()[0].energy();
+            let poor_loss = 400 - poor.critters()[0].energy();
+            assert!(
+                rich_loss > poor_loss,
+                "the richer critter should lose more: {rich_loss} vs {poor_loss}"
+            );
+        }
+
+        #[test]
+        fn poison_leaves_a_critter_alive_to_recover() {
+            // Halving always leaves something behind, so poison sets a critter
+            // back rather than ending it outright.
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
-                vec![critter_with_energy(100, 100, POISON_DAMAGE / 2)],
+                vec![critter_with_energy(100, 100, 400)],
+                vec![Pellet::poison_at(100, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(world.critters()[0].energy() > 0);
+        }
+
+        #[test]
+        fn poison_finishes_a_critter_with_almost_nothing_left() {
+            // Half of one is nothing: a critter already down to its last is
+            // still killed by what it touches.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter_with_energy(100, 100, 1)],
                 vec![Pellet::poison_at(100, 100)],
             );
 
@@ -3122,7 +3175,7 @@ mod tests {
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
-                vec![critter_with_energy(100, 100, POISON_DAMAGE * 3)],
+                vec![critter_with_energy(100, 100, 600)],
                 vec![Pellet::poison_at(100, 100)],
             );
 

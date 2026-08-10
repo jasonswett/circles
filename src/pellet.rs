@@ -76,12 +76,13 @@ pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
 pub const PELLETS_PER_POISON: usize = 25;
 pub const PELLET_ENERGY: u32 = 200;
-/// What poison costs a critter that touches it. The mirror of a meal: eating
-/// poison undoes eating food, so a critter with reserves survives what kills
-/// one living hand to mouth. Poison is a setback that being well fed can
-/// absorb rather than an unavoidable death, which gives foraging well a
-/// second thing to protect against.
-pub const POISON_DAMAGE: u32 = 200;
+/// The share of a critter's energy that poison takes. Proportional rather
+/// than a fixed amount, so poison stays worth avoiding however much a critter
+/// has banked -- no reserve is deep enough to make it trivial, and a critter
+/// with nothing left is still finished by it. Halving always leaves something
+/// behind, so poison is a setback a critter can recover from rather than the
+/// unavoidable death it used to be.
+pub const POISON_DAMAGE_PERCENT: u32 = 50;
 /// How long a pellet lasts before rotting away, in ticks. At 60 ticks per
 /// second this is 20 seconds. Uneaten food does not accumulate forever, so
 /// the larder reflects recent deliveries rather than the world's whole
