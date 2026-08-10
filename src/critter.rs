@@ -49,7 +49,7 @@ pub const SKIP_DISTANCE: usize = 4;
 // with nothing capping what a critter can bank, a flat cost alone would be a
 // rounding error to the rich. Charged for acting rather than for moving, so
 // that standing still is not a way to avoid it.
-pub const UPKEEP_PERCENT: u32 = 10;
+pub const UPKEEP_PERCENT: u32 = 5;
 pub const MOVE_SLOW_COST: u32 = 1;
 pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
