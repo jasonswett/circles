@@ -73,6 +73,16 @@ const HISTORY_FACTOR_SCALE: f32 = 64.0;
 // encoded range is 1..=16 and no instruction can be excluded outright —
 // which also means the cumulative table is never empty.
 const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
+// A thumb on the scale for reproduction: Split claims this many times the
+// opcode space its weight field alone would give it. Applied to the decoded
+// weight rather than written into the genome, so the same bits still say how
+// much a lineage wants to divide and evolution can still turn it down --
+// doubling the smallest weight is still the smallest weight.
+//
+// Splitting is the one instruction whose payoff a critter never collects
+// itself, so nothing about a critter's own life selects for it. The world
+// leans on the scale to make reproduction likely enough to get started.
+const SPLIT_WEIGHT_MULTIPLIER: u32 = 2;
 #[cfg(test)]
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
 const WEIGHT_BITS: usize = INSTRUCTION_COUNT * WEIGHT_BITS_PER_INSTRUCTION;
@@ -381,7 +391,12 @@ impl Genome {
     /// Read as `bits + 1` so every instruction keeps a nonzero share.
     fn instruction_weight(&self, instruction: Instruction) -> u32 {
         let offset = WEIGHTS_OFFSET + instruction_index(instruction) * WEIGHT_BITS_PER_INSTRUCTION;
-        read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1
+        let encoded = read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1;
+        if instruction == Instruction::Split {
+            encoded * SPLIT_WEIGHT_MULTIPLIER
+        } else {
+            encoded
+        }
     }
 
     /// Overwrites one instruction's weight field. Test-only: in a running
@@ -1898,6 +1913,42 @@ mod tests {
         use super::*;
 
         #[test]
+        fn splitting_claims_twice_the_opcode_space_its_field_would_give_it() {
+            // A thumb on the scale, applied to the decoded weight rather than
+            // to the genome: the same bits still say how much a lineage wants
+            // to divide, and evolution can still turn it down.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            genome.set_instruction_weight_bits(Instruction::Split, 3);
+            genome.set_instruction_weight_bits(Instruction::Eat, 3);
+
+            // A literal, not SPLIT_WEIGHT_MULTIPLIER: asserting against the
+            // constant would hold whatever the constant said, including one.
+            assert_eq!(
+                genome.instruction_weight(Instruction::Split),
+                genome.instruction_weight(Instruction::Eat) * 2
+            );
+        }
+
+        #[test]
+        fn a_genome_that_wants_no_splitting_still_gets_the_least_weight() {
+            // Doubling the smallest weight is still the smallest weight, so
+            // the thumb cannot force splitting on a lineage that has evolved
+            // away from it as far as the field allows.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for instruction in ALL_INSTRUCTIONS {
+                genome.set_instruction_weight_bits(instruction, 15);
+            }
+            genome.set_instruction_weight_bits(Instruction::Split, 0);
+
+            let split = genome.instruction_weight(Instruction::Split);
+            let others = genome.instruction_weight(Instruction::Eat);
+            assert!(
+                split < others,
+                "a minimum-weight Split should still trail: {split} vs {others}"
+            );
+        }
+
+        #[test]
         fn every_instructions_weight_field_fits_inside_the_weight_region() {
             // The last instruction's field must end at the region's edge:
             // too small and its bits would collide with the header that
@@ -1939,24 +1990,24 @@ mod tests {
 
             let counts = decoded_counts(&genome);
 
-            // Weights are bits + 1: Eat holds 16, the other nine hold 1 each,
-            // totalling 25. Opcode value c maps to position
-            // floor(c * 25 / 16), so Eat takes 11 of the 16 values and four
-            // minimum-weight instructions take one apiece — the rest fall in
-            // bands no opcode value lands in. Naming each instruction's share,
+            // Weights are bits + 1, doubled for Split: Eat holds 16, Split 2,
+            // and the other eight 1 each, totalling 26. Opcode value c maps to
+            // position floor(c * 26 / 16), so Eat takes 10 of the 16 values
+            // and five instructions take one apiece — the rest fall in bands
+            // no opcode value lands in. Naming each instruction's share,
             // rather than summing the non-Eat ones, is what pins the scaling
             // arithmetic: formulas that shift which instructions get a slot
             // preserve the totals but not this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 11);
+            assert_eq!(share(Instruction::Eat), 10);
             assert_eq!(share(Instruction::MoveSlow), 1);
             assert_eq!(share(Instruction::TurnLeft), 1);
             assert_eq!(share(Instruction::DoNothing), 1);
             assert_eq!(share(Instruction::RepeatPreviousMove), 1);
+            assert_eq!(share(Instruction::Split), 1);
             assert_eq!(share(Instruction::SkipBack), 1);
             assert_eq!(share(Instruction::TurnRight), 0);
-            assert_eq!(share(Instruction::Split), 0);
             assert_eq!(share(Instruction::SkipAhead), 0);
             assert_eq!(share(Instruction::MoveFast), 0);
         }
