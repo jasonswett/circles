@@ -91,6 +91,11 @@ pub struct Critter {
     /// How many ticks this critter has lived. Its own, not inherited: a child
     /// begins at nothing however old its parent is.
     age: u32,
+    /// What the two feelers last touched, black when they reached nothing.
+    /// The world fills these in each tick, since a critter cannot see past
+    /// itself.
+    left_color: u32,
+    right_color: u32,
     rng: SmallRng,
 }
 
@@ -172,6 +177,8 @@ impl Critter {
             recent_actions: VecDeque::new(),
             dividing_ticks_remaining: 0,
             age: 0,
+            left_color: 0,
+            right_color: 0,
             rng,
         }
     }
@@ -195,6 +202,25 @@ impl Critter {
     /// How many ticks this critter has lived.
     pub fn age(&self) -> u32 {
         self.age
+    }
+
+    /// What the feeler on each side last touched, black for nothing.
+    pub fn left_color(&self) -> u32 {
+        self.left_color
+    }
+
+    pub fn right_color(&self) -> u32 {
+        self.right_color
+    }
+
+    /// Which way each feeler points: one turn off the heading, to either side.
+    pub fn feeler_headings(&self) -> (Heading, Heading) {
+        (self.heading.turn_left(), self.heading.turn_right())
+    }
+
+    pub fn set_feeler_colors(&mut self, left: u32, right: u32) {
+        self.left_color = left;
+        self.right_color = right;
     }
 
     pub fn initial_energy(&self) -> u32 {
@@ -326,6 +352,8 @@ impl Critter {
             touched_color: self.most_recent_overlap_color.unwrap_or(0),
             recent_repetition: self.recent_repetition_of(instruction),
             age: self.age,
+            left_color: self.left_color,
+            right_color: self.right_color,
         };
         let probability = self.genome.probability_of_acting(instruction, &senses);
         let split_blocked = instruction == Instruction::Split && !allow_split;
@@ -554,6 +582,8 @@ impl Critter {
             energy: self.energy / 2,
             initial_energy: self.initial_energy,
             age: 0,
+            left_color: 0,
+            right_color: 0,
             overlap_indicator_ticks: 0,
             being_eaten_indicator_ticks: 0,
             most_recent_overlap_color: None,

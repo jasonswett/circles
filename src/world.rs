@@ -62,6 +62,15 @@ const NUM_PELLETS: usize = 4000;
 // call happens often: food seeps into the world a few at a time rather than
 // a whole deficit's worth arriving at once.
 pub const PELLET_BATCH_SIZE: usize = 10;
+// How far ahead a feeler reaches, in pixels. Far enough to be worth having,
+// short enough that a critter has to go and look rather than survey the world
+// from where it stands.
+pub const FEELER_REACH: i32 = 24;
+// Feelers are read on the same schedule as poison, and for the same reason:
+// asking every pellet about every critter is the most expensive thing the
+// world can do, and what a feeler touched a few ticks ago is close enough
+// when a critter moves a few pixels a tick.
+const FEELER_INTERVAL_TICKS: u32 = 10;
 // Scanning every pellet for every critter is the most expensive thing the
 // world does, so poison is checked periodically rather than every tick. A
 // critter can cross poison between checks and survive; poison is a hazard,
@@ -290,6 +299,39 @@ impl World {
         self.critters.push(critter);
     }
 
+    /// Fills in what each critter's feelers are touching: the colour of a
+    /// pellet within FEELER_REACH on that side, or black for nothing. A
+    /// critter's only sense of anything it is not already standing on.
+    pub fn sense_feelers(&mut self) {
+        let (width, height) = (self.width as i32, self.height as i32);
+        let reach_squared = FEELER_REACH * FEELER_REACH;
+        // Sorted by row band so a critter can skip the pellets nowhere near
+        // it. Asking every pellet about every critter is thirty million
+        // distance checks at a full world, which costs more than everything
+        // else the world does put together.
+        let bands = PelletBands::build(&self.pellets, height);
+
+        for critter in &mut self.critters {
+            let (left, right) = critter.feeler_headings();
+            let (cx, cy) = (critter.x(), critter.y());
+            // A feeler is an antenna rather than a point: it reports a pellet
+            // lying within reach on its own side, so a critter feels what it
+            // is reaching towards and not only what sits at arm's length.
+            let colour_towards = |heading: Heading| {
+                let (hx, hy) = heading.offset();
+                bands
+                    .near(cy, &self.pellets, height, |pellet| {
+                        let dx = toroidal_delta(cx, pellet.x.round() as i32, width);
+                        let dy = toroidal_delta(cy, pellet.y.round() as i32, height);
+                        dx * dx + dy * dy <= reach_squared && (-dx) * hx + (-dy) * hy > 0
+                    })
+                    .map_or(0, |pellet| pellet.color())
+            };
+            let (l, r) = (colour_towards(left), colour_towards(right));
+            critter.set_feeler_colors(l, r);
+        }
+    }
+
     /// Kills any critter touching poison, and consumes the poison with it.
     /// Contact alone is fatal: a critter need not be trying to eat, and
     /// nothing in its sensorium warns it.
@@ -364,6 +406,9 @@ impl World {
         self.pellets.retain(|pellet| !pellet.is_expired());
         if self.ticks.is_multiple_of(POISON_CHECK_INTERVAL_TICKS) {
             self.resolve_poison();
+        }
+        if self.ticks.is_multiple_of(FEELER_INTERVAL_TICKS) {
+            self.sense_feelers();
         }
         self.ticks = self.ticks.wrapping_add(1);
         self.resolve_eats(&eater_indices);
@@ -611,6 +656,60 @@ fn predation_death_percent(victim_energy: u32) -> u32 {
     let scaled =
         PREDATION_ENERGY_DEATH_PERCENT * victim_energy.min(MAX_CRITTER_ENERGY) / MAX_CRITTER_ENERGY;
     PREDATION_BASE_DEATH_PERCENT + scaled
+}
+
+/// Pellet indices grouped into horizontal bands one feeler-reach tall. A
+/// feeler can only touch what is within FEELER_REACH vertically, so a critter
+/// need look at three bands rather than the whole larder. Purely a filter:
+/// what it offers is still checked by true distance, so a band that is too
+/// generous costs time and never correctness.
+struct PelletBands {
+    bands: Vec<Vec<u32>>,
+}
+
+impl PelletBands {
+    fn band_of(y: i32, height: i32) -> usize {
+        (y.rem_euclid(height) / FEELER_REACH) as usize
+    }
+
+    fn count(height: i32) -> usize {
+        (height / FEELER_REACH).max(1) as usize + 1
+    }
+
+    fn build(pellets: &[Pellet], height: i32) -> Self {
+        let mut bands = vec![Vec::new(); Self::count(height)];
+        for (index, pellet) in pellets.iter().enumerate() {
+            bands[Self::band_of(pellet.y.round() as i32, height)].push(index as u32);
+        }
+        Self { bands }
+    }
+
+    /// The first pellet in the bands around `y` that `wanted` accepts.
+    //
+    // The `+` on the offset is an equivalent mutant: the offsets run
+    // symmetrically about zero, so subtracting them visits the same three
+    // bands in the other order.
+    #[mutants::skip]
+    fn near<'a, F>(
+        &self,
+        y: i32,
+        pellets: &'a [Pellet],
+        height: i32,
+        wanted: F,
+    ) -> Option<&'a Pellet>
+    where
+        F: Fn(&Pellet) -> bool,
+    {
+        let count = self.bands.len() as i32;
+        let middle = Self::band_of(y, height) as i32;
+        (-1..=1)
+            .flat_map(|offset| {
+                let band = (middle + offset).rem_euclid(count) as usize;
+                self.bands[band].iter()
+            })
+            .map(|&index| &pellets[index as usize])
+            .find(|pellet| wanted(pellet))
+    }
 }
 
 fn spawn_pellet_of_kind<R: Rng>(site: (f32, f32), poisonous: bool, rng: &mut R) -> Pellet {
@@ -2901,6 +3000,282 @@ mod tests {
             world.tick(true);
 
             assert!(world.critters()[1].energy() < 80);
+        }
+    }
+
+    mod feelers {
+        use super::*;
+        use crate::{Critter, Genome, Heading, Instruction};
+
+        fn feeler_critter(x: i32, y: i32, heading: Heading) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                heading,
+                u32::MAX,
+                1,
+                60,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        #[test]
+        fn a_feeler_reports_the_colour_of_food_it_reaches() {
+            // Facing north, the left feeler points north-west.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::at(100 - FEELER_REACH / 2, 100 - FEELER_REACH / 2)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn the_two_feelers_reach_to_either_side() {
+            // A pellet north-east is found by the right feeler, not the left.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::at(100 + FEELER_REACH / 2, 100 - FEELER_REACH / 2)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].right_color(), crate::PELLET_COLOR);
+            assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn the_bands_narrow_the_search_to_what_is_nearby() {
+            // The filter's whole purpose, and the only thing about it a test
+            // can see: a pellet far away vertically is never offered for a
+            // distance check at all. Without this the band arithmetic could
+            // put every pellet in one band and stay correct while costing
+            // what it was written to save.
+            let height = TEST_HEIGHT as i32;
+            let pellets: Vec<Pellet> = (0..height / 4)
+                .map(|row| Pellet::at(100, row * 4))
+                .collect();
+            let total = pellets.len();
+            let bands = PelletBands::build(&pellets, height);
+
+            let offered = std::cell::Cell::new(0usize);
+            bands.near(0, &pellets, height, |_| {
+                offered.set(offered.get() + 1);
+                false
+            });
+            let offered = offered.get();
+
+            // Three bands out of the field's many, so well under half.
+            assert!(
+                offered * 2 < total,
+                "should have looked at a small share of {total}, looked at {offered}"
+            );
+        }
+
+        #[test]
+        fn the_bands_cover_a_full_sized_world() {
+            // Enough bands for every row of a real field. Too few and a pellet
+            // near the bottom indexes past the end of them.
+            let height = 1080;
+            let pellets: Vec<Pellet> = (0..height / 8).map(|r| Pellet::at(10, r * 8)).collect();
+
+            let bands = PelletBands::build(&pellets, height);
+
+            // Every pellet must have landed somewhere, including the last row.
+            let filed: usize = (0..PelletBands::count(height))
+                .map(|band| bands.bands[band].len())
+                .sum();
+            assert_eq!(filed, pellets.len());
+        }
+
+        #[test]
+        fn a_feeler_finds_food_many_bands_down_the_field() {
+            // Far from the origin on the axis the bands divide, so a filter
+            // that only ever looked at the first band would miss it.
+            let y = TEST_HEIGHT as i32 - FEELER_REACH * 2;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, y, Heading::North)],
+                vec![Pellet::at(100 - FEELER_REACH / 2, y - FEELER_REACH / 2)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn a_feeler_ignores_food_bands_away() {
+            // Well outside the reach vertically: the bands must not offer it,
+            // and the distance check must reject it if they do.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::at(100, 100 - FEELER_REACH * 3)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+            assert_eq!(world.critters()[0].right_color(), 0);
+        }
+
+        #[test]
+        fn a_feeler_finds_food_just_over_a_band_boundary() {
+            // A pellet within reach but in the band above, which is the case
+            // that makes looking at the neighbouring bands necessary.
+            let y = FEELER_REACH * 3;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, y, Heading::North)],
+                vec![Pellet::at(100 - 2, y - FEELER_REACH + 1)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn a_feeler_reaches_over_the_top_of_the_world() {
+            // The bands wrap like everything else.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 1, Heading::North)],
+                vec![Pellet::at(100 - 2, TEST_HEIGHT as i32 - 2)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn a_feelers_reach_is_measured_by_true_distance() {
+            // Offset on both axes, inside the reach on each one alone but
+            // outside it diagonally. Squaring and summing both axes is what
+            // tells them apart.
+            let offset = FEELER_REACH - 4;
+            assert!(offset * offset * 2 > FEELER_REACH * FEELER_REACH);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::at(100 - offset, 100 - offset)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn a_critter_facing_a_diagonal_feels_to_either_side_of_it() {
+            // Facing north-east, the feelers point north and east. Worth its
+            // own case: for a cardinal heading one axis of the feeler's
+            // direction is zero, so the two axes could be combined wrongly and
+            // still agree.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::NorthEast)],
+                vec![Pellet::at(100, 100 - FEELER_REACH / 2)],
+            );
+
+            world.sense_feelers();
+
+            let felt = world.critters()[0].left_color() | world.critters()[0].right_color();
+            assert_eq!(felt, crate::PELLET_COLOR);
+        }
+
+        #[test]
+        fn food_squarely_behind_a_critter_is_not_felt() {
+            // Both feelers point forward of the critter, so what is behind it
+            // is out of reach however close it sits.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::at(100, 100 + FEELER_REACH / 2)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+            assert_eq!(world.critters()[0].right_color(), 0);
+        }
+
+        #[test]
+        fn a_feeler_reaching_nothing_reports_darkness() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+            assert_eq!(world.critters()[0].right_color(), 0);
+        }
+
+        #[test]
+        fn a_feeler_distinguishes_poison_from_food() {
+            // The whole point of sensing colour rather than mere presence.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::poison_at(
+                    100 - FEELER_REACH / 2,
+                    100 - FEELER_REACH / 2,
+                )],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::POISON_COLOR);
+        }
+
+        #[test]
+        fn food_beyond_reach_is_not_felt() {
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::North)],
+                vec![Pellet::at(100 - FEELER_REACH * 3, 100 - FEELER_REACH * 3)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn the_feelers_turn_with_the_critter() {
+            // Facing east, the left feeler points north-east.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![feeler_critter(100, 100, Heading::East)],
+                vec![Pellet::at(100 + FEELER_REACH / 2, 100 - FEELER_REACH / 2)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
         }
     }
 
