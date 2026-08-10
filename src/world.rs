@@ -3484,8 +3484,8 @@ mod tests {
 
         #[test]
         fn it_returns_the_genome_shared_by_the_majority() {
-            let majority = Genome::all(Instruction::TurnLeft);
-            let minority = Genome::all(Instruction::TurnRight);
+            let majority = Genome::all(Instruction::TurnLeft15);
+            let minority = Genome::all(Instruction::TurnRight15);
             let critters = vec![
                 critter_with(0, majority.clone()),
                 critter_with(1, minority.clone()),
@@ -3501,8 +3501,8 @@ mod tests {
         fn it_picks_the_genome_with_the_higher_count_even_when_seen_later() {
             // The minority appears first; the majority appears later. The
             // accessor must follow the count, not the encounter order.
-            let later_majority = Genome::all(Instruction::TurnLeft);
-            let early_minority = Genome::all(Instruction::TurnRight);
+            let later_majority = Genome::all(Instruction::TurnLeft15);
+            let early_minority = Genome::all(Instruction::TurnRight15);
             let critters = vec![
                 critter_with(0, early_minority.clone()),
                 critter_with(1, later_majority.clone()),
@@ -3520,8 +3520,8 @@ mod tests {
             // that turn the count increment into a no-op (all counts stay
             // at 1) or that mishandle the equality check (every critter
             // becomes its own entry with count 1).
-            let three_copy = Genome::all(Instruction::TurnLeft);
-            let two_copy = Genome::all(Instruction::TurnRight);
+            let three_copy = Genome::all(Instruction::TurnLeft15);
+            let two_copy = Genome::all(Instruction::TurnRight15);
             let critters = vec![
                 critter_with(0, two_copy.clone()),
                 critter_with(1, three_copy.clone()),
@@ -3536,8 +3536,8 @@ mod tests {
 
         #[test]
         fn ties_are_broken_by_first_seen_in_the_critter_list() {
-            let first = Genome::all(Instruction::TurnLeft);
-            let second = Genome::all(Instruction::TurnRight);
+            let first = Genome::all(Instruction::TurnLeft15);
+            let second = Genome::all(Instruction::TurnRight15);
             let critters = vec![
                 critter_with(0, first.clone()),
                 critter_with(1, second.clone()),

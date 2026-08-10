@@ -1,7 +1,7 @@
 use crate::{Instruction, MAX_CRITTER_ENERGY};
 use rand::Rng;
 
-const INSTRUCTION_COUNT: usize = 10;
+const INSTRUCTION_COUNT: usize = 15;
 // The genome's leading field: how often this critter's splits mutate the
 // child. Evolvable like everything else — it mutates along with the rest of
 // the genome, so a lineage's mutability drifts under selection.
@@ -98,7 +98,11 @@ const WEIGHTS_OFFSET: usize = MUTATION_RATE_BITS;
 const HISTORY_WINDOW_OFFSET: usize = WEIGHTS_OFFSET + WEIGHT_BITS;
 const HEADER_OFFSET: usize = HISTORY_WINDOW_OFFSET + HISTORY_WINDOW_BITS;
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
-const OPCODE_BITS_PER_OPCODE: usize = 4;
+// Wide enough that every instruction claims a band of the opcode space even
+// when weights are equal. At four bits there were sixteen values for fifteen
+// instructions, so the ones at the back of the table were unreachable however
+// a genome was written -- an instruction the genome could not say.
+const OPCODE_BITS_PER_OPCODE: usize = 5;
 // Total opcode slots in the genome's pool. Most start dormant — only the
 // first INITIAL_ACTIVE_OPCODES participate in the walked stream when a
 // genome is freshly created. A separate activation mask (one bit per slot)
@@ -534,8 +538,8 @@ fn write_bits(bytes: &mut [u8], bit_offset: usize, length: usize, value: u32) {
 /// `instruction_index` gives each one's position here.
 const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
     Instruction::MoveSlow,
-    Instruction::TurnLeft,
-    Instruction::TurnRight,
+    Instruction::TurnLeft15,
+    Instruction::TurnRight15,
     Instruction::DoNothing,
     Instruction::RepeatPreviousMove,
     Instruction::Split,
@@ -546,6 +550,11 @@ const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
     // here fixes where its weight and parameter windows sit in the genome, so
     // adding to the end leaves every existing instruction's meaning intact.
     Instruction::MoveFast,
+    Instruction::TurnLeft45,
+    Instruction::TurnLeft90,
+    Instruction::TurnRight45,
+    Instruction::TurnRight90,
+    Instruction::TurnAbout,
 ];
 
 /// Bit offset of one instruction's parameter window, measured from the start
@@ -557,8 +566,8 @@ fn header_window_offset(instruction_index: usize) -> usize {
 fn instruction_index(instruction: Instruction) -> usize {
     match instruction {
         Instruction::MoveSlow => 0,
-        Instruction::TurnLeft => 1,
-        Instruction::TurnRight => 2,
+        Instruction::TurnLeft15 => 1,
+        Instruction::TurnRight15 => 2,
         Instruction::DoNothing => 3,
         Instruction::RepeatPreviousMove => 4,
         Instruction::Split => 5,
@@ -566,6 +575,11 @@ fn instruction_index(instruction: Instruction) -> usize {
         Instruction::SkipAhead => 7,
         Instruction::SkipBack => 8,
         Instruction::MoveFast => 9,
+        Instruction::TurnLeft45 => 10,
+        Instruction::TurnLeft90 => 11,
+        Instruction::TurnRight45 => 12,
+        Instruction::TurnRight90 => 13,
+        Instruction::TurnAbout => 14,
     }
 }
 
@@ -714,7 +728,7 @@ mod tests {
             // The walker counts only active slots, so wrapping happens after
             // the active count, not the pool size. With from_instructions,
             // INITIAL_ACTIVE_OPCODES slots are active.
-            let genome = Genome::from_instructions(&[Instruction::TurnLeft, Instruction::Split]);
+            let genome = Genome::from_instructions(&[Instruction::TurnLeft15, Instruction::Split]);
 
             assert_eq!(
                 genome.decode_at(0),
@@ -739,12 +753,12 @@ mod tests {
         fn from_instructions_cycles_through_the_given_sequence() {
             let genome = Genome::from_instructions(&[
                 Instruction::MoveSlow,
-                Instruction::TurnRight,
+                Instruction::TurnRight15,
                 Instruction::Split,
             ]);
 
             assert_eq!(genome.decode_at(0), Instruction::MoveSlow);
-            assert_eq!(genome.decode_at(1), Instruction::TurnRight);
+            assert_eq!(genome.decode_at(1), Instruction::TurnRight15);
             assert_eq!(genome.decode_at(2), Instruction::Split);
             assert_eq!(genome.decode_at(3), Instruction::MoveSlow);
         }
@@ -761,7 +775,7 @@ mod tests {
             // Build a genome where every active slot decodes to TurnLeft and
             // every dormant slot decodes to Split. The walker must only visit
             // active slots, so every cursor sees TurnLeft.
-            let mut genome = Genome::all(Instruction::TurnLeft);
+            let mut genome = Genome::all(Instruction::TurnLeft15);
             let split_code = encode_for(&genome, Instruction::Split) as u32;
             for slot in INITIAL_ACTIVE_OPCODES..OPCODE_POOL_SIZE {
                 let bit_offset = OPCODE_STREAM_OFFSET + slot * OPCODE_BITS_PER_OPCODE;
@@ -774,7 +788,7 @@ mod tests {
             }
 
             for cursor in 0..OPCODE_POOL_SIZE {
-                assert_eq!(genome.decode_at(cursor), Instruction::TurnLeft);
+                assert_eq!(genome.decode_at(cursor), Instruction::TurnLeft15);
             }
         }
 
@@ -784,7 +798,7 @@ mod tests {
             // contains Split. After activating that slot's mask bit, the
             // active count grows by one and the cursor that would have
             // wrapped now lands on the newly-activated Split.
-            let mut genome = Genome::all(Instruction::TurnLeft);
+            let mut genome = Genome::all(Instruction::TurnLeft15);
             let target_slot = INITIAL_ACTIVE_OPCODES;
             let bit_offset = OPCODE_STREAM_OFFSET + target_slot * OPCODE_BITS_PER_OPCODE;
             let split_code = encode_for(&genome, Instruction::Split) as u32;
@@ -799,7 +813,7 @@ mod tests {
             // (TurnLeft).
             assert_eq!(
                 genome.decode_at(INITIAL_ACTIVE_OPCODES),
-                Instruction::TurnLeft
+                Instruction::TurnLeft15
             );
 
             write_bits(
@@ -938,8 +952,8 @@ mod tests {
             for instruction in [
                 Instruction::MoveSlow,
                 Instruction::MoveFast,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
+                Instruction::TurnLeft15,
+                Instruction::TurnRight15,
                 Instruction::DoNothing,
                 Instruction::RepeatPreviousMove,
                 Instruction::Split,
@@ -1156,8 +1170,8 @@ mod tests {
             let genome = Genome { bytes };
 
             assert_eq!(genome.params(Instruction::MoveSlow).1, 10.0);
-            assert_eq!(genome.params(Instruction::TurnLeft).1, 20.0);
-            assert_eq!(genome.params(Instruction::TurnRight).1, 30.0);
+            assert_eq!(genome.params(Instruction::TurnLeft15).1, 20.0);
+            assert_eq!(genome.params(Instruction::TurnRight15).1, 30.0);
             assert_eq!(genome.params(Instruction::DoNothing).1, 40.0);
             assert_eq!(genome.params(Instruction::RepeatPreviousMove).1, 50.0);
             assert_eq!(genome.params(Instruction::Split).1, 60.0);
@@ -1183,7 +1197,10 @@ mod tests {
             let genome = Genome { bytes };
 
             assert_eq!(genome.params(Instruction::MoveSlow).2, MIN_SOFTNESS + 5.0);
-            assert_eq!(genome.params(Instruction::TurnLeft).2, MIN_SOFTNESS + 15.0);
+            assert_eq!(
+                genome.params(Instruction::TurnLeft15).2,
+                MIN_SOFTNESS + 15.0
+            );
             assert_eq!(genome.params(Instruction::Split).2, MIN_SOFTNESS + 55.0);
             assert_eq!(genome.params(Instruction::Eat).2, MIN_SOFTNESS + 65.0);
         }
@@ -1550,7 +1567,7 @@ mod tests {
                         },
                     ),
                     genome.probability_of_acting(
-                        Instruction::TurnLeft,
+                        Instruction::TurnLeft15,
                         &Senses {
                             energy,
                             touching_critter: false,
@@ -1559,7 +1576,7 @@ mod tests {
                         },
                     ),
                     genome.probability_of_acting(
-                        Instruction::TurnRight,
+                        Instruction::TurnRight15,
                         &Senses {
                             energy,
                             touching_critter: false,
@@ -1819,8 +1836,8 @@ mod tests {
                 Instruction::MoveSlow,
                 Instruction::RepeatPreviousMove,
                 Instruction::DoNothing,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
+                Instruction::TurnLeft15,
+                Instruction::TurnRight15,
                 Instruction::Split,
                 Instruction::Eat,
             ] {
@@ -1966,14 +1983,19 @@ mod tests {
         fn genome_spanning_the_opcode_space() -> Genome {
             let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
             for slot in 0..OPCODE_POOL_SIZE {
-                genome.write_opcode(slot, (slot % 16) as u8);
+                // Spans whatever the opcode width is rather than a literal
+                // sixteen, so widening it does not quietly leave half the
+                // space untested.
+                genome.write_opcode(slot, (slot % (1 << OPCODE_BITS_PER_OPCODE)) as u8);
             }
             genome
         }
 
         fn decoded_counts(genome: &Genome) -> std::collections::HashMap<Instruction, usize> {
             let mut counts = std::collections::HashMap::new();
-            for slot in 0..16 {
+            // Every opcode value there is, derived rather than written out, so
+            // widening the opcode leaves none of the space unexamined.
+            for slot in 0..(1u8 << OPCODE_BITS_PER_OPCODE) {
                 *counts.entry(decode_with_weights(genome, slot)).or_insert(0) += 1;
             }
             counts
@@ -1991,25 +2013,30 @@ mod tests {
             let counts = decoded_counts(&genome);
 
             // Weights are bits + 1, quadrupled for Split: Eat holds 16,
-            // Split 4, and the other eight 1 each, totalling 28. Opcode value
-            // c maps to position floor(c * 28 / 16), so Eat takes 9 of the 16
-            // values, Split 3, and four instructions one apiece — the rest
-            // fall in bands no opcode value lands in. Naming each one's share,
-            // rather than summing the non-Eat ones, is what pins the scaling
-            // arithmetic: formulas that shift which instructions get a slot
-            // preserve the totals but not this breakdown.
+            // Split 4, and the other thirteen 1 each, totalling 33. Opcode
+            // value c maps to position floor(c * 33 / 32), so Eat takes 16 of
+            // the 32 values, Split 4, and the rest one apiece bar the last,
+            // whose band no opcode value lands in. Naming each one's share,
+            // rather than summing them, is what pins the scaling arithmetic:
+            // formulas that shift which instructions get a slot preserve the
+            // totals but not this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 9);
-            assert_eq!(share(Instruction::Split), 3);
+            assert_eq!(share(Instruction::Eat), 16);
+            assert_eq!(share(Instruction::Split), 4);
             assert_eq!(share(Instruction::MoveSlow), 1);
-            assert_eq!(share(Instruction::TurnLeft), 1);
+            assert_eq!(share(Instruction::MoveFast), 1);
+            assert_eq!(share(Instruction::TurnLeft15), 1);
+            assert_eq!(share(Instruction::TurnLeft45), 1);
+            assert_eq!(share(Instruction::TurnLeft90), 1);
+            assert_eq!(share(Instruction::TurnRight15), 1);
+            assert_eq!(share(Instruction::TurnRight45), 1);
+            assert_eq!(share(Instruction::TurnRight90), 1);
             assert_eq!(share(Instruction::DoNothing), 1);
+            assert_eq!(share(Instruction::RepeatPreviousMove), 1);
+            assert_eq!(share(Instruction::SkipAhead), 1);
             assert_eq!(share(Instruction::SkipBack), 1);
-            assert_eq!(share(Instruction::RepeatPreviousMove), 0);
-            assert_eq!(share(Instruction::TurnRight), 0);
-            assert_eq!(share(Instruction::SkipAhead), 0);
-            assert_eq!(share(Instruction::MoveFast), 0);
+            assert_eq!(share(Instruction::TurnAbout), 0);
         }
 
         #[test]

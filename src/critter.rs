@@ -37,10 +37,6 @@ pub const SPLIT_DURATION_TICKS: u32 = 1;
 // controls whether a critter jumps, through the usual weights and sigmoid,
 // but not yet how far.
 pub const SKIP_DISTANCE: usize = 4;
-// How far one turn instruction turns a critter. Kept at an eighth of a circle
-// for now, which is what a turn was when a heading was one of eight compass
-// points.
-const TURN_DEGREES: f32 = 45.0;
 // What a step costs at each pace. Moving fast covers twice the ground of
 // moving slow, but the cost of covering it rises with the square of the
 // pace, the way drag does in any real medium: twice the speed, four times
@@ -58,6 +54,20 @@ pub const MOVE_SLOW_COST: u32 = 1;
 pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
 const FAST_STEP_MULTIPLIER: i32 = 2;
+
+/// How far each turn instruction turns a critter, positive being clockwise.
+/// A reversal is the same turn whichever way it is taken.
+fn turn_degrees(instruction: Instruction) -> f32 {
+    match instruction {
+        Instruction::TurnLeft15 => -15.0,
+        Instruction::TurnLeft45 => -45.0,
+        Instruction::TurnLeft90 => -90.0,
+        Instruction::TurnRight15 => 15.0,
+        Instruction::TurnRight45 => 45.0,
+        Instruction::TurnRight90 => 90.0,
+        _ => 180.0,
+    }
+}
 
 /// What a critter's tick produced this turn. World inspects this after each
 /// critter ticks to add any newborn child to the population and to know
@@ -461,14 +471,15 @@ impl Critter {
             Instruction::MoveFast => {
                 self.travel(FAST_STEP_MULTIPLIER, MOVE_FAST_COST, Instruction::MoveFast)
             }
-            Instruction::TurnLeft => {
-                self.heading = self.heading.turned_left(TURN_DEGREES);
-                self.last_executed = Some(Instruction::TurnLeft);
-                TickOutcome::default()
-            }
-            Instruction::TurnRight => {
-                self.heading = self.heading.turned_right(TURN_DEGREES);
-                self.last_executed = Some(Instruction::TurnRight);
+            Instruction::TurnLeft15
+            | Instruction::TurnLeft45
+            | Instruction::TurnLeft90
+            | Instruction::TurnRight15
+            | Instruction::TurnRight45
+            | Instruction::TurnRight90
+            | Instruction::TurnAbout => {
+                self.heading = self.heading.turned_right(turn_degrees(instruction));
+                self.last_executed = Some(instruction);
                 TickOutcome::default()
             }
             Instruction::DoNothing => {
@@ -573,7 +584,7 @@ fn jitter_threshold<R: Rng>(rng: &mut R, base: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Instruction, EAST, NORTH, NORTH_EAST, NORTH_WEST, SOUTH, SOUTH_EAST, SOUTH_WEST};
+    use crate::{Instruction, EAST, NORTH, NORTH_WEST, SOUTH, SOUTH_EAST};
 
     // Fires Split and runs the division out, returning the child. Since
     // division takes time, a single tick no longer yields one.
@@ -957,8 +968,48 @@ mod tests {
         }
 
         #[test]
-        fn turn_left_changes_the_heading() {
-            let mut critter = Critter::with_genome(
+        fn each_turn_instruction_turns_its_own_amount() {
+            // A sharp turn is one instruction rather than six fine ones. Both
+            // reach the same heading, but a manoeuvre held in one slot
+            // survives mutation where one spread over six does not.
+            for (instruction, degrees) in [
+                (Instruction::TurnLeft15, -15.0),
+                (Instruction::TurnLeft45, -45.0),
+                (Instruction::TurnLeft90, -90.0),
+                (Instruction::TurnRight15, 15.0),
+                (Instruction::TurnRight45, 45.0),
+                (Instruction::TurnRight90, 90.0),
+                (Instruction::TurnAbout, 180.0),
+            ] {
+                let mut critter = Critter::with_genome(
+                    START_X,
+                    START_Y,
+                    NORTH,
+                    1,
+                    1,
+                    u32::MAX,
+                    0,
+                    Genome::all(instruction),
+                );
+
+                critter.tick(true);
+
+                let expected = Heading::from_degrees(degrees);
+                let gap = (critter.heading().radians() - expected.radians()).abs();
+                let gap = gap.min(std::f32::consts::TAU - gap);
+                assert!(
+                    gap < 1e-4,
+                    "{instruction:?} should have turned {degrees} degrees, faced {}",
+                    critter.heading().radians().to_degrees()
+                );
+            }
+        }
+
+        #[test]
+        fn several_fine_turns_reach_the_same_heading_as_one_sharp_one() {
+            // What the sharp turns buy is slots and ticks, not headings that
+            // were otherwise out of reach.
+            let mut fine = Critter::with_genome(
                 START_X,
                 START_Y,
                 NORTH,
@@ -966,12 +1017,26 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::TurnLeft),
+                Genome::all(Instruction::TurnRight15),
+            );
+            let mut sharp = Critter::with_genome(
+                START_X,
+                START_Y,
+                NORTH,
+                1,
+                1,
+                u32::MAX,
+                0,
+                Genome::all(Instruction::TurnRight45),
             );
 
-            critter.tick(true);
+            for _ in 0..3 {
+                fine.tick(true);
+            }
+            sharp.tick(true);
 
-            assert_eq!(critter.heading(), NORTH_WEST);
+            let gap = (fine.heading().radians() - sharp.heading().radians()).abs();
+            assert!(gap < 1e-4, "three fifteens should equal one forty-five");
         }
 
         #[test]
@@ -984,30 +1049,12 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::TurnLeft),
+                Genome::all(Instruction::TurnLeft15),
             );
 
             critter.tick(true);
 
             assert_eq!((critter.x(), critter.y()), (START_X, START_Y));
-        }
-
-        #[test]
-        fn turn_right_changes_the_heading() {
-            let mut critter = Critter::with_genome(
-                START_X,
-                START_Y,
-                NORTH,
-                1,
-                1,
-                u32::MAX,
-                0,
-                Genome::all(Instruction::TurnRight),
-            );
-
-            critter.tick(true);
-
-            assert_eq!(critter.heading(), NORTH_EAST);
         }
 
         #[test]
@@ -1020,7 +1067,7 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::all(Instruction::TurnRight),
+                Genome::all(Instruction::TurnRight15),
             );
 
             critter.tick(true);
@@ -1074,14 +1121,14 @@ mod tests {
                 1,
                 u32::MAX,
                 0,
-                Genome::from_instructions(&[Instruction::MoveSlow, Instruction::TurnRight]),
+                Genome::from_instructions(&[Instruction::MoveSlow, Instruction::TurnRight15]),
             );
 
             critter.tick(true);
             critter.tick(true);
 
             assert_eq!(critter.x(), START_X + 1);
-            assert_eq!(critter.heading(), SOUTH_EAST);
+            assert_eq!(critter.heading(), EAST.turned_right(15.0));
         }
 
         #[test]
@@ -1183,8 +1230,8 @@ mod tests {
             // any particular something: standing still is not a way out of it.
             for instruction in [
                 Instruction::DoNothing,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
+                Instruction::TurnLeft15,
+                Instruction::TurnRight15,
                 Instruction::RepeatPreviousMove,
                 Instruction::SkipAhead,
                 Instruction::SkipBack,
@@ -1548,11 +1595,9 @@ mod tests {
 
         #[test]
         fn repeating_a_repeat_re_executes_the_underlying_move_a_third_time() {
-            // After three ticks with [TurnRight, Repeat, Repeat] (each TurnRight = 45°):
-            //   tick 1: TurnRight        — East -> SouthEast
-            //   tick 2: Repeat -> Right  — SouthEast -> South
-            //   tick 3: Repeat -> Right  — South -> SouthWest
-            // The third tick must reach back through two repeats to find TurnRight.
+            // Three ticks of [TurnRight15, Repeat, Repeat] turn fifteen
+            // degrees apiece. The third tick must reach back through two
+            // repeats to find the turn.
             let mut critter = Critter::with_genome(
                 START_X,
                 START_Y,
@@ -1562,7 +1607,7 @@ mod tests {
                 u32::MAX,
                 0,
                 Genome::from_instructions(&[
-                    Instruction::TurnRight,
+                    Instruction::TurnRight15,
                     Instruction::RepeatPreviousMove,
                     Instruction::RepeatPreviousMove,
                 ]),
@@ -1572,7 +1617,8 @@ mod tests {
             critter.tick(true);
             critter.tick(true);
 
-            assert_eq!(critter.heading(), SOUTH_WEST);
+            // Three turns of fifteen degrees from where it started.
+            assert_eq!(critter.heading(), EAST.turned_right(45.0));
         }
     }
 
@@ -1964,13 +2010,13 @@ mod tests {
             // different instruction than the walk would have reached.
             let mut skipper = player(&[
                 Instruction::SkipAhead,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
+                Instruction::TurnLeft15,
+                Instruction::TurnRight15,
             ]);
             let mut walker = player(&[
                 Instruction::DoNothing,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
+                Instruction::TurnLeft15,
+                Instruction::TurnRight15,
             ]);
 
             skipper.tick(true);
@@ -2065,12 +2111,12 @@ mod tests {
             let mut critter = critter_with_window(0b1111, Instruction::MoveSlow);
             critter.recent_actions.clear();
             critter.recent_actions.push_back(Instruction::MoveSlow);
-            critter.recent_actions.push_back(Instruction::TurnLeft);
+            critter.recent_actions.push_back(Instruction::TurnLeft15);
             critter.recent_actions.push_back(Instruction::MoveSlow);
             critter.recent_actions.push_back(Instruction::Eat);
 
             assert_eq!(critter.recent_repetition_of(Instruction::MoveSlow), 0.5);
-            assert_eq!(critter.recent_repetition_of(Instruction::TurnLeft), 0.25);
+            assert_eq!(critter.recent_repetition_of(Instruction::TurnLeft15), 0.25);
             assert_eq!(critter.recent_repetition_of(Instruction::Split), 0.0);
         }
 
@@ -2400,7 +2446,7 @@ mod tests {
                 1,
                 INITIAL_ENERGY,
                 0,
-                Genome::all(Instruction::TurnLeft),
+                Genome::all(Instruction::TurnLeft15),
             );
 
             assert!(critter.tick(true).child.is_none());

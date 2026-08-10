@@ -9,8 +9,19 @@ pub enum Instruction {
     MoveFast,
     RepeatPreviousMove,
     DoNothing,
-    TurnLeft,
-    TurnRight,
+    /// Turning is several instructions rather than one repeated, because a
+    /// manoeuvre held in a single slot survives mutation where the same turn
+    /// spread over six consecutive slots does not. Fine turns compose into
+    /// anything the sharp ones do not cover.
+    TurnLeft15,
+    TurnLeft45,
+    TurnLeft90,
+    TurnRight15,
+    TurnRight45,
+    TurnRight90,
+    /// A reversal. The same turn whichever way it is taken, so there is only
+    /// one of it.
+    TurnAbout,
     Split,
     Eat,
     /// Moves the playhead forward, skipping the slots between. Gated like any
@@ -28,8 +39,8 @@ impl Instruction {
             0..10 => Instruction::MoveSlow,
             10..20 => Instruction::RepeatPreviousMove,
             20..30 => Instruction::DoNothing,
-            30..40 => Instruction::TurnLeft,
-            40..50 => Instruction::TurnRight,
+            30..40 => Instruction::TurnLeft15,
+            40..50 => Instruction::TurnRight15,
             50 => Instruction::Split,
             _ => Instruction::Eat,
         }
@@ -79,8 +90,8 @@ mod tests {
                 Instruction::MoveSlow,
                 Instruction::RepeatPreviousMove,
                 Instruction::DoNothing,
-                Instruction::TurnLeft,
-                Instruction::TurnRight,
+                Instruction::TurnLeft15,
+                Instruction::TurnRight15,
             ] {
                 let count = counts.get(&variant).copied().unwrap_or(0);
                 assert!(
