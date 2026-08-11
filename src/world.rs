@@ -67,10 +67,10 @@ pub const PELLET_BATCH_SIZE: usize = 10;
 // can do, and what a feeler touched a few ticks ago is close enough when a
 // critter moves a few pixels a tick.
 const FEELER_INTERVAL_TICKS: u32 = 10;
-// How tall a band of the pellet index is. Only has to cover a feeler's disc,
-// not its length: a tip's position is worked out before the index is asked,
-// so what is looked up is a small patch and not the whole reach.
-const FEELER_BAND_HEIGHT: i32 = 24;
+// How wide a cell of the pellet index is. Only has to cover a feeler's disc,
+// not its length: a tip's position is worked out before the index is asked, so
+// what is looked up is a small patch and not the whole reach.
+const FEELER_CELL_SIZE: i32 = 24;
 // Scanning every pellet for every critter is the most expensive thing the
 // world does, so poison is checked periodically rather than every tick. A
 // critter can cross poison between checks and survive; poison is a hazard,
@@ -307,20 +307,19 @@ impl World {
         // Bucketed by row band first. Asking every pellet about every critter
         // is tens of millions of distance checks a tick at a full world, which
         // costs more than everything else the world does put together.
-        let bands = PelletBands::build(&self.pellets, height);
+        let grid = PelletGrid::build(&self.pellets, width, height);
 
         for critter in &mut self.critters {
             let (left, right) = critter.feeler_tips();
             let disc = critter.feeler_disc();
             let disc_squared = (disc * disc) as i32;
             let under = |(tx, ty): (i32, i32)| {
-                bands
-                    .near(ty, &self.pellets, height, |pellet| {
-                        let dx = toroidal_delta(tx, pellet.x.round() as i32, width);
-                        let dy = toroidal_delta(ty, pellet.y.round() as i32, height);
-                        dx * dx + dy * dy <= disc_squared
-                    })
-                    .map_or(0, |pellet| pellet.color())
+                grid.near(tx, ty, &self.pellets, width, height, |pellet| {
+                    let dx = toroidal_delta(tx, pellet.x.round() as i32, width);
+                    let dy = toroidal_delta(ty, pellet.y.round() as i32, height);
+                    dx * dx + dy * dy <= disc_squared
+                })
+                .map_or(0, |pellet| pellet.color())
             };
             let (l, r) = (under(left), under(right));
             critter.set_feeler_colors(l, r);
@@ -653,58 +652,86 @@ fn predation_death_percent(victim_energy: u32) -> u32 {
     PREDATION_BASE_DEATH_PERCENT + scaled
 }
 
-/// Pellet indices grouped into horizontal bands. A feeler's disc can only
-/// touch what is within a band or two of it vertically, so a critter looks at
-/// three bands rather than the whole larder. Purely a filter: what it offers
-/// is still checked by true distance, so a band too generous costs time and
-/// never correctness.
-struct PelletBands {
-    bands: Vec<Vec<u32>>,
+/// Pellets bucketed into a grid of cells, so a feeler looks only at what its
+/// disc could possibly touch. Bands by row alone left a critter checking every
+/// pellet across the whole width of its three rows -- some hundreds of them --
+/// to find the two or three within a disc's reach. Purely a filter: what it
+/// offers is still checked by true distance, so a cell too generous costs time
+/// and never correctness.
+struct PelletGrid {
+    cells: Vec<Vec<u32>>,
+    columns: i32,
+    rows: i32,
 }
 
-impl PelletBands {
-    fn band_of(y: i32, height: i32) -> usize {
-        (y.rem_euclid(height) / FEELER_BAND_HEIGHT) as usize
-    }
-
-    // The `/` is an equivalent mutant: multiplying instead over-allocates
-    // bands rather than under-allocating them, and band_of indexes within
-    // either, so the filter still answers correctly and only wastes room.
+impl PelletGrid {
+    // The `/` is an equivalent mutant in both of these: multiplying instead
+    // over-allocates cells rather than under-allocating them, and cell_of
+    // indexes within either, so the filter still answers correctly and only
+    // wastes room.
     #[mutants::skip]
-    fn count(height: i32) -> usize {
-        (height / FEELER_BAND_HEIGHT).max(1) as usize + 1
+    fn columns(width: i32) -> i32 {
+        (width / FEELER_CELL_SIZE).max(1) + 1
     }
 
-    fn build(pellets: &[Pellet], height: i32) -> Self {
-        let mut bands = vec![Vec::new(); Self::count(height)];
+    #[mutants::skip]
+    fn rows(height: i32) -> i32 {
+        (height / FEELER_CELL_SIZE).max(1) + 1
+    }
+
+    fn cell_of(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
+        (
+            x.rem_euclid(width) / FEELER_CELL_SIZE,
+            y.rem_euclid(height) / FEELER_CELL_SIZE,
+        )
+    }
+
+    fn build(pellets: &[Pellet], width: i32, height: i32) -> Self {
+        let (columns, rows) = (Self::columns(width), Self::rows(height));
+        let mut cells = vec![Vec::new(); (columns * rows) as usize];
         for (index, pellet) in pellets.iter().enumerate() {
-            bands[Self::band_of(pellet.y.round() as i32, height)].push(index as u32);
+            let (column, row) = Self::cell_of(
+                pellet.x.round() as i32,
+                pellet.y.round() as i32,
+                width,
+                height,
+            );
+            cells[(row * columns + column) as usize].push(index as u32);
         }
-        Self { bands }
+        Self {
+            cells,
+            columns,
+            rows,
+        }
     }
 
-    /// The first pellet in the bands around `y` that `wanted` accepts.
+    /// The first pellet in the cells around (x, y) that `wanted` accepts.
     //
-    // The `+` on the offset is an equivalent mutant: the offsets run
-    // symmetrically about zero, so subtracting them visits the same three
-    // bands in the other order.
+    // The `+` on the offsets is an equivalent mutant: they run symmetrically
+    // about zero, so subtracting them visits the same nine cells in another
+    // order.
     #[mutants::skip]
     fn near<'a, F>(
         &self,
+        x: i32,
         y: i32,
         pellets: &'a [Pellet],
+        width: i32,
         height: i32,
         wanted: F,
     ) -> Option<&'a Pellet>
     where
         F: Fn(&Pellet) -> bool,
     {
-        let count = self.bands.len() as i32;
-        let middle = Self::band_of(y, height) as i32;
+        let (column, row) = Self::cell_of(x, y, width, height);
         (-1..=1)
-            .flat_map(|offset| {
-                let band = (middle + offset).rem_euclid(count) as usize;
-                self.bands[band].iter()
+            .flat_map(move |row_offset| {
+                (-1..=1).map(move |column_offset| (row_offset, column_offset))
+            })
+            .flat_map(|(row_offset, column_offset)| {
+                let r = (row + row_offset).rem_euclid(self.rows);
+                let c = (column + column_offset).rem_euclid(self.columns);
+                self.cells[(r * self.columns + c) as usize].iter()
             })
             .map(|&index| &pellets[index as usize])
             .find(|pellet| wanted(pellet))
@@ -3057,19 +3084,19 @@ mod tests {
         }
 
         #[test]
-        fn the_bands_narrow_the_search_to_what_is_nearby() {
+        fn the_grid_narrows_the_search_to_what_is_nearby() {
             // The filter's whole purpose, and the only thing about it a test
             // can see: a pellet far away vertically is never offered for a
             // distance check. Without this the band arithmetic could put every
             // pellet in one band, stay correct, and cost what it was written
             // to save.
-            let height = TEST_HEIGHT as i32;
+            let (width, height) = (TEST_WIDTH as i32, TEST_HEIGHT as i32);
             let pellets: Vec<Pellet> = (0..height / 4).map(|r| Pellet::at(100, r * 4)).collect();
             let total = pellets.len();
-            let bands = PelletBands::build(&pellets, height);
+            let grid = PelletGrid::build(&pellets, width, height);
 
             let offered = std::cell::Cell::new(0usize);
-            bands.near(0, &pellets, height, |_| {
+            grid.near(100, 0, &pellets, width, height, |_| {
                 offered.set(offered.get() + 1);
                 false
             });
@@ -3082,17 +3109,17 @@ mod tests {
         }
 
         #[test]
-        fn the_bands_cover_a_full_sized_world() {
-            // Enough bands for every row of a real field. Too few and a pellet
-            // near the bottom indexes past the end of them.
-            let height = 1080;
-            let pellets: Vec<Pellet> = (0..height / 8).map(|r| Pellet::at(10, r * 8)).collect();
+        fn the_grid_covers_a_full_sized_world() {
+            // A cell for every part of a real field. Too few and a pellet near
+            // an edge indexes past the end of them.
+            let (width, height) = (1920, 1080);
+            let pellets: Vec<Pellet> = (0..height / 8)
+                .map(|r| Pellet::at(width - 3, r * 8))
+                .collect();
 
-            let bands = PelletBands::build(&pellets, height);
+            let grid = PelletGrid::build(&pellets, width, height);
 
-            let filed: usize = (0..PelletBands::count(height))
-                .map(|band| bands.bands[band].len())
-                .sum();
+            let filed: usize = grid.cells.iter().map(|cell| cell.len()).sum();
             assert_eq!(filed, pellets.len());
         }
 
