@@ -143,24 +143,57 @@ impl Renderer {
         }
     }
 
+    /// Fills a row's worth of pixels at a time rather than asking of each one
+    /// whether it lies inside. For a given row the shape spans a run either
+    /// side of centre, and where that run's width is is arithmetic: a solid
+    /// disc is one run, a hollow ring is two. Writing the runs turns a
+    /// multiply, an add and a comparison per pixel into a square root per row.
     fn fill_ring(ring: &Ring, canvas: &mut Canvas, color: u32) {
         let outer_squared = ring.radius * ring.radius;
-        for y in (ring.cy - ring.radius)..=(ring.cy + ring.radius) {
-            if y < 0 || y >= canvas.height as i32 {
+        let first_row = (ring.cy - ring.radius).max(0);
+        let last_row = (ring.cy + ring.radius).min(canvas.height as i32 - 1);
+
+        for y in first_row..=last_row {
+            let dy = y - ring.cy;
+            let outer_half = Self::half_width(outer_squared, dy);
+            // The hollow's half-width where this row crosses it, so the run
+            // either side of it can be written without testing the middle.
+            let inner_half = Self::half_width(ring.inner_squared, dy);
+            let row = y as usize * canvas.width;
+
+            if inner_half.is_none() {
+                // The row misses the hollow entirely: one unbroken run.
+                if let Some(half) = outer_half {
+                    Self::fill_span(canvas, row, ring.cx - half, ring.cx + half, color);
+                }
                 continue;
             }
-            for x in (ring.cx - ring.radius)..=(ring.cx + ring.radius) {
-                if x < 0 || x >= canvas.width as i32 {
-                    continue;
-                }
-                let dx = x - ring.cx;
-                let dy = y - ring.cy;
-                let distance_squared = dx * dx + dy * dy;
-                if distance_squared <= outer_squared && distance_squared > ring.inner_squared {
-                    canvas.buffer[y as usize * canvas.width + x as usize] = color;
-                }
-            }
+            let (Some(outer), Some(inner)) = (outer_half, inner_half) else {
+                continue;
+            };
+            Self::fill_span(canvas, row, ring.cx - outer, ring.cx - inner - 1, color);
+            Self::fill_span(canvas, row, ring.cx + inner + 1, ring.cx + outer, color);
         }
+    }
+
+    /// How far either side of centre a circle of this squared radius reaches
+    /// on the row `dy` from its middle, or None when the row misses it.
+    fn half_width(radius_squared: i32, dy: i32) -> Option<i32> {
+        let remaining = radius_squared - dy * dy;
+        if remaining < 0 {
+            return None;
+        }
+        Some((remaining as f64).sqrt() as i32)
+    }
+
+    /// Writes one unbroken run of a row, clipped to the canvas.
+    fn fill_span(canvas: &mut Canvas, row: usize, from: i32, to: i32, color: u32) {
+        let from = from.max(0) as usize;
+        let to = to.min(canvas.width as i32 - 1);
+        if to < 0 || from > to as usize {
+            return;
+        }
+        canvas.buffer[row + from..=row + to as usize].fill(color);
     }
 }
 
@@ -720,6 +753,139 @@ mod tests {
                 );
                 assert_eq!(pixel_at(&buffer, lx, ly), critter.genome_color());
                 assert_eq!(pixel_at(&buffer, rx, ry), critter.genome_color());
+            }
+        }
+
+        mod fill_ring {
+            use super::*;
+
+            // The shape fill_ring is meant to draw, worked out the slow and
+            // obvious way: every pixel of the bounding box, tested against the
+            // two radii. Whatever fill_ring does to go faster, it has to agree
+            // with this exactly.
+            fn drawn_the_obvious_way(ring: &Ring, color: u32) -> Vec<u32> {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let outer = ring.radius * ring.radius;
+                for y in (ring.cy - ring.radius)..=(ring.cy + ring.radius) {
+                    for x in (ring.cx - ring.radius)..=(ring.cx + ring.radius) {
+                        if x < 0 || y < 0 || x >= CANVAS as i32 || y >= CANVAS as i32 {
+                            continue;
+                        }
+                        let (dx, dy) = (x - ring.cx, y - ring.cy);
+                        let distance = dx * dx + dy * dy;
+                        if distance <= outer && distance > ring.inner_squared {
+                            buffer[y as usize * CANVAS + x as usize] = color;
+                        }
+                    }
+                }
+                buffer
+            }
+
+            fn drawn_by_fill_ring(ring: &Ring, color: u32) -> Vec<u32> {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let mut canvas = Canvas {
+                    buffer: &mut buffer,
+                    width: CANVAS,
+                    height: CANVAS,
+                };
+                Renderer::fill_ring(ring, &mut canvas, color);
+                buffer
+            }
+
+            fn assert_same_shape(ring: &Ring) {
+                let color = 0x00_AB_CD_EF;
+                assert_eq!(
+                    drawn_by_fill_ring(ring, color),
+                    drawn_the_obvious_way(ring, color),
+                    "ring at ({}, {}) radius {} inner {}",
+                    ring.cx,
+                    ring.cy,
+                    ring.radius,
+                    ring.inner_squared
+                );
+            }
+
+            #[test]
+            fn a_solid_disc_is_drawn_pixel_for_pixel() {
+                assert_same_shape(&Ring {
+                    cx: CENTER,
+                    cy: CENTER,
+                    radius: 8,
+                    inner_squared: -1,
+                });
+            }
+
+            #[test]
+            fn a_hollow_ring_is_drawn_pixel_for_pixel() {
+                assert_same_shape(&Ring {
+                    cx: CENTER,
+                    cy: CENTER,
+                    radius: 20,
+                    inner_squared: 18 * 18,
+                });
+            }
+
+            #[test]
+            fn every_radius_is_drawn_pixel_for_pixel() {
+                // Small radii are where a span worked out with square roots is
+                // most likely to disagree with a pixel-by-pixel test.
+                for radius in 0..=24 {
+                    assert_same_shape(&Ring {
+                        cx: CENTER,
+                        cy: CENTER,
+                        radius,
+                        inner_squared: -1,
+                    });
+                }
+            }
+
+            #[test]
+            fn every_thickness_of_ring_is_drawn_pixel_for_pixel() {
+                for inner in 0..20 {
+                    assert_same_shape(&Ring {
+                        cx: CENTER,
+                        cy: CENTER,
+                        radius: 20,
+                        inner_squared: inner * inner,
+                    });
+                }
+            }
+
+            #[test]
+            fn a_ring_hanging_off_each_edge_is_drawn_pixel_for_pixel() {
+                // Clipping is where a span-based fill is easiest to get wrong,
+                // since the row it would write runs past the buffer.
+                for (cx, cy) in [
+                    (0, CENTER),
+                    (CANVAS as i32 - 1, CENTER),
+                    (CENTER, 0),
+                    (CENTER, CANVAS as i32 - 1),
+                    (0, 0),
+                    (CANVAS as i32 - 1, CANVAS as i32 - 1),
+                    (-5, CENTER),
+                    (CANVAS as i32 + 5, CENTER),
+                ] {
+                    assert_same_shape(&Ring {
+                        cx,
+                        cy,
+                        radius: 12,
+                        inner_squared: -1,
+                    });
+                }
+            }
+
+            #[test]
+            fn a_ring_entirely_off_the_canvas_draws_nothing() {
+                let ring = Ring {
+                    cx: -100,
+                    cy: -100,
+                    radius: 12,
+                    inner_squared: -1,
+                };
+
+                assert!(drawn_by_fill_ring(&ring, 0x00_FF_FF_FF)
+                    .iter()
+                    .all(|&p| p == 0));
             }
         }
 
