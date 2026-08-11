@@ -30,7 +30,7 @@ const DRIFT_POPULATION_FLOOR: usize = 100;
 /// rather than beside the loop that does the seeding because the eruption site
 /// waits on the same period: food that walks away from critters while they are
 /// still being put down never gives any of them a place to start.
-pub const SEEDING_TICKS: u32 = 120 * TICKS_PER_SECOND;
+pub const SEEDING_TICKS: u32 = 60 * TICKS_PER_SECOND;
 /// Frames a second, which is what the frame loop is paced to.
 pub const TICKS_PER_SECOND: u32 = 60;
 // How sharply the site's heading can turn each frame, in radians. Low enough
@@ -3789,11 +3789,11 @@ mod tests {
         }
 
         #[test]
-        fn the_seeding_period_is_two_minutes() {
+        fn the_seeding_period_is_one_minute() {
             // Stated in the time it means rather than only in ticks: every
             // other test reads the constant, so any value would satisfy them,
             // and how long a world is stocked for is the point of it.
-            assert_eq!(SEEDING_TICKS / TICKS_PER_SECOND / 60, 2);
+            assert_eq!(SEEDING_TICKS / TICKS_PER_SECOND / 60, 1);
         }
 
         #[test]
