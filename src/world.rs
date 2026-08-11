@@ -19,7 +19,7 @@ const ERUPTION_SITE_DRIFT: f32 = 1.5;
 //
 // The climb is slow enough to be hard to notice while it happens -- a minute
 // either side of any moment looks much the same.
-const ERUPTION_DRIFT_RAMP_TICKS: u32 = 10 * 60 * 60;
+const ERUPTION_DRIFT_RAMP_TICKS: u32 = 6 * 60 * 60;
 // How sharply the site's heading can turn each frame, in radians. Low enough
 // that the source wanders on a curve rather than jittering in place.
 const ERUPTION_SITE_TURN: f32 = 0.08;
@@ -3804,13 +3804,13 @@ mod tests {
         }
 
         #[test]
-        fn the_site_takes_ten_minutes_to_reach_full_speed() {
+        fn the_site_takes_six_minutes_to_reach_full_speed() {
             // Stated in the time it means rather than only in ticks: every
             // other test here reads the constant, so any value would satisfy
             // them, and how long the climb takes is the whole point of it.
             const TICKS_PER_SECOND: u32 = 60;
 
-            assert_eq!(ERUPTION_DRIFT_RAMP_TICKS / TICKS_PER_SECOND / 60, 10);
+            assert_eq!(ERUPTION_DRIFT_RAMP_TICKS / TICKS_PER_SECOND / 60, 6);
         }
 
         #[test]
