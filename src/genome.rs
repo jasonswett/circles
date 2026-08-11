@@ -148,13 +148,21 @@ const FEELER_DISC_OFFSET: usize = FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS;
 // rather than a count, so a lineage can climb towards feelers a step at a
 // time: one is worth having on its own, and the second need not arrive with
 // the first.
+// How many bits spell each feeler. A feeler exists if any of them is set, so
+// mutation has several ways to find one and several would have to flip back
+// to lose it. One bit apiece made a feeler appear about once in four thousand
+// splits, which in a world where nothing lives long is never.
+//
+// Duplication is how a trait becomes reachable and how it stops being lost:
+// what is spelled once is found rarely and undone by a single flip.
+const FEELER_PRESENT_BITS: usize = 5;
 const LEFT_FEELER_PRESENT_OFFSET: usize = FEELER_DISC_OFFSET + FEELER_FIELD_BITS;
-const RIGHT_FEELER_PRESENT_OFFSET: usize = LEFT_FEELER_PRESENT_OFFSET + 1;
+const RIGHT_FEELER_PRESENT_OFFSET: usize = LEFT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS;
 // Measured from where the region starts to where its last field ends, rather
 // than counted up again by hand: a total that drifts from the offsets it is
 // meant to cover either drops a field out of the genome or pads it with bits
 // nothing reads.
-const FEELER_BITS: usize = RIGHT_FEELER_PRESENT_OFFSET + 1 - FEELER_LENGTH_OFFSET;
+const FEELER_BITS: usize = RIGHT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - FEELER_LENGTH_OFFSET;
 /// How far a feeler reaches beyond the body, in pixels.
 pub const MIN_FEELER_LENGTH: f32 = 8.0;
 pub const MAX_FEELER_LENGTH: f32 = 34.0;
@@ -217,8 +225,18 @@ impl Genome {
         // earn: everything else about a genome starts wherever chance put it,
         // but a feeler arrives only where mutation grows one, so a population
         // that has them has shown they pay for themselves.
-        write_bits(&mut bytes, LEFT_FEELER_PRESENT_OFFSET, 1, 0);
-        write_bits(&mut bytes, RIGHT_FEELER_PRESENT_OFFSET, 1, 0);
+        write_bits(
+            &mut bytes,
+            LEFT_FEELER_PRESENT_OFFSET,
+            FEELER_PRESENT_BITS,
+            0,
+        );
+        write_bits(
+            &mut bytes,
+            RIGHT_FEELER_PRESENT_OFFSET,
+            FEELER_PRESENT_BITS,
+            0,
+        );
         #[allow(clippy::reversed_empty_ranges)]
         for bit in TOTAL_BITS..(TOTAL_BYTES * 8) {
             write_bits(&mut bytes, bit, 1, 0);
@@ -525,13 +543,13 @@ impl Genome {
         write_bits(
             &mut self.bytes,
             LEFT_FEELER_PRESENT_OFFSET,
-            1,
+            FEELER_PRESENT_BITS,
             u32::from(left),
         );
         write_bits(
             &mut self.bytes,
             RIGHT_FEELER_PRESENT_OFFSET,
-            1,
+            FEELER_PRESENT_BITS,
             u32::from(right),
         );
     }
@@ -564,13 +582,18 @@ impl Genome {
         );
     }
 
-    /// Whether this critter grew a feeler on each side.
+    /// Whether this critter grew a feeler on each side. Any one of the bits
+    /// spelling a feeler is enough to have it.
     pub fn has_left_feeler(&self) -> bool {
-        read_bits(&self.bytes, LEFT_FEELER_PRESENT_OFFSET, 1) != 0
+        read_bits(&self.bytes, LEFT_FEELER_PRESENT_OFFSET, FEELER_PRESENT_BITS) != 0
     }
 
     pub fn has_right_feeler(&self) -> bool {
-        read_bits(&self.bytes, RIGHT_FEELER_PRESENT_OFFSET, 1) != 0
+        read_bits(
+            &self.bytes,
+            RIGHT_FEELER_PRESENT_OFFSET,
+            FEELER_PRESENT_BITS,
+        ) != 0
     }
 
     /// How far this critter's feelers reach beyond its body.
@@ -2781,8 +2804,11 @@ mod tests {
                 LEFT_FEELER_PRESENT_OFFSET,
                 FEELER_DISC_OFFSET + FEELER_FIELD_BITS
             );
-            assert_eq!(RIGHT_FEELER_PRESENT_OFFSET, LEFT_FEELER_PRESENT_OFFSET + 1);
-            assert_eq!(FEELER_BITS, 3 * FEELER_FIELD_BITS + 2);
+            assert_eq!(
+                RIGHT_FEELER_PRESENT_OFFSET,
+                LEFT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS
+            );
+            assert_eq!(FEELER_BITS, 3 * FEELER_FIELD_BITS + 2 * FEELER_PRESENT_BITS);
             // And the region ends exactly where the genome does.
             assert_eq!(FEELER_LENGTH_OFFSET + FEELER_BITS, TOTAL_BITS);
         }
@@ -2801,6 +2827,57 @@ mod tests {
 
             assert!(round_tripped.has_left_feeler());
             assert!(round_tripped.has_right_feeler());
+        }
+
+        #[test]
+        fn any_one_of_a_feelers_bits_is_enough_to_grow_it() {
+            // A feeler is spelled several times over, so mutation has several
+            // ways to find it. Duplication is how a trait becomes reachable in
+            // the first place, and how it stops being lost again once found.
+            for bit in 0..FEELER_PRESENT_BITS {
+                let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+                write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET + bit, 1, 1);
+
+                assert!(genome.has_left_feeler(), "bit {bit} should grow it");
+                assert!(!genome.has_right_feeler());
+            }
+        }
+
+        #[test]
+        fn a_feeler_is_lost_only_when_every_one_of_its_bits_goes() {
+            // The other half of the redundancy, and the half that matters
+            // more: a trait several bits wide is not undone by one of them
+            // flipping back.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for bit in 0..FEELER_PRESENT_BITS {
+                write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET + bit, 1, 1);
+            }
+
+            for bit in 0..FEELER_PRESENT_BITS - 1 {
+                write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET + bit, 1, 0);
+                assert!(genome.has_left_feeler(), "still has one bit left");
+            }
+            write_bits(
+                &mut genome.bytes,
+                LEFT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - 1,
+                1,
+                0,
+            );
+
+            assert!(!genome.has_left_feeler());
+        }
+
+        #[test]
+        fn the_two_feelers_bits_do_not_overlap() {
+            // Each side has its own run of bits: growing one must not grow the
+            // other, or a critter could never have just the one.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for bit in 0..FEELER_PRESENT_BITS {
+                write_bits(&mut genome.bytes, RIGHT_FEELER_PRESENT_OFFSET + bit, 1, 1);
+            }
+
+            assert!(genome.has_right_feeler());
+            assert!(!genome.has_left_feeler());
         }
 
         #[test]
