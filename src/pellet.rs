@@ -82,7 +82,7 @@ pub const PELLET_ENERGY: u32 = 200;
 /// with nothing left is still finished by it. Halving always leaves something
 /// behind, so poison is a setback a critter can recover from rather than the
 /// unavoidable death it used to be.
-pub const POISON_DAMAGE_PERCENT: u32 = 50;
+pub const POISON_DAMAGE_PERCENT: u32 = 90;
 /// How long a pellet lasts before rotting away, in ticks. At 60 ticks per
 /// second this is 20 seconds. Uneaten food does not accumulate forever, so
 /// the larder reflects recent deliveries rather than the world's whole

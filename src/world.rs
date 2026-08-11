@@ -3473,7 +3473,7 @@ mod tests {
         }
 
         #[test]
-        fn poison_takes_half_of_what_a_critter_has() {
+        fn poison_takes_the_share_of_a_critter_the_pellet_says() {
             // No living cost here: this critter never fires an instruction,
             // so what it lost is the poison alone.
             let start = 800;
@@ -3486,7 +3486,8 @@ mod tests {
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), start / 2);
+            let taken = start * POISON_DAMAGE_PERCENT / 100;
+            assert_eq!(world.critters()[0].energy(), start - taken);
         }
 
         #[test]
