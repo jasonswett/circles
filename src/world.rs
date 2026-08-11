@@ -142,11 +142,7 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             ticks: 0,
-            // Test-only constructor: a fixed site, since it has no rng.
-            eruption_site: (
-                rng.gen_range(0.0..width as f32),
-                rng.gen_range(0.0..height as f32),
-            ),
+            eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
             eruption_heading: rng.gen_range(0.0..std::f32::consts::TAU),
             seed_genome: None,
         }
@@ -175,10 +171,7 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             ticks: 0,
-            eruption_site: (
-                rng.gen_range(0.0..width as f32),
-                rng.gen_range(0.0..height as f32),
-            ),
+            eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
             eruption_heading: rng.gen_range(0.0..std::f32::consts::TAU),
             seed_genome: Some(seed_genome),
         }
@@ -600,6 +593,12 @@ impl World {
             .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
         self.pellets.clear();
+        // A reset is a new world: its food starts in the middle and holds
+        // still there, rather than carrying on from wherever the last one had
+        // wandered to at whatever speed it had worked up.
+        self.eruption_site = (self.width as f32 / 2.0, self.height as f32 / 2.0);
+        self.eruption_heading = rng.gen_range(0.0..std::f32::consts::TAU);
+        self.ticks = 0;
         self.generation += 1;
     }
 }
@@ -1614,20 +1613,6 @@ mod tests {
                 world.original_total_energy(),
                 full_population_energy() + full_larder_energy()
             );
-        }
-
-        #[test]
-        fn different_worlds_start_their_site_in_different_places() {
-            let sites: std::collections::HashSet<(i32, i32)> = (0..30)
-                .map(|seed| {
-                    let mut rng = StdRng::seed_from_u64(seed);
-                    let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
-                    let (x, y) = world.eruption_site();
-                    (x.round() as i32, y.round() as i32)
-                })
-                .collect();
-
-            assert!(sites.len() > 1, "every world began at the same site");
         }
 
         #[test]
@@ -3748,6 +3733,77 @@ mod tests {
         }
 
         #[test]
+        fn a_new_world_erupts_from_its_middle() {
+            // Somewhere in particular, and the same somewhere every time: a
+            // world that starts its food in a random corner starts some runs
+            // with the larder against an edge and others with it in the open,
+            // which is a difference between worlds that nothing chose.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..20 {
+                let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+
+                assert_eq!(
+                    world.eruption_site(),
+                    (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0)
+                );
+            }
+        }
+
+        #[test]
+        fn a_world_hydrated_from_a_genome_erupts_from_its_middle_too() {
+            // The other way a world is made. Both constructors place the site,
+            // so both have to place it in the same spot.
+            let mut rng = StdRng::seed_from_u64(0);
+            let genome = Genome::random(&mut rng);
+
+            let world = World::with_seed_genome(TEST_WIDTH, TEST_HEIGHT, genome, &mut rng);
+
+            assert_eq!(
+                world.eruption_site(),
+                (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0)
+            );
+        }
+
+        #[test]
+        fn a_reset_world_erupts_from_its_middle_again() {
+            // A reset is a new world, so it begins where a new world begins
+            // rather than wherever the last one had wandered to.
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
+            for _ in 0..600 {
+                world.drift_eruption_site(&mut rng);
+            }
+            assert_ne!(
+                world.eruption_site(),
+                (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0)
+            );
+
+            world.reset(&mut rng);
+
+            assert_eq!(
+                world.eruption_site(),
+                (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0)
+            );
+        }
+
+        #[test]
+        fn a_reset_world_starts_its_site_still_again() {
+            // The speed is earned by a world's own age, so a fresh one has
+            // none of it however long the last one ran.
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
+
+            world.reset(&mut rng);
+
+            let before = world.eruption_site();
+            world.drift_eruption_site(&mut rng);
+            assert_eq!(world.eruption_site(), before);
+        }
+
+        #[test]
         fn the_site_takes_ten_minutes_to_reach_full_speed() {
             // Stated in the time it means rather than only in ticks: every
             // other test here reads the constant, so any value would satisfy
@@ -3764,8 +3820,10 @@ mod tests {
             // being in.
             let travelled = distance_covered(0, 60);
 
+            // Not nothing at all: the helper measures through whole pixels, so
+            // a site standing still still shows a little rounding.
             assert!(
-                travelled < 2.0,
+                travelled < 4.0,
                 "a fresh site should hardly move, went {travelled}"
             );
         }
