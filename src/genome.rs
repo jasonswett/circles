@@ -17,7 +17,7 @@ const MAX_MUTATION_RATE: f32 = 0.0005;
 // factor contributes to the sigmoid input; off means it is ignored. This is
 // the "stair-step" mechanism: a single mutation can enable or disable a
 // whole factor without disturbing the existing weights.
-const FACTOR_MASK_BITS: usize = 9;
+const FACTOR_MASK_BITS: usize = 15;
 const THRESHOLD_BITS: usize = 7; // 0..128: median ~64, near INITIAL_ENERGY=60
 const SOFTNESS_BITS: usize = 7; // 0..128, mapped to [MIN_SOFTNESS, MIN_SOFTNESS + 127]
 const PARAM_BITS_PER_INSTRUCTION: usize = FACTOR_MASK_BITS + THRESHOLD_BITS + SOFTNESS_BITS;
@@ -61,8 +61,18 @@ const GREEN_FACTOR_BIT: u32 = 0b0001_0000;
 const BLUE_FACTOR_BIT: u32 = 0b0010_0000;
 const HISTORY_FACTOR_BIT: u32 = 0b0000_1000;
 const AGE_FACTOR_BIT: u32 = 0b0100_0000;
-const LEFT_FEELER_FACTOR_BIT: u32 = 0b1000_0000;
-const RIGHT_FEELER_FACTOR_BIT: u32 = 0b1_0000_0000;
+// A feeler senses exactly what the body does: three colour channels apiece.
+// Nothing about a sensor says what it is for -- it reports the colour in front
+// of it and evolution settles what a colour is worth. An earlier feeler read
+// only green, on the reasoning that green meant food, which quietly decided
+// for evolution that poison was not worth noticing: red and empty space read
+// the same, so fleeing poison could not be learned however useful it was.
+const LEFT_RED_FACTOR_BIT: u32 = 0b1000_0000;
+const LEFT_GREEN_FACTOR_BIT: u32 = 0b1_0000_0000;
+const LEFT_BLUE_FACTOR_BIT: u32 = 0b10_0000_0000;
+const RIGHT_RED_FACTOR_BIT: u32 = 0b100_0000_0000;
+const RIGHT_GREEN_FACTOR_BIT: u32 = 0b1000_0000_0000;
+const RIGHT_BLUE_FACTOR_BIT: u32 = 0b1_0000_0000_0000;
 
 // When the history factor is enabled, the contribution scales from 0 (none of
 // the remembered actions were this instruction) up to this value (all of them
@@ -356,23 +366,25 @@ impl Genome {
         } else {
             0.0
         };
-        let [_, red, green, blue] = senses.touched_color.to_be_bytes();
-        let channel = |lit: u8| COLOR_CHANNEL_SCALE * lit as f32 / 255.0;
-        let red_contribution = if mask & RED_FACTOR_BIT != 0 {
-            channel(red)
-        } else {
-            0.0
+        // The same reading for whichever of the three sensors is asking: what
+        // differs between them is where they point, not what they can see.
+        let seen = |lit: u32, red_bit: u32, green_bit: u32, blue_bit: u32| {
+            let [_, red, green, blue] = lit.to_be_bytes();
+            let channel = |lit: u8, bit: u32| {
+                if mask & bit != 0 {
+                    COLOR_CHANNEL_SCALE * lit as f32 / 255.0
+                } else {
+                    0.0
+                }
+            };
+            channel(red, red_bit) + channel(green, green_bit) + channel(blue, blue_bit)
         };
-        let green_contribution = if mask & GREEN_FACTOR_BIT != 0 {
-            channel(green)
-        } else {
-            0.0
-        };
-        let blue_contribution = if mask & BLUE_FACTOR_BIT != 0 {
-            channel(blue)
-        } else {
-            0.0
-        };
+        let body_contribution = seen(
+            senses.touched_color,
+            RED_FACTOR_BIT,
+            GREEN_FACTOR_BIT,
+            BLUE_FACTOR_BIT,
+        );
         // `recent_repetition` is the share of the critter's remembered actions
         // that were this instruction, so the contribution does not grow just
         // because the window widened — only because the behavior repeated.
@@ -389,31 +401,24 @@ impl Genome {
         } else {
             0.0
         };
-        // The green channel, which is what tells food from poison: food is
-        // green and poison red, so the brightest channel of either would
-        // report the same thing for both and leave poison unlearnable.
-        let feeler = |lit: u32| {
-            let [_, _, green, _] = lit.to_be_bytes();
-            COLOR_CHANNEL_SCALE * green as f32 / 255.0
-        };
-        let left_feeler_contribution = if mask & LEFT_FEELER_FACTOR_BIT != 0 {
-            feeler(senses.left_color)
-        } else {
-            0.0
-        };
-        let right_feeler_contribution = if mask & RIGHT_FEELER_FACTOR_BIT != 0 {
-            feeler(senses.right_color)
-        } else {
-            0.0
-        };
+        let left_feeler_contribution = seen(
+            senses.left_color,
+            LEFT_RED_FACTOR_BIT,
+            LEFT_GREEN_FACTOR_BIT,
+            LEFT_BLUE_FACTOR_BIT,
+        );
+        let right_feeler_contribution = seen(
+            senses.right_color,
+            RIGHT_RED_FACTOR_BIT,
+            RIGHT_GREEN_FACTOR_BIT,
+            RIGHT_BLUE_FACTOR_BIT,
+        );
         let input = left_feeler_contribution
             + right_feeler_contribution
             + age_contribution
             + energy_contribution
             + touching_contribution
-            + red_contribution
-            + green_contribution
-            + blue_contribution
+            + body_contribution
             + history_contribution;
         sigmoid((input - threshold) / softness)
     }
@@ -1033,8 +1038,105 @@ mod tests {
         }
 
         #[test]
+        fn every_sensor_reads_every_channel_the_same_way() {
+            // Body and feelers are the same sense pointed in three places. No
+            // sensor is built with an opinion about what it is for: each
+            // reports the colour in front of it and evolution decides what a
+            // colour is worth.
+            for (bit, put) in [
+                (RED_FACTOR_BIT, 0usize),
+                (GREEN_FACTOR_BIT, 0),
+                (BLUE_FACTOR_BIT, 0),
+                (LEFT_RED_FACTOR_BIT, 1),
+                (LEFT_GREEN_FACTOR_BIT, 1),
+                (LEFT_BLUE_FACTOR_BIT, 1),
+                (RIGHT_RED_FACTOR_BIT, 2),
+                (RIGHT_GREEN_FACTOR_BIT, 2),
+                (RIGHT_BLUE_FACTOR_BIT, 2),
+            ] {
+                let genome = genome_with_mask_for_split(bit);
+                let colour = match bit {
+                    b if b == RED_FACTOR_BIT
+                        || b == LEFT_RED_FACTOR_BIT
+                        || b == RIGHT_RED_FACTOR_BIT =>
+                    {
+                        0x00_FF_00_00
+                    }
+                    b if b == GREEN_FACTOR_BIT
+                        || b == LEFT_GREEN_FACTOR_BIT
+                        || b == RIGHT_GREEN_FACTOR_BIT =>
+                    {
+                        0x00_00_FF_00
+                    }
+                    _ => 0x00_00_00_FF,
+                };
+                let senses = |lit: u32| match put {
+                    0 => Senses {
+                        touched_color: lit,
+                        ..Senses::default()
+                    },
+                    1 => Senses {
+                        left_color: lit,
+                        ..Senses::default()
+                    },
+                    _ => Senses {
+                        right_color: lit,
+                        ..Senses::default()
+                    },
+                };
+
+                let with = genome.probability_of_acting(Instruction::Split, &senses(colour));
+                let without = genome.probability_of_acting(Instruction::Split, &senses(0));
+
+                assert!(with > without, "sensor for bit {bit:b} did not respond");
+            }
+        }
+
+        #[test]
+        fn a_feeler_reads_red_as_readily_as_green() {
+            // The failing of the sense this replaces: a feeler that reported
+            // only green could tell food from nothing, but poison and empty
+            // space read alike, so fleeing poison could not be learned.
+            let genome = genome_with_mask_for_split(LEFT_RED_FACTOR_BIT);
+
+            let on_poison = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    left_color: crate::POISON_COLOR,
+                    ..Senses::default()
+                },
+            );
+            let on_nothing = genome.probability_of_acting(Instruction::Split, &Senses::default());
+
+            assert!(
+                on_poison > on_nothing,
+                "poison should read differently from nothing"
+            );
+        }
+
+        #[test]
+        fn each_sensor_keeps_to_its_own_channels() {
+            // Nine bits, nine independent readings: a genome watching for red
+            // on its left is unmoved by red on its right or against its body.
+            let genome = genome_with_mask_for_split(LEFT_RED_FACTOR_BIT);
+            let red = 0x00_FF_00_00;
+
+            let quiet = genome.probability_of_acting(Instruction::Split, &Senses::default());
+            let elsewhere = genome.probability_of_acting(
+                Instruction::Split,
+                &Senses {
+                    right_color: red,
+                    touched_color: red,
+                    ..Senses::default()
+                },
+            );
+
+            assert_eq!(elsewhere, quiet);
+        }
+
+        #[test]
         fn a_feeler_on_food_pushes_a_decision() {
-            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
+            let genome = genome_with_mask_for_split(LEFT_GREEN_FACTOR_BIT);
             let probe = |left_color: u32| {
                 genome.probability_of_acting(
                     Instruction::Split,
@@ -1053,7 +1155,7 @@ mod tests {
             // The point of sensing colour rather than mere presence. Poison is
             // red and food green, so a sense that took the brightest channel
             // of either would report the same for both.
-            let genome = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
+            let genome = genome_with_mask_for_split(LEFT_GREEN_FACTOR_BIT);
             let probe = |left_color: u32| {
                 genome.probability_of_acting(
                     Instruction::Split,
@@ -1078,7 +1180,7 @@ mod tests {
                 &mut bytes,
                 window,
                 FACTOR_MASK_BITS,
-                LEFT_FEELER_FACTOR_BIT | RIGHT_FEELER_FACTOR_BIT,
+                LEFT_GREEN_FACTOR_BIT | RIGHT_GREEN_FACTOR_BIT,
             );
             write_bits(
                 &mut bytes,
@@ -1112,7 +1214,7 @@ mod tests {
         fn the_two_feelers_are_sensed_separately() {
             // Each side has its own bit, so a genome can tell food on its left
             // from food on its right and turn towards one of them.
-            let left_only = genome_with_mask_for_split(LEFT_FEELER_FACTOR_BIT);
+            let left_only = genome_with_mask_for_split(LEFT_GREEN_FACTOR_BIT);
 
             let with_food_right = left_only.probability_of_acting(
                 Instruction::Split,
@@ -1431,10 +1533,10 @@ mod tests {
 
         #[test]
         fn the_softness_for_each_instruction_is_read_from_its_own_window() {
-            // Use a hard-coded offset (mask 9 bits + threshold 7 bits = 16)
+            // Use a hard-coded offset (mask 15 bits + threshold 7 bits = 22)
             // rather than the SOFTNESS_OFFSET constant so that mutations to
             // the constant produce a visible mismatch between write and read.
-            const SOFTNESS_OFFSET_LITERAL: usize = 16;
+            const SOFTNESS_OFFSET_LITERAL: usize = 22;
             assert_eq!(
                 SOFTNESS_OFFSET_LITERAL, SOFTNESS_OFFSET,
                 "genome layout changed; update SOFTNESS_OFFSET_LITERAL to match"
