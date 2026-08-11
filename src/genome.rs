@@ -94,7 +94,7 @@ const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
 // Splitting is the one instruction whose payoff a critter never collects
 // itself, so nothing about a critter's own life selects for it. The world
 // leans on the scale to make reproduction likely enough to get started.
-const SPLIT_WEIGHT_MULTIPLIER: u32 = 8;
+const SPLIT_WEIGHT_MULTIPLIER: u32 = 4;
 #[cfg(test)]
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
 const WEIGHT_BITS: usize = INSTRUCTION_COUNT * WEIGHT_BITS_PER_INSTRUCTION;
@@ -2326,7 +2326,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn splitting_claims_eight_times_the_opcode_space_its_field_would_give_it() {
+        fn splitting_claims_four_times_the_opcode_space_its_field_would_give_it() {
             // A thumb on the scale, applied to the decoded weight rather than
             // to the genome: the same bits still say how much a lineage wants
             // to divide, and evolution can still turn it down.
@@ -2338,7 +2338,7 @@ mod tests {
             // constant would hold whatever the constant said, including one.
             assert_eq!(
                 genome.instruction_weight(Instruction::Split),
-                genome.instruction_weight(Instruction::Eat) * 8
+                genome.instruction_weight(Instruction::Eat) * 4
             );
         }
 
@@ -2408,18 +2408,18 @@ mod tests {
 
             let counts = decoded_counts(&genome);
 
-            // Weights are bits + 1, eightfold for Split: Eat holds 16, Split
-            // 8, and the other thirteen 1 each, totalling 37. Opcode value c
-            // maps to position floor(c * 37 / 32), so Eat takes 14 of the 32
-            // values, Split 7, and the rest one apiece bar two, whose bands no
-            // opcode value lands in. Naming each one's share,
+            // Weights are bits + 1, quadrupled for Split: Eat holds 16,
+            // Split 4, and the other thirteen 1 each, totalling 33. Opcode
+            // value c maps to position floor(c * 33 / 32), so Eat takes 16 of
+            // the 32 values, Split 4, and the rest one apiece bar the last,
+            // whose band no opcode value lands in. Naming each one's share,
             // rather than summing them, is what pins the scaling arithmetic:
             // formulas that shift which instructions get a slot preserve the
             // totals but not this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 14);
-            assert_eq!(share(Instruction::Split), 7);
+            assert_eq!(share(Instruction::Eat), 16);
+            assert_eq!(share(Instruction::Split), 4);
             assert_eq!(share(Instruction::MoveSlow), 1);
             assert_eq!(share(Instruction::MoveFast), 1);
             assert_eq!(share(Instruction::TurnLeft15), 1);
@@ -2430,8 +2430,8 @@ mod tests {
             assert_eq!(share(Instruction::TurnRight90), 1);
             assert_eq!(share(Instruction::DoNothing), 1);
             assert_eq!(share(Instruction::RepeatPreviousMove), 1);
+            assert_eq!(share(Instruction::SkipAhead), 1);
             assert_eq!(share(Instruction::SkipBack), 1);
-            assert_eq!(share(Instruction::SkipAhead), 0);
             assert_eq!(share(Instruction::TurnAbout), 0);
         }
 
