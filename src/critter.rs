@@ -37,6 +37,12 @@ pub const SPLIT_DURATION_TICKS: u32 = 4;
 // controls whether a critter jumps, through the usual weights and sigmoid,
 // but not yet how far.
 pub const SKIP_DISTANCE: usize = 4;
+// How far from its parent a child can be born, in pixels. Somewhere random
+// within this rather than at the parent's elbow: a child born where its parent
+// stands is born somewhere its parent has just eaten, and one thrown clear has
+// to find its own food. Further than any feeler reaches, so it cannot simply
+// sense its way back to where it came from.
+pub const MAX_BIRTH_DISTANCE: i32 = 100;
 // What a step costs at each pace. Moving fast covers twice the ground of
 // moving slow, but the cost of covering it rises with the square of the
 // pace, the way drag does in any real medium: twice the speed, four times
@@ -618,8 +624,11 @@ impl Critter {
     }
 
     fn spawn_child(&mut self) -> Critter {
-        let (dx, dy) = self.heading.unit();
-        let offset = self.step_size as f32;
+        // Thrown clear, somewhere random, rather than set down behind the
+        // parent where the ground has just been picked over.
+        let bearing = self.rng.gen_range(0.0..std::f32::consts::TAU);
+        let offset = self.rng.gen_range(1.0..=MAX_BIRTH_DISTANCE as f32);
+        let (dx, dy) = (bearing.cos(), bearing.sin());
         let child_seed: u64 = self.rng.gen();
         let mut child_rng = SmallRng::seed_from_u64(child_seed);
         // Children's first firing is jittered, so they desynchronize from the
@@ -632,8 +641,8 @@ impl Critter {
         // per site rather than per offspring.
         child_genome.mutate(&mut child_rng, self.genome.mutation_rate());
         Critter {
-            x: self.x - (dx * offset).round() as i32,
-            y: self.y - (dy * offset).round() as i32,
+            x: self.x + (dx * offset).round() as i32,
+            y: self.y + (dy * offset).round() as i32,
             heading: self.heading,
             genome: child_genome,
             genome_cursor: self.genome_cursor,
@@ -2442,6 +2451,118 @@ mod tests {
         }
 
         #[test]
+        fn a_child_lands_away_from_its_parent() {
+            // Not at the parent's elbow. A child born where its parent stands
+            // is born somewhere its parent has just eaten, and one born far
+            // enough away has to find its own food rather than the leavings.
+            let mut parent = splitter();
+
+            let child = divide_fully(&mut parent);
+
+            let (dx, dy) = (child.x() - parent.x(), child.y() - parent.y());
+            let distance = ((dx * dx + dy * dy) as f32).sqrt();
+            assert!(
+                distance > 0.0,
+                "a child should not be born on top of its parent"
+            );
+            assert!(
+                distance <= MAX_BIRTH_DISTANCE as f32,
+                "a child landed {distance} away, further than the furthest"
+            );
+        }
+
+        #[test]
+        fn children_land_in_all_directions_over_many_births() {
+            // Somewhere random rather than somewhere fixed: a child thrown
+            // always the same way would give a lineage a direction of travel
+            // it never chose.
+            let mut quadrants = std::collections::HashSet::new();
+
+            for seed in 0..40 {
+                let mut parent = Critter::with_genome(
+                    START_X,
+                    START_Y,
+                    NORTH,
+                    1,
+                    1,
+                    SPLITTER_ENERGY,
+                    seed,
+                    Genome::all(Instruction::Split),
+                );
+                let child = divide_fully(&mut parent);
+                quadrants.insert((child.x() > parent.x(), child.y() > parent.y()));
+            }
+
+            assert_eq!(
+                quadrants.len(),
+                4,
+                "children should land on every side, saw {quadrants:?}"
+            );
+        }
+
+        #[test]
+        fn a_child_lands_along_the_bearing_its_parent_drew() {
+            // Along the bearing, not against it. With a bearing drawn from the
+            // whole circle, throwing a child the opposite way looks the same
+            // in aggregate: what tells them apart is checking one birth
+            // against the bearing that produced it.
+            let mut parent = splitter();
+            let bearing = {
+                let mut rng = parent.rng.clone();
+                rng.gen_range(0.0..std::f32::consts::TAU)
+            };
+            let expected = (bearing.cos(), bearing.sin());
+
+            let child = divide_fully(&mut parent);
+
+            let (dx, dy) = (
+                (child.x() - parent.x()) as f32,
+                (child.y() - parent.y()) as f32,
+            );
+            // Each axis on its own: taken together, one component can carry
+            // the other and a flipped sign passes unnoticed.
+            assert!(
+                dx.signum() == expected.0.signum(),
+                "child lies at dx {dx} against a bearing of {:?}",
+                expected
+            );
+            assert!(
+                dy.signum() == expected.1.signum(),
+                "child lies at dy {dy} against a bearing of {:?}",
+                expected
+            );
+        }
+
+        #[test]
+        fn children_land_at_varying_distances() {
+            // A random distance as well as a random direction, so a birth does
+            // not always place a child exactly as far off as the last one.
+            let mut distances = std::collections::HashSet::new();
+
+            for seed in 0..40 {
+                let mut parent = Critter::with_genome(
+                    START_X,
+                    START_Y,
+                    NORTH,
+                    1,
+                    1,
+                    SPLITTER_ENERGY,
+                    seed,
+                    Genome::all(Instruction::Split),
+                );
+                let child = divide_fully(&mut parent);
+                let (dx, dy) = (child.x() - parent.x(), child.y() - parent.y());
+                distances.insert(dx * dx + dy * dy);
+            }
+
+            assert!(
+                distances.len() > 10,
+                "births should vary in distance, saw {} different ones",
+                distances.len()
+            );
+        }
+
+        #[test]
         fn a_child_arrives_once_the_division_has_run_its_course() {
             let mut critter = splitter();
             critter.tick(true);
@@ -2572,63 +2693,6 @@ mod tests {
             let child = divide_fully(&mut parent);
 
             assert_eq!(child.initial_energy(), INITIAL_ENERGY);
-        }
-
-        #[test]
-        fn the_child_spawns_one_step_behind_the_parent() {
-            // Parent facing North at (10, 10) with step_size 1: child should appear
-            // one pixel south, at (10, 11) — directly behind.
-            let mut parent = splitter();
-
-            let child = divide_fully(&mut parent);
-
-            assert_eq!((child.x(), child.y()), (START_X, START_Y + 1));
-        }
-
-        #[test]
-        fn a_child_spawned_facing_east_appears_one_step_west_of_the_parent() {
-            const STEP_SIZE: i32 = 5;
-            let mut parent = Critter::with_genome(
-                START_X,
-                START_Y,
-                EAST,
-                1,
-                STEP_SIZE,
-                INITIAL_ENERGY,
-                0,
-                Genome::all(Instruction::Split),
-            );
-            parent.gain_energy(INITIAL_ENERGY);
-
-            let child = divide_fully(&mut parent);
-
-            assert_eq!((child.x(), child.y()), (START_X - STEP_SIZE, START_Y));
-        }
-
-        #[test]
-        fn a_child_spawned_facing_southeast_uses_the_diagonal_scaled_offset() {
-            // step_size 10, scaled by √2/2 ≈ 0.707 and rounded → 7. Child appears
-            // northwest of parent (opposite of SouthEast), so at (parent - 7, parent - 7).
-            const STEP_SIZE: i32 = 10;
-            const DIAGONAL_OFFSET: i32 = 7;
-            let mut parent = Critter::with_genome(
-                START_X,
-                START_Y,
-                SOUTH_EAST,
-                1,
-                STEP_SIZE,
-                INITIAL_ENERGY,
-                0,
-                Genome::all(Instruction::Split),
-            );
-            parent.gain_energy(INITIAL_ENERGY);
-
-            let child = divide_fully(&mut parent);
-
-            assert_eq!(
-                (child.x(), child.y()),
-                (START_X - DIAGONAL_OFFSET, START_Y - DIAGONAL_OFFSET)
-            );
         }
 
         #[test]
