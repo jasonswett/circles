@@ -12,6 +12,14 @@ const PREDATION_SHARE_PERCENT: u32 = 25;
 // How far the eruption site travels each frame. Small, so the source drifts
 // visibly across the world rather than jumping between places.
 const ERUPTION_SITE_DRIFT: f32 = 1.5;
+// How old a world is when its eruption site reaches full speed, and stops
+// gathering more. Where food comes from is somewhere in particular at first
+// and less and less so as the world runs on: a site that wanders from the
+// outset never lets anywhere be worth being.
+//
+// The climb is slow enough to be hard to notice while it happens -- a minute
+// either side of any moment looks much the same.
+const ERUPTION_DRIFT_RAMP_TICKS: u32 = 10 * 60 * 60;
 // How sharply the site's heading can turn each frame, in radians. Low enough
 // that the source wanders on a curve rather than jittering in place.
 const ERUPTION_SITE_TURN: f32 = 0.08;
@@ -257,13 +265,19 @@ impl World {
     #[mutants::skip]
     fn drift_eruption_site<R: Rng>(&mut self, rng: &mut R) {
         self.eruption_heading += rng.gen_range(-ERUPTION_SITE_TURN..=ERUPTION_SITE_TURN);
+        let speed = self.eruption_drift_speed();
         let (width, height) = (self.width as f32, self.height as f32);
         self.eruption_site = (
-            (self.eruption_site.0 + self.eruption_heading.cos() * ERUPTION_SITE_DRIFT)
-                .rem_euclid(width),
-            (self.eruption_site.1 + self.eruption_heading.sin() * ERUPTION_SITE_DRIFT)
-                .rem_euclid(height),
+            (self.eruption_site.0 + self.eruption_heading.cos() * speed).rem_euclid(width),
+            (self.eruption_site.1 + self.eruption_heading.sin() * speed).rem_euclid(height),
         );
+    }
+
+    /// How far the eruption site travels each tick, which grows with the age
+    /// of the world and goes on growing.
+    fn eruption_drift_speed(&self) -> f32 {
+        let ramped = self.ticks.min(ERUPTION_DRIFT_RAMP_TICKS) as f32;
+        ERUPTION_SITE_DRIFT * ramped / ERUPTION_DRIFT_RAMP_TICKS as f32
     }
 
     /// Whether the world holds less energy than its budget allows. Counts
@@ -1618,8 +1632,11 @@ mod tests {
 
         #[test]
         fn the_site_drifts_every_frame() {
+            // On a world old enough to have any speed at all: a fresh one
+            // holds its site still on purpose.
             let mut world = empty_world();
             let mut rng = StdRng::seed_from_u64(0);
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
             let before = world.eruption_site();
 
             world.feed(&mut rng);
@@ -1629,11 +1646,13 @@ mod tests {
 
         #[test]
         fn each_step_is_the_configured_drift_in_some_direction() {
-            // Pins the step's size exactly: the site moves ERUPTION_SITE_DRIFT
-            // per frame, decomposed across the axes by its heading. Measured
-            // away from the edges so no wrap folds the comparison.
+            // Pins the step's size exactly: the site moves at whatever speed
+            // its age has earned, decomposed across the axes by its heading.
+            // Measured away from the edges so no wrap folds the comparison,
+            // and on a world old enough to be up to full pace.
             let mut world = empty_world();
             let mut rng = StdRng::seed_from_u64(0);
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
             world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
 
             for _ in 0..50 {
@@ -1657,6 +1676,9 @@ mod tests {
             // heading points, which a step-size check alone cannot tell.
             let mut world = empty_world();
             let mut rng = StdRng::seed_from_u64(0);
+            // Old enough to be up to speed: a fresh world holds its site
+            // still on purpose.
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
             world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
             world.eruption_heading = 0.0; // due east
 
@@ -1678,6 +1700,9 @@ mod tests {
         fn the_site_travels_north_on_a_northward_heading() {
             let mut world = empty_world();
             let mut rng = StdRng::seed_from_u64(0);
+            // Old enough to be up to speed: a fresh world holds its site
+            // still on purpose.
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
             world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
             world.eruption_heading = std::f32::consts::FRAC_PI_2; // due south in screen terms
 
@@ -1757,6 +1782,9 @@ mod tests {
         fn the_site_wanders_across_the_world_over_time() {
             let mut world = empty_world();
             let mut rng = StdRng::seed_from_u64(0);
+            // Old enough to be up to speed: a fresh world holds its site
+            // still on purpose.
+            world.ticks = ERUPTION_DRIFT_RAMP_TICKS;
             let start = world.eruption_site();
 
             for _ in 0..2000 {
@@ -3690,6 +3718,93 @@ mod tests {
 
             assert!(world.critters()[0].energy() > 0);
             assert_eq!(world.pellets().len(), 1);
+        }
+    }
+
+    mod eruption_drift {
+        use super::*;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        // How far the site travelled over `ticks`, starting from a world of
+        // the given age.
+        fn distance_covered(from_age: u32, ticks: u32) -> f32 {
+            let mut rng = StdRng::seed_from_u64(4);
+            let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            world.ticks = from_age;
+            let start = world.eruption_site();
+            let mut travelled = 0.0;
+            let mut previous = start;
+            for _ in 0..ticks {
+                world.drift_eruption_site(&mut rng);
+                let now = world.eruption_site();
+                let dx = toroidal_delta(previous.0 as i32, now.0 as i32, TEST_WIDTH as i32) as f32;
+                let dy = toroidal_delta(previous.1 as i32, now.1 as i32, TEST_HEIGHT as i32) as f32;
+                travelled += (dx * dx + dy * dy).sqrt();
+                previous = now;
+                world.ticks += 1;
+            }
+            travelled
+        }
+
+        #[test]
+        fn the_site_takes_ten_minutes_to_reach_full_speed() {
+            // Stated in the time it means rather than only in ticks: every
+            // other test here reads the constant, so any value would satisfy
+            // them, and how long the climb takes is the whole point of it.
+            const TICKS_PER_SECOND: u32 = 60;
+
+            assert_eq!(ERUPTION_DRIFT_RAMP_TICKS / TICKS_PER_SECOND / 60, 10);
+        }
+
+        #[test]
+        fn a_new_world_barely_moves_its_eruption_site() {
+            // Where food comes from should be somewhere, at first. A site that
+            // wanders from the outset never gives a place time to be worth
+            // being in.
+            let travelled = distance_covered(0, 60);
+
+            assert!(
+                travelled < 2.0,
+                "a fresh site should hardly move, went {travelled}"
+            );
+        }
+
+        #[test]
+        fn an_older_world_moves_its_site_faster() {
+            let young = distance_covered(0, 600);
+            let old = distance_covered(ERUPTION_DRIFT_RAMP_TICKS, 600);
+
+            assert!(
+                old > young * 10.0,
+                "an old world should drift far faster: {old} against {young}"
+            );
+        }
+
+        #[test]
+        fn the_site_stops_gathering_speed_once_it_is_up_to_pace() {
+            // The climb has an end: past the ramp a world drifts at a settled
+            // speed rather than winding up without limit.
+            let ramped = distance_covered(ERUPTION_DRIFT_RAMP_TICKS, 600);
+            let much_later = distance_covered(ERUPTION_DRIFT_RAMP_TICKS * 4, 600);
+
+            assert!(
+                (much_later - ramped).abs() < ramped * 0.05,
+                "speed should have settled: {much_later} against {ramped}"
+            );
+        }
+
+        #[test]
+        fn the_speed_climbs_gently_rather_than_in_a_jump() {
+            // The acceleration itself should be hard to notice: a minute on
+            // either side of any moment looks much the same.
+            let before = distance_covered(ERUPTION_DRIFT_RAMP_TICKS, 600);
+            let after = distance_covered(ERUPTION_DRIFT_RAMP_TICKS + 3600, 600);
+
+            assert!(
+                after < before * 2.0,
+                "a minute should not double the pace: {after} against {before}"
+            );
         }
     }
 
