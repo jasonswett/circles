@@ -29,10 +29,24 @@ struct Canvas<'a> {
     height: usize,
 }
 
+impl Canvas<'_> {
+    /// Lights one pixel, wrapping at the edges the way the world does.
+    fn set_with_wrap(&mut self, x: i32, y: i32, color: u32) {
+        let x = x.rem_euclid(self.width as i32) as usize;
+        let y = y.rem_euclid(self.height as i32) as usize;
+        self.buffer[y * self.width + x] = color;
+    }
+}
+
 pub struct Renderer;
 
 impl Renderer {
-    pub fn draw(critter: &Critter, radius: i32, buffer: &mut [u32], width: usize, height: usize) {
+    /// Draws a critter at the size its own energy gives it. The radius is not
+    /// a parameter: feelers start at the body's edge and are placed from the
+    /// critter's own radius, so a caller passing a different one would draw a
+    /// body and feelers that disagreed about where the body ended.
+    pub fn draw(critter: &Critter, buffer: &mut [u32], width: usize, height: usize) {
+        let radius = critter.radius();
         let cx = critter.x();
         let cy = critter.y();
         let inner_radius = radius - OUTLINE_THICKNESS;
@@ -69,6 +83,36 @@ impl Renderer {
             inner_squared: -1,
         };
         Self::fill_ring_with_wrap(&dot, &mut canvas, color);
+
+        // A line out to each sensing disc, and the disc itself. The disc is
+        // what actually feels anything, so drawing it at the size the genome
+        // says makes a critter's reach readable rather than something to be
+        // inferred from where its feelers point.
+        let ((left_x, left_y), (right_x, right_y)) = critter.feeler_tips();
+        let disc_radius = critter.feeler_disc().round() as i32;
+        for (tip_x, tip_y) in [(left_x, left_y), (right_x, right_y)] {
+            let (run, rise) = ((tip_x - cx) as f32, (tip_y - cy) as f32);
+            let length = (run * run + rise * rise).sqrt();
+            let steps = length.round().max(1.0) as i32;
+            // Started at the body's edge rather than its middle, so the line
+            // does not fill the hollow a critter's ring leaves.
+            let first = ((radius as f32 / length) * steps as f32).round() as i32;
+            for step in first..=steps {
+                let along = step as f32 / steps as f32;
+                canvas.set_with_wrap(
+                    cx + (run * along).round() as i32,
+                    cy + (rise * along).round() as i32,
+                    color,
+                );
+            }
+            let disc = Ring {
+                cx: tip_x,
+                cy: tip_y,
+                radius: disc_radius,
+                inner_squared: -1,
+            };
+            Self::fill_ring_with_wrap(&disc, &mut canvas, color);
+        }
     }
 
     pub fn draw_pellet(pellet: &Pellet, buffer: &mut [u32], width: usize, height: usize) {
@@ -160,7 +204,9 @@ fn lerp(from: u8, to: u8, ratio: f32) -> u8 {
 mod tests {
     use super::*;
     use crate::{
-        Critter, Genome, Heading, Instruction, EAST, NORTH, NORTH_EAST, SOUTH, SOUTH_WEST, WEST,
+        Critter, Genome, Heading, Instruction, EAST, MAX_FEELER_ANGLE, MAX_FEELER_DISC,
+        MAX_FEELER_LENGTH, MIN_FEELER_DISC, MIN_FEELER_LENGTH, NORTH, NORTH_EAST, SOUTH,
+        SOUTH_WEST, WEST,
     };
 
     mod interpolate_color_tests {
@@ -455,7 +501,11 @@ mod tests {
             use crate::Instruction;
 
             const INITIAL_ENERGY: u32 = 100;
-            const ON_RING_X_OFFSET: i32 = RADIUS - 1;
+            // Derived from whatever radius the critter's own energy gives it,
+            // since that is the size it is drawn at.
+            fn on_ring_x_offset(critter: &Critter) -> i32 {
+                critter.radius() - 1
+            }
 
             #[test]
             fn a_critter_at_full_energy_renders_in_its_genome_color() {
@@ -464,7 +514,7 @@ mod tests {
                 let buffer = render(&critter);
 
                 assert_eq!(
-                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    pixel_at(&buffer, CENTER + on_ring_x_offset(&critter), CENTER),
                     critter.genome_color()
                 );
             }
@@ -476,7 +526,7 @@ mod tests {
                 let buffer = render(&critter);
 
                 assert_eq!(
-                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    pixel_at(&buffer, CENTER + on_ring_x_offset(&critter), CENTER),
                     0x40_40_40
                 );
             }
@@ -489,7 +539,7 @@ mod tests {
 
                 let halfway = halfway_between(0x40_40_40, critter.genome_color());
                 assert_eq!(
-                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    pixel_at(&buffer, CENTER + on_ring_x_offset(&critter), CENTER),
                     halfway
                 );
             }
@@ -505,7 +555,7 @@ mod tests {
                 let buffer = render(&critter);
 
                 assert_eq!(
-                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    pixel_at(&buffer, CENTER + on_ring_x_offset(&critter), CENTER),
                     critter.genome_color()
                 );
             }
@@ -528,7 +578,7 @@ mod tests {
                 let buffer = render(&critter);
 
                 assert_eq!(
-                    pixel_at(&buffer, CENTER + ON_RING_X_OFFSET, CENTER),
+                    pixel_at(&buffer, CENTER + on_ring_x_offset(&critter), CENTER),
                     0xFF_00_00
                 );
             }
@@ -549,6 +599,237 @@ mod tests {
                 );
                 critter.lose_energy(INITIAL_ENERGY - current_energy);
                 critter
+            }
+        }
+
+        mod feelers {
+            use super::*;
+
+            // An ordinary energy rather than u32::MAX: size grows with
+            // energy, and a critter that rich is thousands of pixels across,
+            // so its feelers land nowhere near the test canvas.
+            const FED: u32 = 250;
+
+            fn feeler_critter(length: f32, angle: f32, disc: f32) -> Critter {
+                let mut genome = Genome::all(Instruction::DoNothing);
+                genome.set_feeler_shape(length, angle, disc);
+                Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, genome)
+            }
+
+            #[test]
+            fn a_critter_draws_a_disc_at_each_feeler_tip() {
+                // The disc is what senses, so the disc is what has to be
+                // visible: a critter's reach should be readable off the
+                // screen rather than inferred.
+                let critter = feeler_critter(20.0, 45.0, 6.0);
+                let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                assert_eq!(pixel_at(&buffer, lx, ly), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, rx, ry), critter.genome_color());
+            }
+
+            #[test]
+            fn a_line_runs_out_to_each_disc() {
+                let critter = feeler_critter(40.0, 45.0, 4.0);
+                let ((lx, ly), _) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                // Partway along, beyond the body and short of the disc.
+                let midx = (CENTER + lx) / 2;
+                let midy = (CENTER + ly) / 2;
+                assert_eq!(pixel_at(&buffer, midx, midy), critter.genome_color());
+            }
+
+            #[test]
+            fn the_line_starts_at_the_body_and_not_before() {
+                // The body is a ring, so a line drawn from the centre would
+                // fill the hollow it leaves. Pins where the line begins:
+                // one step short of the body's edge must still be dark.
+                // Feelers held out to the side, so the head dot -- which sits
+                // ahead of the critter and is nearly as wide as a small body
+                // -- cannot be what lights the pixels being checked.
+                let critter = feeler_critter(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+
+                let buffer = render(&critter);
+
+                let radius = critter.radius();
+                // A right angle to the left of north is due west. Sampled
+                // just inside the ring's inner edge, which is the first pixel
+                // of the hollow a line starting early would fill.
+                assert_eq!(
+                    pixel_at(&buffer, CENTER - radius + OUTLINE_THICKNESS + 1, CENTER),
+                    0,
+                    "the line should not begin inside the body"
+                );
+                assert_eq!(
+                    pixel_at(&buffer, CENTER - radius, CENTER),
+                    critter.genome_color(),
+                    "the line should start at the body's edge"
+                );
+            }
+
+            #[test]
+            fn the_line_runs_the_whole_way_to_the_disc() {
+                // And ends where the disc begins, so there is no gap between
+                // a critter and what it is feeling with.
+                let critter = feeler_critter(30.0, 0.0, MIN_FEELER_DISC);
+                let ((_, ly), _) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                // Every pixel from the body's edge to the tip is lit.
+                for y in ly..=(CENTER - critter.radius()) {
+                    assert_eq!(
+                        pixel_at(&buffer, CENTER, y),
+                        critter.genome_color(),
+                        "gap in the feeler at y={y}"
+                    );
+                }
+            }
+
+            #[test]
+            fn a_longer_feeler_draws_a_longer_line() {
+                // The line's length follows the genome rather than being
+                // fixed: what is drawn has to say what the critter can reach.
+                let short = feeler_critter(MIN_FEELER_LENGTH, 0.0, MIN_FEELER_DISC);
+                let long = feeler_critter(MAX_FEELER_LENGTH, 0.0, MIN_FEELER_DISC);
+
+                let short_buffer = render(&short);
+                let long_buffer = render(&long);
+
+                let lit = |buffer: &[u32], critter: &Critter| {
+                    (1..CENTER)
+                        .filter(|&y| pixel_at(buffer, CENTER, CENTER - y) == critter.genome_color())
+                        .count()
+                };
+                assert!(
+                    lit(&long_buffer, &long) > lit(&short_buffer, &short),
+                    "the longer feeler should light more pixels"
+                );
+            }
+
+            #[test]
+            fn the_discs_are_solid_rather_than_hollow() {
+                // A disc, not a ring: what a feeler senses is the whole patch,
+                // so the whole patch is filled. Sampled off-centre, since the
+                // very middle is lit either way.
+                let critter = feeler_critter(30.0, 45.0, MAX_FEELER_DISC);
+                let ((lx, ly), _) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                for offset in 1..=(MAX_FEELER_DISC as i32 - 2) {
+                    assert_eq!(
+                        pixel_at(&buffer, lx + offset, ly),
+                        critter.genome_color(),
+                        "the disc should be filled at {offset} from its middle"
+                    );
+                }
+            }
+
+            #[test]
+            fn each_feeler_is_drawn_on_its_own_side() {
+                // Held at an angle that puts the two tips at different
+                // distances from the critter on each axis, so a line drawn
+                // towards the wrong side lands somewhere nothing is drawn.
+                // Facing a diagonal with the feelers held wide, so the two
+                // lines are not mirror images of each other: with a critter
+                // facing north and its feelers at equal angles, mirroring one
+                // line lands it exactly on the other and nothing can tell.
+                let mut genome = Genome::all(Instruction::DoNothing);
+                genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+                let critter =
+                    Critter::with_genome(CENTER, CENTER, NORTH_EAST, 1, 1, FED, 0, genome);
+                let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                // The tips straddle the critter, so a mirrored line would put
+                // the left feeler's pixels where the right one's belong.
+                assert!(lx < CENTER && ry > CENTER, "tips should sit apart");
+                assert_eq!(pixel_at(&buffer, lx, ly), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, rx, ry), critter.genome_color());
+                // Partway along the left feeler's line, which is what a
+                // mirrored line would move: the tips themselves are drawn by
+                // the discs and would still land correctly.
+                let midx = (CENTER + lx) / 2;
+                let midy = (CENTER + ly) / 2;
+                assert_eq!(
+                    pixel_at(&buffer, midx, midy),
+                    critter.genome_color(),
+                    "the left feeler's line should run towards its own tip"
+                );
+                // Mirroring the left feeler about the critter's x lands on the
+                // right feeler, which is drawn there legitimately. What tells
+                // them apart is that the left line's own pixels stop being
+                // lit if it is mirrored, so this counts them.
+                let left_pixels = (1..40)
+                    .filter(|&step| {
+                        let along = step as f32 / 40.0;
+                        let x = CENTER + ((lx - CENTER) as f32 * along).round() as i32;
+                        let y = CENTER + ((ly - CENTER) as f32 * along).round() as i32;
+                        pixel_at(&buffer, x, y) == critter.genome_color()
+                    })
+                    .count();
+                assert!(
+                    left_pixels > 20,
+                    "most of the left feeler's line should be lit, {left_pixels} were"
+                );
+            }
+
+            #[test]
+            fn the_discs_are_drawn_the_size_the_genome_says() {
+                // A bigger disc has to look bigger, or the picture stops
+                // saying what the critter can feel.
+                let small = feeler_critter(20.0, 45.0, MIN_FEELER_DISC);
+                let large = feeler_critter(20.0, 45.0, MAX_FEELER_DISC);
+                let ((lx, ly), _) = large.feeler_tips();
+                // Just inside the large disc, outside the small one.
+                let probe = MAX_FEELER_DISC as i32 - 1;
+
+                let small_buffer = render(&small);
+                let large_buffer = render(&large);
+
+                assert_eq!(
+                    pixel_at(&large_buffer, lx + probe, ly),
+                    large.genome_color()
+                );
+                let ((sx, sy), _) = small.feeler_tips();
+                assert_eq!(pixel_at(&small_buffer, sx + probe, sy), 0);
+            }
+
+            #[test]
+            fn the_feelers_are_drawn_in_the_critters_own_colour() {
+                // Part of the animal, so they dim along with it.
+                let mut critter = feeler_critter(20.0, 45.0, 5.0);
+                critter.lose_energy(critter.energy() / 2);
+                let ((lx, ly), _) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                let body = pixel_at(&buffer, CENTER + critter.radius() - 1, CENTER);
+                assert_eq!(pixel_at(&buffer, lx, ly), body);
+            }
+
+            #[test]
+            fn the_feelers_turn_with_the_critter() {
+                let mut genome = Genome::all(Instruction::DoNothing);
+                genome.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 5.0);
+                let critter = Critter::with_genome(CENTER, CENTER, EAST, 1, 1, FED, 0, genome);
+                let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                // Facing east, a right angle either side points north and south.
+                assert!(
+                    ly < CENTER && ry > CENTER,
+                    "tips should straddle the critter"
+                );
+                assert_eq!(pixel_at(&buffer, lx, ly), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, rx, ry), critter.genome_color());
             }
         }
 
@@ -727,22 +1008,29 @@ mod tests {
 
         // Helpers below the tests, in keeping with hiding incidental detail.
 
+        // Energy chosen so the critter's own radius comes out at RADIUS,
+        // since that is what it is drawn at: size follows energy, so a test
+        // critter cannot pick the two independently.
+        const ENERGY_FOR_TEST_RADIUS: u32 = 2528;
+
         fn stationary_critter(x: i32, y: i32, heading: Heading) -> Critter {
-            Critter::with_genome(
+            let critter = Critter::with_genome(
                 x,
                 y,
                 heading,
                 1,
                 1,
-                u32::MAX,
+                ENERGY_FOR_TEST_RADIUS,
                 0,
                 Genome::all(Instruction::DoNothing),
-            )
+            );
+            debug_assert_eq!(critter.radius(), RADIUS, "energy no longer gives RADIUS");
+            critter
         }
 
         fn render(critter: &Critter) -> Vec<u32> {
             let mut buffer = vec![0u32; CANVAS * CANVAS];
-            Renderer::draw(critter, RADIUS, &mut buffer, CANVAS, CANVAS);
+            Renderer::draw(critter, &mut buffer, CANVAS, CANVAS);
             buffer
         }
 

@@ -134,7 +134,7 @@ const FEELER_DISC_OFFSET: usize = FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS;
 const FEELER_BITS: usize = 3 * FEELER_FIELD_BITS;
 /// How far a feeler reaches beyond the body, in pixels.
 pub const MIN_FEELER_LENGTH: f32 = 8.0;
-pub const MAX_FEELER_LENGTH: f32 = 68.0;
+pub const MAX_FEELER_LENGTH: f32 = 34.0;
 /// How far to either side of the heading a feeler is held, in degrees.
 pub const MAX_FEELER_ANGLE: f32 = 90.0;
 /// The radius of the patch at a feeler's tip that actually senses.

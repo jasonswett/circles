@@ -1,4 +1,4 @@
-use circles::{Renderer, World, CRITTER_RADIUS};
+use circles::{Renderer, World};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -19,7 +19,7 @@ fn the_simulation_can_run_for_many_frames_without_panicking() {
             Renderer::draw_pellet(pellet, &mut frame_pixels, WIDTH, HEIGHT);
         }
         for critter in world.critters() {
-            Renderer::draw(critter, CRITTER_RADIUS, &mut frame_pixels, WIDTH, HEIGHT);
+            Renderer::draw(critter, &mut frame_pixels, WIDTH, HEIGHT);
         }
     }
 

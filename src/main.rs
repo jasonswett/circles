@@ -185,7 +185,7 @@ fn main() {
             Renderer::draw_pellet(pellet, &mut frame_pixels, width, height);
         }
         for critter in world.critters() {
-            Renderer::draw(critter, critter.radius(), &mut frame_pixels, width, height);
+            Renderer::draw(critter, &mut frame_pixels, width, height);
         }
         let energy_text = format!("Energy: {displayed_total_energy}");
         let max_energy_text = format!("Max energy: {}", world.original_total_energy());
