@@ -72,8 +72,6 @@ pub const UPKEEP_PERCENT: u32 = 1;
 // growing its first feeler is not charged for the privilege until the thing
 // is big enough to be worth something.
 pub const FEELER_UPKEEP_PERCENT: u32 = 10;
-pub const MOVE_SLOW_COST: u32 = 1;
-pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
 const FAST_STEP_MULTIPLIER: i32 = 2;
 
@@ -517,30 +515,11 @@ impl Critter {
         grown * area * FEELER_UPKEEP_PERCENT / 100
     }
 
-    /// The share of its own energy a critter spends to carry itself one step.
-    //
-    // The `*` is an equivalent mutant whenever UPKEEP_PERCENT is one, since
-    // multiplying and dividing by one agree. It is a tuning knob rather than a
-    // fixed part of the design, so the equivalence comes and goes with it.
-    #[mutants::skip]
-    fn hauling_for(energy: u32) -> u32 {
-        energy / 100 * UPKEEP_PERCENT
-    }
-
-    /// Moves `multiplier` steps along the heading, charging `cost` plus a
-    /// share of the critter's own energy for the distance covered. A critter
-    /// that cannot cover the fare pays what it has and moves anyway.
-    fn travel(&mut self, multiplier: i32, cost: u32, instruction: Instruction) -> TickOutcome {
-        // Charged per unit of distance, so a longer stride costs proportionally
-        // more of the body being hauled.
-        let hauling = Self::hauling_for(self.energy) * multiplier as u32;
-        // Charged against what the critter has rather than refused outright.
-        // A critter that could not afford a step used to stay where it was,
-        // which is a trap and not a cost: movement is the only way to reach
-        // food, so anything too poor to move could never recover and simply
-        // stood still until something ate it. Being poor should slow a
-        // critter down, not strand it.
-        self.energy = self.energy.saturating_sub(cost + hauling);
+    /// Moves `multiplier` steps along the heading. Getting about is free: a
+    /// critter pays the turn's upkeep whatever it does with the turn, and
+    /// charging again for the one thing that can find food only ever punished
+    /// the critters with least of it.
+    fn travel(&mut self, multiplier: i32, instruction: Instruction) -> TickOutcome {
         // Rounded to whole pixels, so a critter on a shallow angle drifts
         // rather than tracking the line exactly. The unit vector is already
         // one long, so nothing has to correct a diagonal.
@@ -554,10 +533,8 @@ impl Critter {
 
     fn execute(&mut self, instruction: Instruction) -> TickOutcome {
         match instruction {
-            Instruction::MoveSlow => self.travel(1, MOVE_SLOW_COST, Instruction::MoveSlow),
-            Instruction::MoveFast => {
-                self.travel(FAST_STEP_MULTIPLIER, MOVE_FAST_COST, Instruction::MoveFast)
-            }
+            Instruction::MoveSlow => self.travel(1, Instruction::MoveSlow),
+            Instruction::MoveFast => self.travel(FAST_STEP_MULTIPLIER, Instruction::MoveFast),
             Instruction::TurnLeft15
             | Instruction::TurnLeft45
             | Instruction::TurnLeft90
@@ -1450,20 +1427,6 @@ mod tests {
         }
 
         #[test]
-        fn standing_still_is_cheaper_than_travelling() {
-            // Upkeep applies to everything, but moving still costs more on top
-            // of it, so the choice of what to do with a turn still matters.
-            let start = 10_000;
-            let mut idle = critter_doing(Instruction::DoNothing, start);
-            let mut walker = critter_doing(Instruction::MoveSlow, start);
-
-            idle.tick(true);
-            walker.tick(true);
-
-            assert!(walker.energy() < idle.energy());
-        }
-
-        #[test]
         fn upkeep_never_falls_below_one() {
             // A critter too poor for its share to round to anything still
             // winds down, so nothing can idle indefinitely on a scrap.
@@ -1508,6 +1471,28 @@ mod tests {
         }
 
         #[test]
+        fn getting_about_costs_nothing_beyond_the_turn_itself() {
+            // A critter pays the turn's upkeep whatever it does with the turn,
+            // and nothing more for choosing to move. Charging for the one
+            // thing that can find food only ever pressed hardest on the
+            // critters with least of it.
+            // Probed at an energy where a stray charge would show. At a round
+            // ten thousand, taking one first drops the upkeep's own rounding
+            // by one as well, and the two cancel exactly.
+            const ODD_ENOUGH: u32 = 10_050;
+            let mut still = critter_running(Instruction::DoNothing, ODD_ENOUGH);
+            let mut walking = critter_running(Instruction::MoveSlow, ODD_ENOUGH);
+            let mut running = critter_running(Instruction::MoveFast, ODD_ENOUGH);
+
+            still.tick(true);
+            walking.tick(true);
+            running.tick(true);
+
+            assert_eq!(walking.energy(), still.energy());
+            assert_eq!(running.energy(), still.energy());
+        }
+
+        #[test]
         fn moving_fast_covers_twice_the_ground_of_moving_slow() {
             let mut slow = critter_running(Instruction::MoveSlow, PLENTY);
             let mut fast = critter_running(Instruction::MoveFast, PLENTY);
@@ -1518,181 +1503,6 @@ mod tests {
             let slow_distance = START_Y - slow.y();
             let fast_distance = START_Y - fast.y();
             assert_eq!(fast_distance, slow_distance * 2);
-        }
-
-        #[test]
-        fn moving_fast_costs_four_times_what_moving_slow_costs() {
-            // Twice the speed for four times the price: the cost of covering
-            // ground rises with the square of the pace, the way drag does.
-            //
-            // Probed with a critter too poor for the proportional charge to
-            // round to anything, so what is measured is the flat cost alone.
-            const TOO_POOR_TO_HAUL: u32 = 40;
-            let mut slow = critter_running(Instruction::MoveSlow, TOO_POOR_TO_HAUL);
-            let mut fast = critter_running(Instruction::MoveFast, TOO_POOR_TO_HAUL);
-
-            slow.tick(true);
-            fast.tick(true);
-
-            let slow_spent = TOO_POOR_TO_HAUL - slow.energy();
-            let fast_spent = TOO_POOR_TO_HAUL - fast.energy();
-            // Both also pay the flat cost of living for the tick.
-            let upkeep = Critter::upkeep_for(TOO_POOR_TO_HAUL);
-            assert_eq!(fast_spent - upkeep, (slow_spent - upkeep) * 4);
-        }
-
-        #[test]
-        fn hurrying_is_dearer_per_unit_of_ground_covered() {
-            // The property that makes the choice a real one: speed buys
-            // distance at a worsening exchange rate rather than a fixed one.
-            //
-            // Measured against the flat cost alone, on a critter too poor for
-            // the proportional charges to round to anything. Those are levied
-            // once a turn rather than once a step, so on a rich critter a
-            // longer stride spreads the turn's upkeep over more ground and
-            // hides the penalty that the flat cost expresses.
-            const TOO_POOR_TO_HAUL: u32 = 40;
-            let mut slow = critter_running(Instruction::MoveSlow, TOO_POOR_TO_HAUL);
-            let mut fast = critter_running(Instruction::MoveFast, TOO_POOR_TO_HAUL);
-
-            slow.tick(true);
-            fast.tick(true);
-
-            let upkeep = Critter::upkeep_for(TOO_POOR_TO_HAUL) as f32;
-            let slow_rate = (TOO_POOR_TO_HAUL - slow.energy()) as f32 - upkeep;
-            let fast_rate = (TOO_POOR_TO_HAUL - fast.energy()) as f32 - upkeep;
-            let slow_per_pixel = slow_rate / (START_Y - slow.y()) as f32;
-            let fast_per_pixel = fast_rate / (START_Y - fast.y()) as f32;
-            assert!(
-                fast_per_pixel > slow_per_pixel,
-                "fast should cost more per pixel: {fast_per_pixel} vs {slow_per_pixel}"
-            );
-        }
-
-        #[test]
-        fn a_rich_critter_pays_more_to_move_than_a_poor_one() {
-            // Hauling a large body costs more than hauling a small one, the
-            // way an animal's cost of travel goes with its mass.
-            let mut poor = critter_running(Instruction::MoveSlow, 200);
-            let mut rich = critter_running(Instruction::MoveSlow, 20_000);
-
-            poor.tick(true);
-            rich.tick(true);
-
-            let poor_spent = 200 - poor.energy();
-            let rich_spent = 20_000 - rich.energy();
-            assert!(
-                rich_spent > poor_spent * 10,
-                "the rich critter should pay far more: {rich_spent} vs {poor_spent}"
-            );
-        }
-
-        #[test]
-        fn moving_costs_the_same_share_of_energy_at_any_size() {
-            // Proportional rather than flat: what changes with wealth is the
-            // amount, not the share, so no reserve makes travel free.
-            let share = |energy: u32| {
-                let mut critter = critter_running(Instruction::MoveSlow, energy);
-                critter.tick(true);
-                (energy - critter.energy()) as f32 / energy as f32
-            };
-
-            let modest = share(10_000);
-            let vast = share(100_000);
-            // A walker pays the hauling charge and then the turn's upkeep on
-            // what is left, so the two compound rather than simply adding.
-            let rate = UPKEEP_PERCENT as f32 / 100.0;
-            let expected = rate + (1.0 - rate) * rate;
-
-            // Pinned against the expected share, not merely against each
-            // other: two costs of zero would agree just as closely.
-            assert!(
-                (modest - expected).abs() < 0.005 && (vast - expected).abs() < 0.005,
-                "expected a {expected} share, got {modest} and {vast}"
-            );
-        }
-
-        #[test]
-        fn a_poor_critter_still_pays_something_to_move() {
-            // The flat cost survives underneath, so travel is never free even
-            // for a critter with almost nothing.
-            let mut critter = critter_running(Instruction::MoveSlow, 50);
-
-            critter.tick(true);
-
-            assert!(critter.energy() < 50);
-        }
-
-        #[test]
-        fn covering_more_ground_costs_more_of_a_rich_critters_energy() {
-            // The proportional charge is per unit of distance, so hurrying
-            // costs a large critter more than walking does.
-            let mut walker = critter_running(Instruction::MoveSlow, 20_000);
-            let mut runner = critter_running(Instruction::MoveFast, 20_000);
-
-            walker.tick(true);
-            runner.tick(true);
-
-            let walked = 20_000 - walker.energy();
-            let ran = 20_000 - runner.energy();
-            assert!(ran > walked, "running should cost more: {ran} vs {walked}");
-        }
-
-        #[test]
-        fn a_critter_too_spent_to_pay_still_moves() {
-            // Being poor slows a critter down; it does not strand it. Movement
-            // is the only way to reach food, so a critter refused a step it
-            // could not afford could never recover -- it would stand still
-            // until something ate it.
-            let mut critter = critter_running(Instruction::MoveFast, MOVE_FAST_COST);
-
-            critter.tick(true);
-
-            assert!(critter.y() < START_Y, "it should have moved anyway");
-        }
-
-        #[test]
-        fn a_longer_stride_hauls_proportionally_more() {
-            // The hauling charge is per unit of distance, so a fast step costs
-            // twice the share a slow one does. Probed high enough that the
-            // share rounds to something whatever the rate is set to.
-            let rich = 100_000;
-            let mut walker = critter_running(Instruction::MoveSlow, rich);
-            let mut runner = critter_running(Instruction::MoveFast, rich);
-
-            walker.tick(true);
-            runner.tick(true);
-
-            // The turn's upkeep is charged on what is left after hauling, so
-            // the two do not separate cleanly. What the extra stride costs is
-            // the difference between the paces, and that must be one whole
-            // hauling charge.
-            let walked = rich - walker.energy();
-            let ran = rich - runner.energy();
-            let extra_stride = ran - walked - (MOVE_FAST_COST - MOVE_SLOW_COST);
-            let one_haul = rich / 100 * UPKEEP_PERCENT;
-            let upkeep_relief = one_haul / 100 * UPKEEP_PERCENT;
-            assert_eq!(extra_stride, one_haul - upkeep_relief);
-        }
-
-        #[test]
-        fn a_critter_that_overpays_for_a_step_is_left_with_nothing() {
-            let mut critter = critter_running(Instruction::MoveFast, MOVE_FAST_COST - 1);
-
-            critter.tick(true);
-
-            assert_eq!(critter.energy(), 0);
-        }
-
-        #[test]
-        fn a_critter_too_spent_to_hurry_can_still_walk() {
-            // Slow movement remains available to a critter that cannot afford
-            // to run, so exhaustion changes the pace rather than stopping it.
-            let mut critter = critter_running(Instruction::MoveSlow, MOVE_FAST_COST);
-
-            critter.tick(true);
-
-            assert!(critter.y() < START_Y);
         }
     }
 
