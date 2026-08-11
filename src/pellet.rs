@@ -74,7 +74,7 @@ pub const PELLET_MIN_DRIFT: f32 = 0.1;
 pub const PELLET_COLOR: u32 = 0x00_FF_00;
 pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
-pub const PELLETS_PER_POISON: usize = 25;
+pub const PELLETS_PER_POISON: usize = 50;
 pub const PELLET_ENERGY: u32 = 200;
 /// The share of a critter's energy that poison takes. Proportional rather
 /// than a fixed amount, so poison stays worth avoiding however much a critter

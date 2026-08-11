@@ -27,7 +27,7 @@ pub const REFERENCE_ENERGY: u32 = 250;
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
 // reproduction attempt cost something the parent can't recover by eating
 // the child.
-pub const SPLIT_ATTEMPT_COST: u32 = 5;
+pub const SPLIT_ATTEMPT_COST: u32 = 60;
 // How long a division takes. A critter that fires Split is committed for this
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter

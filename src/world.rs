@@ -67,7 +67,7 @@ const NUM_CRITTERS: usize = 4000;
 // seeded world is not immediately judged too small and reset. Small, because
 // the opening moments are the leanest: no food has been delivered yet, so
 // every critter alive is spending energy it has no way to replace.
-const SEED_POPULATION: usize = 50;
+const SEED_POPULATION: usize = 100;
 // How much food a world's energy budget is sized for. Not a ceiling on
 // pellets: nothing caps the larder, which settles wherever consumption meets
 // the feed rate.
@@ -92,7 +92,7 @@ const FEELER_CELL_SIZE: i32 = 24;
 const POISON_CHECK_INTERVAL_TICKS: u32 = 10;
 // How often a replenishment begins. At ~60 FPS this is ten seconds: a
 // world starts feeding on this cadence and keeps at it until its energy is
-pub const MIN_POPULATION: usize = 20;
+pub const MIN_POPULATION: usize = 50;
 const INITIAL_ENERGY: u32 = 60;
 const TICKS_PER_INSTRUCTION: u32 = 5;
 const STEP_SIZE: i32 = 5;
@@ -3917,7 +3917,15 @@ mod tests {
 
             let before = world.eruption_site();
             world.drift_eruption_site(&mut rng);
-            assert_eq!(world.eruption_site(), before);
+
+            // Not exactly equal: a speed of zero still runs through a sine and
+            // a cosine, which come back a rounding error away from where they
+            // started.
+            let after = world.eruption_site();
+            assert!(
+                (after.0 - before.0).abs() < 0.001 && (after.1 - before.1).abs() < 0.001,
+                "a fresh world's site should hold still, went from {before:?} to {after:?}"
+            );
         }
 
         #[test]
