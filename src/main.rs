@@ -1,6 +1,7 @@
 use circles::{
     format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
     PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, WorldRecord,
+    SEEDING_TICKS, TICKS_PER_SECOND,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
@@ -35,7 +36,10 @@ const SEED_INTERVAL_FRAMES: u32 = 30;
 // target. Long enough that critters keep arriving while the larder is still
 // filling: seeded critters that appear before there is food to find simply
 // starve, so the window outlasts the world's first stock of food.
-const SEED_WINDOW: Duration = Duration::from_secs(120);
+//
+// Taken from the world's own constant rather than stated again here, since the
+// eruption site waits on the same period and the two must not drift apart.
+const SEED_WINDOW: Duration = Duration::from_secs((SEEDING_TICKS / TICKS_PER_SECOND) as u64);
 // Minimum FPS at which work that grows the simulation (splitting, pellet
 // replenishment) is allowed to run. Below this, the simulation throttles
 // growth so it can recover.

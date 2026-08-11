@@ -26,6 +26,13 @@ const ERUPTION_DRIFT_RAMP_TICKS: u32 = 6 * 60 * 60;
 // world that has fallen this far starts its food over and has to hold a
 // population again before it moves.
 const DRIFT_POPULATION_FLOOR: usize = 100;
+/// How long a world goes on being seeded with critters, in ticks. Lives here
+/// rather than beside the loop that does the seeding because the eruption site
+/// waits on the same period: food that walks away from critters while they are
+/// still being put down never gives any of them a place to start.
+pub const SEEDING_TICKS: u32 = 120 * TICKS_PER_SECOND;
+/// Frames a second, which is what the frame loop is paced to.
+pub const TICKS_PER_SECOND: u32 = 60;
 // How sharply the site's heading can turn each frame, in radians. Low enough
 // that the source wanders on a curve rather than jittering in place.
 const ERUPTION_SITE_TURN: f32 = 0.08;
@@ -270,7 +277,7 @@ impl World {
     // distribution of headings as adding it.
     #[mutants::skip]
     fn drift_eruption_site<R: Rng>(&mut self, rng: &mut R) {
-        if self.critters.len() < DRIFT_POPULATION_FLOOR {
+        if self.ticks < SEEDING_TICKS || self.critters.len() < DRIFT_POPULATION_FLOOR {
             self.drift_age = 0;
             return;
         }
@@ -1607,6 +1614,7 @@ mod tests {
                     .critters
                     .push(spawn_critter(TEST_WIDTH, TEST_HEIGHT, &mut rng));
             }
+            world.ticks = SEEDING_TICKS;
             world.drift_age = ERUPTION_DRIFT_RAMP_TICKS;
             world
         }
@@ -3746,6 +3754,7 @@ mod tests {
                     .critters
                     .push(spawn_critter(TEST_WIDTH, TEST_HEIGHT, &mut rng));
             }
+            world.ticks = SEEDING_TICKS;
             world.drift_age = from_age;
             let start = world.eruption_site();
             let mut travelled = 0.0;
@@ -3766,6 +3775,9 @@ mod tests {
         fn world_of(population: usize) -> World {
             let mut rng = StdRng::seed_from_u64(4);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            // Past its seeding, since a world still being stocked holds its
+            // site still whatever else is true of it.
+            world.ticks = SEEDING_TICKS;
             world.drift_age = ERUPTION_DRIFT_RAMP_TICKS;
             world.critters.clear();
             for _ in 0..population {
@@ -3774,6 +3786,59 @@ mod tests {
                     .push(spawn_critter(TEST_WIDTH, TEST_HEIGHT, &mut rng));
             }
             world
+        }
+
+        #[test]
+        fn the_seeding_period_is_two_minutes() {
+            // Stated in the time it means rather than only in ticks: every
+            // other test reads the constant, so any value would satisfy them,
+            // and how long a world is stocked for is the point of it.
+            assert_eq!(SEEDING_TICKS / TICKS_PER_SECOND / 60, 2);
+        }
+
+        #[test]
+        fn the_site_holds_still_while_a_world_is_still_being_seeded() {
+            // Critters are still arriving, and a world whose food walks away
+            // from them while they are being put down never gives any of them
+            // a place to start.
+            let mut world = world_of(DRIFT_POPULATION_FLOOR);
+            world.ticks = SEEDING_TICKS - 1;
+            let mut rng = StdRng::seed_from_u64(0);
+            let before = world.eruption_site();
+
+            for _ in 0..60 {
+                world.drift_eruption_site(&mut rng);
+            }
+
+            assert_eq!(world.eruption_site(), before);
+        }
+
+        #[test]
+        fn the_site_may_move_once_the_seeding_is_done() {
+            let mut world = world_of(DRIFT_POPULATION_FLOOR);
+            world.ticks = SEEDING_TICKS;
+            let mut rng = StdRng::seed_from_u64(0);
+            let before = world.eruption_site();
+
+            world.drift_eruption_site(&mut rng);
+
+            assert_ne!(world.eruption_site(), before);
+        }
+
+        #[test]
+        fn a_world_gathers_no_drift_speed_while_it_is_being_seeded() {
+            // The clock waits with the site, so a world comes out of its
+            // seeding at a standstill rather than already up to pace.
+            let mut world = world_of(DRIFT_POPULATION_FLOOR);
+            world.ticks = 0;
+            world.drift_age = 0;
+            let mut rng = StdRng::seed_from_u64(0);
+
+            for _ in 0..600 {
+                world.drift_eruption_site(&mut rng);
+            }
+
+            assert_eq!(world.drift_age, 0);
         }
 
         #[test]
@@ -3933,8 +3998,6 @@ mod tests {
             // Stated in the time it means rather than only in ticks: every
             // other test here reads the constant, so any value would satisfy
             // them, and how long the climb takes is the whole point of it.
-            const TICKS_PER_SECOND: u32 = 60;
-
             assert_eq!(ERUPTION_DRIFT_RAMP_TICKS / TICKS_PER_SECOND / 60, 6);
         }
 

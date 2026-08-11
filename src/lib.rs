@@ -37,5 +37,5 @@ pub use renderer::Renderer;
 pub use snapshot::format_block as format_snapshot_block;
 pub use stagnation_detector::StagnationDetector;
 pub use text::pixels as text_pixels;
-pub use world::{World, PELLET_BATCH_SIZE};
+pub use world::{World, PELLET_BATCH_SIZE, SEEDING_TICKS, TICKS_PER_SECOND};
 pub use world_record::WorldRecord;
