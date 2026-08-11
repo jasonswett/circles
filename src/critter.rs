@@ -251,6 +251,15 @@ impl Critter {
         )
     }
 
+    /// Whether this critter grew a feeler on each side.
+    pub fn has_left_feeler(&self) -> bool {
+        self.genome.has_left_feeler()
+    }
+
+    pub fn has_right_feeler(&self) -> bool {
+        self.genome.has_right_feeler()
+    }
+
     /// How big a patch each feeler senses.
     pub fn feeler_disc(&self) -> f32 {
         self.genome.feeler_disc()

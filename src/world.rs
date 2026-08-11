@@ -321,7 +321,18 @@ impl World {
                 })
                 .map_or(0, |pellet| pellet.color())
             };
-            let (l, r) = (under(left), under(right));
+            // A feeler a critter never grew senses nothing, whatever is where
+            // its tip would have been.
+            let l = if critter.has_left_feeler() {
+                under(left)
+            } else {
+                0
+            };
+            let r = if critter.has_right_feeler() {
+                under(right)
+            } else {
+                0
+            };
             critter.set_feeler_colors(l, r);
         }
     }
@@ -3020,9 +3031,12 @@ mod tests {
 
         // A critter whose feelers are held at `angle` degrees either side, of
         // the given length and disc size, facing north.
+        // Grown both feelers, since these tests are about what a feeler does
+        // rather than whether a critter has one.
         fn feeler_critter(x: i32, y: i32, length: f32, angle: f32, disc: f32) -> Critter {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(length, angle, disc);
+            genome.set_feelers_present(true, true);
             Critter::with_genome(x, y, NORTH, u32::MAX, 1, 60, 0, genome)
         }
 
@@ -3212,6 +3226,49 @@ mod tests {
 
             assert_eq!(world.critters()[0].right_color(), crate::PELLET_COLOR);
             assert_eq!(world.critters()[0].left_color(), 0);
+        }
+
+        #[test]
+        fn a_critter_without_feelers_senses_nothing_through_them() {
+            // A feeler a critter never grew reports darkness however much food
+            // is sitting where its tip would have been.
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(30.0, 45.0, 4.0);
+            let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
+            let (tx, ty) = critter.feeler_tips().0;
+            let (rx, ry) = critter.feeler_tips().1;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(tx, ty), Pellet::at(rx, ry)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), 0);
+            assert_eq!(world.critters()[0].right_color(), 0);
+        }
+
+        #[test]
+        fn a_critter_with_one_feeler_senses_only_through_that_one() {
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(30.0, 45.0, 4.0);
+            genome.set_feelers_present(true, false);
+            let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
+            let (lx, ly) = critter.feeler_tips().0;
+            let (rx, ry) = critter.feeler_tips().1;
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![critter],
+                vec![Pellet::at(lx, ly), Pellet::at(rx, ry)],
+            );
+
+            world.sense_feelers();
+
+            assert_eq!(world.critters()[0].left_color(), crate::PELLET_COLOR);
+            assert_eq!(world.critters()[0].right_color(), 0);
         }
 
         #[test]

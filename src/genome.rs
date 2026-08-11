@@ -141,7 +141,17 @@ const FEELER_FIELD_BITS: usize = 4;
 const FEELER_LENGTH_OFFSET: usize = OPCODE_STREAM_OFFSET + OPCODE_BITS;
 const FEELER_ANGLE_OFFSET: usize = FEELER_LENGTH_OFFSET + FEELER_FIELD_BITS;
 const FEELER_DISC_OFFSET: usize = FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS;
-const FEELER_BITS: usize = 3 * FEELER_FIELD_BITS;
+// Whether a critter grows each feeler at all, one bit apiece. Separate bits
+// rather than a count, so a lineage can climb towards feelers a step at a
+// time: one is worth having on its own, and the second need not arrive with
+// the first.
+const LEFT_FEELER_PRESENT_OFFSET: usize = FEELER_DISC_OFFSET + FEELER_FIELD_BITS;
+const RIGHT_FEELER_PRESENT_OFFSET: usize = LEFT_FEELER_PRESENT_OFFSET + 1;
+// Measured from where the region starts to where its last field ends, rather
+// than counted up again by hand: a total that drifts from the offsets it is
+// meant to cover either drops a field out of the genome or pads it with bits
+// nothing reads.
+const FEELER_BITS: usize = RIGHT_FEELER_PRESENT_OFFSET + 1 - FEELER_LENGTH_OFFSET;
 /// How far a feeler reaches beyond the body, in pixels.
 pub const MIN_FEELER_LENGTH: f32 = 8.0;
 pub const MAX_FEELER_LENGTH: f32 = 34.0;
@@ -200,6 +210,12 @@ impl Genome {
         // boundary and leaves none, but a future field could reintroduce
         // them, and pad bits that to_bits does not emit would break a round
         // trip through from_bits.
+        // A fresh critter is blind. Feelers are the one thing a lineage has to
+        // earn: everything else about a genome starts wherever chance put it,
+        // but a feeler arrives only where mutation grows one, so a population
+        // that has them has shown they pay for themselves.
+        write_bits(&mut bytes, LEFT_FEELER_PRESENT_OFFSET, 1, 0);
+        write_bits(&mut bytes, RIGHT_FEELER_PRESENT_OFFSET, 1, 0);
         #[allow(clippy::reversed_empty_ranges)]
         for bit in TOTAL_BITS..(TOTAL_BYTES * 8) {
             write_bits(&mut bytes, bit, 1, 0);
@@ -483,6 +499,24 @@ impl Genome {
         bits as f32 / max_value * MAX_MUTATION_RATE
     }
 
+    /// Grows or removes each feeler. Test-only: in a running world these
+    /// change only through mutation.
+    #[cfg(test)]
+    pub fn set_feelers_present(&mut self, left: bool, right: bool) {
+        write_bits(
+            &mut self.bytes,
+            LEFT_FEELER_PRESENT_OFFSET,
+            1,
+            u32::from(left),
+        );
+        write_bits(
+            &mut self.bytes,
+            RIGHT_FEELER_PRESENT_OFFSET,
+            1,
+            u32::from(right),
+        );
+    }
+
     /// Sets the feeler shape directly. Test-only: in a running world these
     /// change only through mutation.
     #[cfg(test)]
@@ -509,6 +543,15 @@ impl Genome {
             FEELER_FIELD_BITS,
             field(disc, MIN_FEELER_DISC, MAX_FEELER_DISC),
         );
+    }
+
+    /// Whether this critter grew a feeler on each side.
+    pub fn has_left_feeler(&self) -> bool {
+        read_bits(&self.bytes, LEFT_FEELER_PRESENT_OFFSET, 1) != 0
+    }
+
+    pub fn has_right_feeler(&self) -> bool {
+        read_bits(&self.bytes, RIGHT_FEELER_PRESENT_OFFSET, 1) != 0
     }
 
     /// How far this critter's feelers reach beyond its body.
@@ -2467,6 +2510,125 @@ mod tests {
                 .map(|slot| shaped.decode_at(slot))
                 .collect();
             assert_eq!(before, after);
+        }
+
+        #[test]
+        fn a_fresh_genome_carries_no_stray_padding() {
+            // The bits past TOTAL_BITS are not part of the genome and to_bits
+            // does not emit them, so a random genome that left them set would
+            // not survive a round trip back through from_bits.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+            use rand::SeedableRng;
+
+            for _ in 0..50 {
+                let genome = Genome::random(&mut rng);
+
+                let round_tripped = Genome::from_bits(&genome.to_bits()).unwrap();
+                assert_eq!(round_tripped.bytes, genome.bytes);
+            }
+        }
+
+        #[test]
+        fn a_fresh_genome_has_no_feelers_at_all() {
+            // Every world starts blind. Feelers arrive only where mutation
+            // puts them, so a population that has them has demonstrated they
+            // are worth their cost rather than being handed them at the start.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+            use rand::SeedableRng;
+
+            for _ in 0..200 {
+                let genome = Genome::random(&mut rng);
+
+                assert!(!genome.has_left_feeler());
+                assert!(!genome.has_right_feeler());
+            }
+        }
+
+        #[test]
+        fn a_feeler_can_still_be_grown_by_mutation() {
+            // Blind at the start, but not blind forever: the bits are ordinary
+            // genome and mutate like the rest of it.
+            let mut rng = rand::rngs::StdRng::seed_from_u64(0);
+            use rand::SeedableRng;
+            let mut grown = 0;
+
+            for _ in 0..400 {
+                let mut genome = Genome::random(&mut rng);
+                genome.mutate(&mut rng, 0.5);
+                if genome.has_left_feeler() || genome.has_right_feeler() {
+                    grown += 1;
+                }
+            }
+
+            assert!(grown > 0, "mutation should be able to grow a feeler");
+        }
+
+        #[test]
+        fn the_feeler_fields_are_laid_out_end_to_end_without_gaps() {
+            // The whole region's arithmetic, stated as the facts it is meant
+            // to encode rather than only as the fields that happen to use it.
+            // Each offset follows the last by exactly one field's width, the
+            // presence bits are one bit each, and the total spans all of them
+            // -- a gap wastes genome, an overlap has two fields sharing bits.
+            assert_eq!(
+                FEELER_ANGLE_OFFSET,
+                FEELER_LENGTH_OFFSET + FEELER_FIELD_BITS
+            );
+            assert_eq!(FEELER_DISC_OFFSET, FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS);
+            assert_eq!(
+                LEFT_FEELER_PRESENT_OFFSET,
+                FEELER_DISC_OFFSET + FEELER_FIELD_BITS
+            );
+            assert_eq!(RIGHT_FEELER_PRESENT_OFFSET, LEFT_FEELER_PRESENT_OFFSET + 1);
+            assert_eq!(FEELER_BITS, 3 * FEELER_FIELD_BITS + 2);
+            // And the region ends exactly where the genome does.
+            assert_eq!(FEELER_LENGTH_OFFSET + FEELER_BITS, TOTAL_BITS);
+        }
+
+        #[test]
+        fn the_feeler_bits_are_part_of_the_genome_proper() {
+            // Inside TOTAL_BITS, not past it. A field the genome's length does
+            // not account for still reads and writes, but to_bits will not
+            // emit it, so it is quietly dropped on a round trip -- and mutate
+            // never reaches it either, which for these bits would mean a
+            // feeler that could never be grown.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            genome.set_feelers_present(true, true);
+
+            let round_tripped = Genome::from_bits(&genome.to_bits()).unwrap();
+
+            assert!(round_tripped.has_left_feeler());
+            assert!(round_tripped.has_right_feeler());
+        }
+
+        #[test]
+        fn a_genome_with_neither_bit_set_has_no_feelers() {
+            // Whether a critter grows a feeler at all is one bit apiece, so a
+            // lineage can climb towards feelers rather than being handed them:
+            // one, then the other, each worth keeping on its own.
+            let genome = genome_with_feeler_bits(0, 0, 0);
+
+            assert!(!genome.has_left_feeler());
+            assert!(!genome.has_right_feeler());
+        }
+
+        #[test]
+        fn each_feeler_is_grown_by_its_own_bit() {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET, 1, 1);
+
+            assert!(genome.has_left_feeler());
+            assert!(!genome.has_right_feeler());
+        }
+
+        #[test]
+        fn a_genome_with_both_bits_set_has_both_feelers() {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET, 1, 1);
+            write_bits(&mut genome.bytes, RIGHT_FEELER_PRESENT_OFFSET, 1, 1);
+
+            assert!(genome.has_left_feeler());
+            assert!(genome.has_right_feeler());
         }
 
         #[test]

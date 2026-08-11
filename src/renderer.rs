@@ -78,7 +78,16 @@ impl Renderer {
         // inferred from where its feelers point.
         let ((left_x, left_y), (right_x, right_y)) = critter.feeler_tips();
         let disc_radius = critter.feeler_disc().round() as i32;
-        for (tip_x, tip_y) in [(left_x, left_y), (right_x, right_y)] {
+        // Only the feelers the critter grew, so the picture says which ones a
+        // lineage has climbed its way to.
+        let grown = [
+            (critter.has_left_feeler(), (left_x, left_y)),
+            (critter.has_right_feeler(), (right_x, right_y)),
+        ];
+        for (tip_x, tip_y) in grown
+            .into_iter()
+            .filter_map(|(has, tip)| has.then_some(tip))
+        {
             let (run, rise) = ((tip_x - cx) as f32, (tip_y - cy) as f32);
             let length = (run * run + rise * rise).sqrt();
             let steps = length.round().max(1.0) as i32;
@@ -536,7 +545,24 @@ mod tests {
             fn feeler_critter(length: f32, angle: f32, disc: f32) -> Critter {
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(length, angle, disc);
+                genome.set_feelers_present(true, true);
                 Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, genome)
+            }
+
+            #[test]
+            fn a_feeler_a_critter_never_grew_is_not_drawn() {
+                // What is drawn is what the critter has, so the picture says
+                // which feelers a lineage has climbed its way to.
+                let mut genome = Genome::all(Instruction::DoNothing);
+                genome.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 6.0);
+                genome.set_feelers_present(true, false);
+                let critter = Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, genome);
+                let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+                let buffer = render(&critter);
+
+                assert_eq!(pixel_at(&buffer, lx, ly), critter.genome_color());
+                assert_eq!(pixel_at(&buffer, rx, ry), 0);
             }
 
             #[test]
@@ -664,6 +690,7 @@ mod tests {
                 // line lands it exactly on the other and nothing can tell.
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+                genome.set_feelers_present(true, true);
                 let critter =
                     Critter::with_genome(CENTER, CENTER, NORTH_EAST, 1, 1, FED, 0, genome);
                 let ((lx, ly), (rx, ry)) = critter.feeler_tips();
@@ -741,6 +768,7 @@ mod tests {
             fn the_feelers_turn_with_the_critter() {
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 5.0);
+                genome.set_feelers_present(true, true);
                 let critter = Critter::with_genome(CENTER, CENTER, EAST, 1, 1, FED, 0, genome);
                 let ((lx, ly), (rx, ry)) = critter.feeler_tips();
 
