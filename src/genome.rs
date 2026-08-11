@@ -94,7 +94,7 @@ const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
 // Splitting is the one instruction whose payoff a critter never collects
 // itself, so nothing about a critter's own life selects for it. The world
 // leans on the scale to make reproduction likely enough to get started.
-const SPLIT_WEIGHT_MULTIPLIER: u32 = 4;
+const SPLIT_WEIGHT_MULTIPLIER: u32 = 2;
 
 #[cfg(test)]
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
@@ -2439,7 +2439,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn splitting_claims_four_times_the_opcode_space_its_field_would_give_it() {
+        fn splitting_claims_twice_the_opcode_space_its_field_would_give_it() {
             // A thumb on the scale, applied to the decoded weight rather than
             // to the genome: the same bits still say how much a lineage wants
             // to divide, and evolution can still turn it down.
@@ -2451,7 +2451,7 @@ mod tests {
             // constant would hold whatever the constant said, including one.
             assert_eq!(
                 genome.instruction_weight(Instruction::Split),
-                genome.instruction_weight(Instruction::Eat) * 4
+                genome.instruction_weight(Instruction::Eat) * 2
             );
         }
 
@@ -2632,10 +2632,10 @@ mod tests {
             let counts = decoded_counts(&genome);
 
             // Weights are bits + 1, scaled so each kind claims the same space
-            // however many variants spell it, and quadrupled again for Split.
-            // Eat is a kind of one holding the largest field, so it takes 82
+            // however many variants spell it, and doubled again for Split.
+            // Eat is a kind of one holding the largest field, so it takes 89
             // of the 128 opcode values; Split, a kind of one with the
-            // multiplier, takes 20. The seven turns share one kind's worth
+            // multiplier, takes 11. The seven turns share one kind's worth
             // between them, so each holds a band of about one value and the
             // rounding decides which of them a value lands in. Naming each
             // instruction's share is what pins the scaling: formulas that
@@ -2643,20 +2643,20 @@ mod tests {
             // this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 82);
-            assert_eq!(share(Instruction::Split), 20);
+            assert_eq!(share(Instruction::Eat), 89);
+            assert_eq!(share(Instruction::Split), 11);
+            assert_eq!(share(Instruction::RepeatPreviousMove), 6);
             assert_eq!(share(Instruction::DoNothing), 5);
-            assert_eq!(share(Instruction::RepeatPreviousMove), 5);
             assert_eq!(share(Instruction::MoveSlow), 3);
             assert_eq!(share(Instruction::MoveFast), 3);
             assert_eq!(share(Instruction::SkipAhead), 3);
-            assert_eq!(share(Instruction::SkipBack), 2);
+            assert_eq!(share(Instruction::SkipBack), 3);
             assert_eq!(share(Instruction::TurnLeft15), 1);
             assert_eq!(share(Instruction::TurnRight15), 1);
-            assert_eq!(share(Instruction::TurnLeft45), 1);
+            assert_eq!(share(Instruction::TurnLeft90), 1);
             assert_eq!(share(Instruction::TurnRight45), 1);
             assert_eq!(share(Instruction::TurnRight90), 1);
-            assert_eq!(share(Instruction::TurnLeft90), 0);
+            assert_eq!(share(Instruction::TurnLeft45), 0);
             assert_eq!(share(Instruction::TurnAbout), 0);
         }
 
