@@ -303,6 +303,17 @@ impl World {
     /// pellet under the disc at either tip, or black for nothing. A critter's
     /// only sense of anything it is not already standing on.
     pub fn sense_feelers(&mut self) {
+        // A world whose critters have not grown any feelers has nothing to
+        // sense with, and indexing the larder for them would be work done for
+        // nobody. Worth asking, since every world starts out this way and some
+        // never leave it.
+        if !self
+            .critters
+            .iter()
+            .any(|critter| critter.has_left_feeler() || critter.has_right_feeler())
+        {
+            return;
+        }
         let (width, height) = (self.width as i32, self.height as i32);
         // Bucketed by row band first. Asking every pellet about every critter
         // is tens of millions of distance checks a tick at a full world, which
