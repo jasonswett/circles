@@ -3,6 +3,7 @@ use crate::{Critter, Pellet, PELLET_RADIUS};
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
 pub const OUTLINE_THICKNESS: i32 = 2;
+pub const FRONT_DOT_RADIUS: i32 = 4;
 
 struct Ring {
     cx: i32,
@@ -71,6 +72,17 @@ impl Renderer {
             inner_squared: inner_radius * inner_radius,
         };
         Self::fill_ring_with_wrap(&body, &mut canvas, color);
+
+        let heading = critter.heading();
+        let (offset_x, offset_y) = heading.unit();
+        let dot_offset = (radius - FRONT_DOT_RADIUS) as f32;
+        let dot = Ring {
+            cx: cx + (offset_x * dot_offset).round() as i32,
+            cy: cy + (offset_y * dot_offset).round() as i32,
+            radius: FRONT_DOT_RADIUS,
+            inner_squared: -1,
+        };
+        Self::fill_ring_with_wrap(&dot, &mut canvas, color);
 
         // A line out to each sensing disc, and the disc itself. The disc is
         // what actually feels anything, so drawing it at the size the genome
@@ -235,7 +247,8 @@ mod tests {
     use super::*;
     use crate::{
         Critter, Genome, Heading, Instruction, EAST, MAX_FEELER_ANGLE, MAX_FEELER_DISC,
-        MAX_FEELER_LENGTH, MIN_FEELER_DISC, MIN_FEELER_LENGTH, NORTH, NORTH_EAST,
+        MAX_FEELER_LENGTH, MIN_FEELER_DISC, MIN_FEELER_LENGTH, NORTH, NORTH_EAST, SOUTH,
+        SOUTH_WEST, WEST,
     };
 
     mod interpolate_color_tests {
@@ -339,6 +352,103 @@ mod tests {
             let buffer = render(&critter);
 
             assert_eq!(pixel_at(&buffer, CENTER + RADIUS + 1, CENTER), 0);
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_north_of_center_when_facing_north() {
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER, CENTER - RADIUS + FRONT_DOT_RADIUS),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn the_front_dot_extends_to_its_full_radius_inside_the_ring() {
+            // The pixel at the dot's bottom edge sits inside the ring's hollow center,
+            // so it's only lit if the dot itself is at full radius.
+            let critter = stationary_critter(CENTER, CENTER, NORTH);
+
+            let buffer = render(&critter);
+
+            let dot_center_y = CENTER - RADIUS + FRONT_DOT_RADIUS;
+            assert_eq!(
+                pixel_at(&buffer, CENTER, dot_center_y + FRONT_DOT_RADIUS),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_east_of_center_when_facing_east() {
+            let critter = stationary_critter(CENTER, CENTER, EAST);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER + RADIUS - FRONT_DOT_RADIUS, CENTER),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_south_of_center_when_facing_south() {
+            let critter = stationary_critter(CENTER, CENTER, SOUTH);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER, CENTER + RADIUS - FRONT_DOT_RADIUS),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_west_of_center_when_facing_west() {
+            let critter = stationary_critter(CENTER, CENTER, WEST);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER - RADIUS + FRONT_DOT_RADIUS, CENTER),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_northeast() {
+            // For a diagonal heading, the dot's offset from center is scaled
+            // by √2/2 along each axis. Derived rather than hard-coded: a dot
+            // wide enough to cover its neighbours would let a literal keep
+            // passing after the offset had moved.
+            let diagonal_offset = (((RADIUS - FRONT_DOT_RADIUS) as f32)
+                * std::f32::consts::FRAC_1_SQRT_2)
+                .round() as i32;
+            let critter = stationary_critter(CENTER, CENTER, NORTH_EAST);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER + diagonal_offset, CENTER - diagonal_offset),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn the_front_dot_is_drawn_at_the_diagonal_offset_when_facing_southwest() {
+            let diagonal_offset = (((RADIUS - FRONT_DOT_RADIUS) as f32)
+                * std::f32::consts::FRAC_1_SQRT_2)
+                .round() as i32;
+            let critter = stationary_critter(CENTER, CENTER, SOUTH_WEST);
+
+            let buffer = render(&critter);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER - diagonal_offset, CENTER + diagonal_offset),
+                critter.genome_color()
+            );
         }
 
         #[test]
