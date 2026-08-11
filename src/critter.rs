@@ -50,6 +50,22 @@ pub const SKIP_DISTANCE: usize = 4;
 // rounding error to the rich. Charged for acting rather than for moving, so
 // that standing still is not a way to avoid it.
 pub const UPKEEP_PERCENT: u32 = 1;
+// What a feeler costs its owner each turn, as a share of the area its disc
+// senses. A sense organ is something to keep running, not something to pay
+// for when it happens to touch something -- eyes cost an animal energy whether
+// or not there is anything to see.
+//
+// Priced by area rather than width because a disc twice as wide gathers four
+// times as much: charged by width, the widest discs would be cheap for what
+// they find and every lineage would grow them, and how big a disc to have
+// would stop being a question worth asking.
+//
+// At a tenth, the largest pair of discs costs twelve a turn, so their owner
+// has to find a pellet every sixteen turns to break even on them alone. The
+// smallest discs come out free, integer division being what it is: a critter
+// growing its first feeler is not charged for the privilege until the thing
+// is big enough to be worth something.
+pub const FEELER_UPKEEP_PERCENT: u32 = 10;
 pub const MOVE_SLOW_COST: u32 = 1;
 pub const MOVE_FAST_COST: u32 = 4;
 // How much further a fast step carries than a slow one.
@@ -483,7 +499,16 @@ impl Critter {
     /// Divides before multiplying, since a percentage taken the other way
     /// round overflows for a critter holding near u32::MAX.
     fn upkeep(&self) -> u32 {
-        Self::upkeep_for(self.energy)
+        Self::upkeep_for(self.energy) + self.feeler_upkeep()
+    }
+
+    /// What this critter's feelers cost it for the turn: a share of the area
+    /// each one senses, for each one it grew.
+    fn feeler_upkeep(&self) -> u32 {
+        let grown = u32::from(self.has_left_feeler()) + u32::from(self.has_right_feeler());
+        let disc = self.genome.feeler_disc();
+        let area = (disc * disc) as u32;
+        grown * area * FEELER_UPKEEP_PERCENT / 100
     }
 
     /// The share of its own energy a critter spends to carry itself one step.
@@ -1263,6 +1288,78 @@ mod tests {
 
             assert!(parent.age() > 0, "the parent should have lived a while");
             assert_eq!(child.age(), 0);
+        }
+    }
+
+    mod feeler_upkeep {
+        use super::*;
+        use crate::{MAX_FEELER_DISC, MIN_FEELER_DISC};
+
+        fn critter_with_feelers(left: bool, right: bool, disc: f32) -> Critter {
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(20.0, 45.0, disc);
+            genome.set_feelers_present(left, right);
+            Critter::with_genome(0, 0, NORTH, 1, 1, 10_000, 0, genome)
+        }
+
+        fn spent_in_a_turn(critter: &mut Critter) -> u32 {
+            let before = critter.energy();
+            critter.tick(true);
+            before - critter.energy()
+        }
+
+        #[test]
+        fn a_critter_with_no_feelers_pays_nothing_for_them() {
+            let mut blind = critter_with_feelers(false, false, MAX_FEELER_DISC);
+            let mut one_eyed = critter_with_feelers(true, false, MAX_FEELER_DISC);
+
+            assert!(spent_in_a_turn(&mut one_eyed) > spent_in_a_turn(&mut blind));
+        }
+
+        #[test]
+        fn two_feelers_cost_twice_what_one_does() {
+            // Charged per feeler, since each is a thing to keep running.
+            let mut blind = critter_with_feelers(false, false, MAX_FEELER_DISC);
+            let mut one = critter_with_feelers(true, false, MAX_FEELER_DISC);
+            let mut two = critter_with_feelers(true, true, MAX_FEELER_DISC);
+
+            let base = spent_in_a_turn(&mut blind);
+            let for_one = spent_in_a_turn(&mut one) - base;
+            let for_two = spent_in_a_turn(&mut two) - base;
+
+            assert_eq!(for_two, for_one * 2);
+        }
+
+        #[test]
+        fn a_bigger_disc_costs_more_than_a_smaller_one() {
+            // What a feeler costs follows what it senses, so a critter cannot
+            // have a wide reach for the price of a narrow one.
+            let mut small = critter_with_feelers(true, true, MIN_FEELER_DISC);
+            let mut large = critter_with_feelers(true, true, MAX_FEELER_DISC);
+
+            assert!(spent_in_a_turn(&mut large) > spent_in_a_turn(&mut small));
+        }
+
+        #[test]
+        fn the_cost_follows_the_area_a_feeler_senses_not_its_width() {
+            // A disc twice as wide covers four times the ground, so it costs
+            // four times as much. Priced by width instead, the widest discs
+            // would be cheap for what they gather and every lineage would
+            // grow them.
+            let mut blind = critter_with_feelers(false, false, MIN_FEELER_DISC);
+            let base = spent_in_a_turn(&mut blind);
+
+            // Checked against the area each disc actually covers rather than
+            // against another disc: the genome holds a disc's size in four
+            // bits, so asking for half of one does not give exactly half.
+            for asked in [4.0, 6.0, MAX_FEELER_DISC] {
+                let mut critter = critter_with_feelers(true, false, asked);
+                let disc = critter.genome().feeler_disc();
+                let charged = spent_in_a_turn(&mut critter) - base;
+
+                let by_area = (disc * disc) as u32 * FEELER_UPKEEP_PERCENT / 100;
+                assert_eq!(charged, by_area, "a disc of {disc} should cost by its area");
+            }
         }
     }
 
