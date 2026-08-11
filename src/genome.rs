@@ -95,6 +95,7 @@ const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
 // itself, so nothing about a critter's own life selects for it. The world
 // leans on the scale to make reproduction likely enough to get started.
 const SPLIT_WEIGHT_MULTIPLIER: u32 = 4;
+
 #[cfg(test)]
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
 const WEIGHT_BITS: usize = INSTRUCTION_COUNT * WEIGHT_BITS_PER_INSTRUCTION;
@@ -111,10 +112,12 @@ const HISTORY_WINDOW_OFFSET: usize = WEIGHTS_OFFSET + WEIGHT_BITS;
 const HEADER_OFFSET: usize = HISTORY_WINDOW_OFFSET + HISTORY_WINDOW_BITS;
 const HEADER_BITS: usize = INSTRUCTION_COUNT * PARAM_BITS_PER_INSTRUCTION;
 // Wide enough that every instruction claims a band of the opcode space even
-// when weights are equal. At four bits there were sixteen values for fifteen
-// instructions, so the ones at the back of the table were unreachable however
-// a genome was written -- an instruction the genome could not say.
-const OPCODE_BITS_PER_OPCODE: usize = 5;
+// when weights are equal. The bands are narrower than the instruction count
+// suggests: a kind's share is divided among its variants, so the seven turns
+// hold a seventh of a kind each. At five bits those bands came to less than
+// one opcode value and several turns were unreachable however a genome was
+// written -- instructions the genome could not say.
+const OPCODE_BITS_PER_OPCODE: usize = 7;
 // Total opcode slots in the genome's pool. Most start dormant — only the
 // first INITIAL_ACTIVE_OPCODES participate in the walked stream when a
 // genome is freshly created. A separate activation mask (one bit per slot)
@@ -242,8 +245,11 @@ impl Genome {
     #[cfg(test)]
     pub fn all(instruction: Instruction) -> Self {
         let mut genome = Self::always_act_header();
+        // Worked out once rather than per slot: which opcode means what
+        // depends on the genome's weights, and writing the stream does not
+        // touch those, so the answer is the same for every slot.
+        let code = encode_for(&genome, instruction);
         for cursor in 0..OPCODE_POOL_SIZE {
-            let code = encode_for(&genome, instruction);
             genome.write_opcode(cursor, code);
         }
         genome
@@ -460,13 +466,26 @@ impl Genome {
 
     /// How much of the opcode space this genome devotes to `instruction`.
     /// Read as `bits + 1` so every instruction keeps a nonzero share.
+    /// How much of the opcode space an instruction claims.
+    ///
+    /// Every kind of thing a critter can do claims the same share, and the
+    /// variants of a kind divide that share between them by their own weights.
+    /// Turning comes up as often as eating whether it is spelled two ways or a
+    /// thousand: without that, adding a variant quietly takes weight from
+    /// every other instruction, and how many ways an action can be spelled
+    /// becomes a design decision nobody made.
+    ///
+    /// Weights are scaled up by the number of variants in the largest kind
+    /// rather than divided down, so a kind with many variants keeps whole
+    /// numbers to divide among them.
     fn instruction_weight(&self, instruction: Instruction) -> u32 {
         let offset = WEIGHTS_OFFSET + instruction_index(instruction) * WEIGHT_BITS_PER_INSTRUCTION;
         let encoded = read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1;
+        let scaled = encoded * kind_of(instruction).share_per_variant();
         if instruction == Instruction::Split {
-            encoded * SPLIT_WEIGHT_MULTIPLIER
+            scaled * SPLIT_WEIGHT_MULTIPLIER
         } else {
-            encoded
+            scaled
         }
     }
 
@@ -716,6 +735,77 @@ const ALL_INSTRUCTIONS: [Instruction; INSTRUCTION_COUNT] = [
 /// of the genome. The header sits after the leading mutation-rate field.
 fn header_window_offset(instruction_index: usize) -> usize {
     HEADER_OFFSET + instruction_index * PARAM_BITS_PER_INSTRUCTION
+}
+
+/// The kinds of thing a critter can do. Each claims an equal share of the
+/// opcode space, so how many ways a kind can be spelled does not decide how
+/// often it comes up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Move,
+    Turn,
+    Eat,
+    Split,
+    Skip,
+    Nothing,
+    Repeat,
+}
+
+impl Kind {
+    /// How many instructions spell this kind.
+    fn variants(self) -> u32 {
+        ALL_INSTRUCTIONS
+            .iter()
+            .filter(|&&instruction| kind_of(instruction) == self)
+            .count() as u32
+    }
+
+    /// What each of this kind's variants is scaled by, so that the variants
+    /// together come to the same total whatever their number. Scaled up
+    /// rather than divided down, and by a multiple every kind divides evenly,
+    /// so no kind loses a remainder to integer division.
+    fn share_per_variant(self) -> u32 {
+        Self::EVERY.iter().fold(1, |lcm, kind| {
+            let variants = kind.variants();
+            lcm / gcd(lcm, variants) * variants
+        }) / self.variants()
+    }
+
+    const EVERY: [Kind; 7] = [
+        Kind::Move,
+        Kind::Turn,
+        Kind::Eat,
+        Kind::Split,
+        Kind::Skip,
+        Kind::Nothing,
+        Kind::Repeat,
+    ];
+}
+
+fn gcd(a: u32, b: u32) -> u32 {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+fn kind_of(instruction: Instruction) -> Kind {
+    match instruction {
+        Instruction::MoveSlow | Instruction::MoveFast => Kind::Move,
+        Instruction::TurnLeft15
+        | Instruction::TurnLeft45
+        | Instruction::TurnLeft90
+        | Instruction::TurnRight15
+        | Instruction::TurnRight45
+        | Instruction::TurnRight90
+        | Instruction::TurnAbout => Kind::Turn,
+        Instruction::Eat => Kind::Eat,
+        Instruction::Split => Kind::Split,
+        Instruction::SkipAhead | Instruction::SkipBack => Kind::Skip,
+        Instruction::DoNothing => Kind::Nothing,
+        Instruction::RepeatPreviousMove => Kind::Repeat,
+    }
 }
 
 fn instruction_index(instruction: Instruction) -> usize {
@@ -2362,6 +2452,116 @@ mod tests {
         }
 
         #[test]
+        fn a_kinds_variants_divide_its_share_without_remainder() {
+            // The scale has to be a common multiple of every kind's variant
+            // count, or integer division drops part of a kind's share and the
+            // kinds stop being equal. Checked as arithmetic rather than only
+            // through the totals, since a scale that is merely large enough
+            // makes the totals agree too.
+            for kind in Kind::EVERY {
+                let scale = kind.share_per_variant() * kind.variants();
+
+                assert_eq!(
+                    scale,
+                    Kind::Move.share_per_variant() * Kind::Move.variants(),
+                    "{kind:?} should come to the same scale as every other"
+                );
+            }
+        }
+
+        #[test]
+        fn the_scale_is_the_smallest_that_divides_every_kind() {
+            // Not merely a common multiple but the least one: any multiple
+            // makes the kinds equal, and a needlessly large one wastes the
+            // range weights have to work in.
+            let scale = Kind::Move.share_per_variant() * Kind::Move.variants();
+            let counts: Vec<u32> = Kind::EVERY.iter().map(|kind| kind.variants()).collect();
+
+            for candidate in 1..scale {
+                assert!(
+                    counts.iter().any(|count| candidate % count != 0),
+                    "{candidate} divides every kind, so {scale} is not the least"
+                );
+            }
+        }
+
+        #[test]
+        fn a_kind_claims_the_same_space_however_many_variants_it_has() {
+            // Turning is one thing a critter can do, and it should come up as
+            // often as eating whether it is spelled two ways or a thousand.
+            // Otherwise adding a variant quietly takes weight from every other
+            // instruction, and the number of ways to spell an action becomes a
+            // design decision nobody made.
+            let genome = equal_weights();
+
+            let turning: u32 = ALL_INSTRUCTIONS
+                .iter()
+                .filter(|i| kind_of(**i) == Kind::Turn)
+                .map(|&i| genome.instruction_weight(i))
+                .sum();
+            let eating = genome.instruction_weight(Instruction::Eat);
+
+            assert_eq!(turning, eating);
+        }
+
+        #[test]
+        fn every_kind_claims_the_same_space_as_every_other() {
+            let genome = equal_weights();
+
+            let share = |kind: Kind| -> u32 {
+                ALL_INSTRUCTIONS
+                    .iter()
+                    .filter(|i| kind_of(**i) == kind)
+                    .map(|&i| genome.instruction_weight(i))
+                    .sum()
+            };
+            let moving = share(Kind::Move);
+
+            // Split excepted: it carries a deliberate multiplier on top, so
+            // that reproduction is likelier than the rest. Equal weighting is
+            // about the count of variants not deciding anything, not about
+            // refusing to lean on the scale on purpose.
+            for kind in [
+                Kind::Turn,
+                Kind::Eat,
+                Kind::Skip,
+                Kind::Nothing,
+                Kind::Repeat,
+            ] {
+                assert_eq!(share(kind), moving, "{kind:?} should match Move");
+            }
+
+            assert_eq!(
+                share(Kind::Split),
+                moving * SPLIT_WEIGHT_MULTIPLIER,
+                "splitting keeps its thumb on the scale"
+            );
+        }
+
+        #[test]
+        fn the_variants_of_a_kind_still_share_it_by_their_own_weights() {
+            // Equal by kind, not equal within one: a genome that wants to turn
+            // sharply more often than gently can still say so.
+            let mut genome = equal_weights();
+            genome.set_instruction_weight_bits(Instruction::TurnLeft15, 15);
+
+            assert!(
+                genome.instruction_weight(Instruction::TurnLeft15)
+                    > genome.instruction_weight(Instruction::TurnRight15)
+            );
+        }
+
+        // Every instruction's weight field set to the same middling value, so
+        // what differs between kinds is only how the shares are worked out.
+        fn equal_weights() -> Genome {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for instruction in ALL_INSTRUCTIONS {
+                genome.set_instruction_weight_bits(instruction, 7);
+            }
+            genome
+        }
+
+        #[test]
         fn every_instructions_weight_field_fits_inside_the_weight_region() {
             // The last instruction's field must end at the region's edge:
             // too small and its bits would collide with the header that
@@ -2408,30 +2608,32 @@ mod tests {
 
             let counts = decoded_counts(&genome);
 
-            // Weights are bits + 1, quadrupled for Split: Eat holds 16,
-            // Split 4, and the other thirteen 1 each, totalling 33. Opcode
-            // value c maps to position floor(c * 33 / 32), so Eat takes 16 of
-            // the 32 values, Split 4, and the rest one apiece bar the last,
-            // whose band no opcode value lands in. Naming each one's share,
-            // rather than summing them, is what pins the scaling arithmetic:
-            // formulas that shift which instructions get a slot preserve the
-            // totals but not this breakdown.
+            // Weights are bits + 1, scaled so each kind claims the same space
+            // however many variants spell it, and quadrupled again for Split.
+            // Eat is a kind of one holding the largest field, so it takes 82
+            // of the 128 opcode values; Split, a kind of one with the
+            // multiplier, takes 20. The seven turns share one kind's worth
+            // between them, so each holds a band of about one value and the
+            // rounding decides which of them a value lands in. Naming each
+            // instruction's share is what pins the scaling: formulas that
+            // shift which instructions get a slot preserve the totals but not
+            // this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 16);
-            assert_eq!(share(Instruction::Split), 4);
-            assert_eq!(share(Instruction::MoveSlow), 1);
-            assert_eq!(share(Instruction::MoveFast), 1);
+            assert_eq!(share(Instruction::Eat), 82);
+            assert_eq!(share(Instruction::Split), 20);
+            assert_eq!(share(Instruction::DoNothing), 5);
+            assert_eq!(share(Instruction::RepeatPreviousMove), 5);
+            assert_eq!(share(Instruction::MoveSlow), 3);
+            assert_eq!(share(Instruction::MoveFast), 3);
+            assert_eq!(share(Instruction::SkipAhead), 3);
+            assert_eq!(share(Instruction::SkipBack), 2);
             assert_eq!(share(Instruction::TurnLeft15), 1);
-            assert_eq!(share(Instruction::TurnLeft45), 1);
-            assert_eq!(share(Instruction::TurnLeft90), 1);
             assert_eq!(share(Instruction::TurnRight15), 1);
+            assert_eq!(share(Instruction::TurnLeft45), 1);
             assert_eq!(share(Instruction::TurnRight45), 1);
             assert_eq!(share(Instruction::TurnRight90), 1);
-            assert_eq!(share(Instruction::DoNothing), 1);
-            assert_eq!(share(Instruction::RepeatPreviousMove), 1);
-            assert_eq!(share(Instruction::SkipAhead), 1);
-            assert_eq!(share(Instruction::SkipBack), 1);
+            assert_eq!(share(Instruction::TurnLeft90), 0);
             assert_eq!(share(Instruction::TurnAbout), 0);
         }
 
