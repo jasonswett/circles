@@ -32,7 +32,7 @@ pub const SPLIT_ATTEMPT_COST: u32 = 60;
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
 // that starves partway through dies with nothing to show for it.
-pub const SPLIT_DURATION_TICKS: u32 = 2;
+pub const SPLIT_DURATION_TICKS: u32 = 4;
 // How many slots a skip moves the playhead. Fixed for now: evolution
 // controls whether a critter jumps, through the usual weights and sigmoid,
 // but not yet how far.
