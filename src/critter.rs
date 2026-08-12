@@ -49,7 +49,7 @@ pub const MAX_BIRTH_DISTANCE: i32 = 400;
 // alive, and being alive costs the same whether a critter is rich or poor.
 // What scales with a critter -- its feelers, what poison takes, what a
 // predator can win from it -- scales for reasons of its own.
-pub const UPKEEP: u32 = 1;
+pub const UPKEEP: u32 = 2;
 // What a feeler costs its owner each turn, as a share of the area its disc
 // senses. A sense organ is something to keep running, not something to pay
 // for when it happens to touch something -- eyes cost an animal energy whether
@@ -1437,13 +1437,9 @@ mod tests {
             // and nothing more for choosing to move. Charging for the one
             // thing that can find food only ever pressed hardest on the
             // critters with least of it.
-            // Probed at an energy where a stray charge would show. At a round
-            // ten thousand, taking one first drops the upkeep's own rounding
-            // by one as well, and the two cancel exactly.
-            const ODD_ENOUGH: u32 = 10_050;
-            let mut still = critter_running(Instruction::DoNothing, ODD_ENOUGH);
-            let mut walking = critter_running(Instruction::MoveSlow, ODD_ENOUGH);
-            let mut running = critter_running(Instruction::MoveFast, ODD_ENOUGH);
+            let mut still = critter_running(Instruction::DoNothing, PLENTY);
+            let mut walking = critter_running(Instruction::MoveSlow, PLENTY);
+            let mut running = critter_running(Instruction::MoveFast, PLENTY);
 
             still.tick(true);
             walking.tick(true);
@@ -2180,9 +2176,8 @@ mod tests {
         const INITIAL_ENERGY: u32 = 60;
         // The split flow: pay SPLIT_ATTEMPT_COST and the firing turn's upkeep,
         // then upkeep again for each tick of the division, and finally halve
-        // what remains between parent and child. Upkeep is a share of what the
-        // critter is holding at the time, so it is walked rather than
-        // multiplied out.
+        // what remains between parent and child.
+        //
         // Enough to cover the attempt and still have something left to halve,
         // whatever splitting is set to cost.
         const SPLITTER_ENERGY: u32 = SPLIT_ATTEMPT_COST + 2 * INITIAL_ENERGY;
