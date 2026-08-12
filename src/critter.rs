@@ -44,19 +44,12 @@ pub const SKIP_DISTANCE: usize = 4;
 // beyond what any feeler reaches, so a newborn cannot simply sense its way
 // back to where it came from.
 pub const MAX_BIRTH_DISTANCE: i32 = 400;
-// What a step costs at each pace. Moving fast covers twice the ground of
-// moving slow, but the cost of covering it rises with the square of the
-// pace, the way drag does in any real medium: twice the speed, four times
-// the price. Ground is therefore bought at a worsening exchange rate, so
-// hurrying is a choice with a real cost rather than a strictly better
-// option.
-// What a critter pays out of its own reserves each turn it acts, whatever it
-// does with the turn. Running a large body costs more than running a small
-// one, so the charge is the same share at any size and nobody outgrows it --
-// with nothing capping what a critter can bank, a flat cost alone would be a
-// rounding error to the rich. Charged for acting rather than for moving, so
-// that standing still is not a way to avoid it.
-pub const UPKEEP_PERCENT: u32 = 1;
+// What a turn costs a critter, whatever it does with the turn. A flat fee
+// rather than a share of what the critter is holding: it is rent on being
+// alive, and being alive costs the same whether a critter is rich or poor.
+// What scales with a critter -- its feelers, what poison takes, what a
+// predator can win from it -- scales for reasons of its own.
+pub const UPKEEP: u32 = 1;
 // What a feeler costs its owner each turn, as a share of the area its disc
 // senses. A sense organ is something to keep running, not something to pay
 // for when it happens to touch something -- eyes cost an animal energy whether
@@ -482,27 +475,19 @@ impl Critter {
         roll < probability
     }
 
-    /// What a turn costs a critter holding `energy`, simply for acting.
-    /// Exposed so callers and tests can reckon in intent rather than
-    /// arithmetic.
+    /// What a turn costs a critter, simply for acting. Takes the critter's
+    /// energy and ignores it: rent is flat, and the argument stays so callers
+    /// read as what they mean rather than reaching for the constant.
     //
-    // The `>` is an equivalent mutant: integer division means the share is
-    // zero below one hundred energy and UPKEEP_PERCENT at or above it, so it
-    // is never exactly one and `>=` would pick the same branch every time.
+    // Returning the constant is an equivalent mutant while UPKEEP is one,
+    // since no test can tell the fee apart from the number it happens to be.
+    // It stops being equivalent the moment the fee is set to anything else.
     #[mutants::skip]
-    pub const fn upkeep_for(energy: u32) -> u32 {
-        let share = energy / 100 * UPKEEP_PERCENT;
-        if share > 1 {
-            share
-        } else {
-            1
-        }
+    pub const fn upkeep_for(_energy: u32) -> u32 {
+        UPKEEP
     }
 
-    /// What this turn costs the critter simply for acting: a share of its own
-    /// energy, never less than one so a spent critter still winds down.
-    /// Divides before multiplying, since a percentage taken the other way
-    /// round overflows for a critter holding near u32::MAX.
+    /// What this turn costs the critter simply for acting.
     fn upkeep(&self) -> u32 {
         Self::upkeep_for(self.energy) + self.feeler_upkeep()
     }
@@ -1367,7 +1352,28 @@ mod tests {
         }
 
         #[test]
-        fn acting_costs_a_share_of_a_critters_energy_whatever_the_action() {
+        fn every_critter_pays_the_same_to_live_however_rich_it_is() {
+            // Rent on being alive, and being alive costs the same whether a
+            // critter is rich or poor. What scales with a critter -- its
+            // feelers, what poison takes, what a predator wins from it --
+            // scales for reasons of its own.
+            let spent_by = |energy: u32| {
+                let mut critter = critter_doing(Instruction::DoNothing, energy);
+                critter.tick(true);
+                energy - critter.energy()
+            };
+
+            assert_eq!(spent_by(20), UPKEEP);
+            assert_eq!(spent_by(2_000), UPKEEP);
+            assert_eq!(spent_by(200_000), UPKEEP);
+            // And what upkeep_for reports is that same fee, not a coincidence
+            // of it happening to be one: a reader stuck at one would agree
+            // with every assertion above while UPKEEP stayed there.
+            assert_eq!(Critter::upkeep_for(200_000), UPKEEP);
+        }
+
+        #[test]
+        fn acting_costs_the_same_whatever_the_action() {
             // The charge is for being a large critter doing something, not for
             // any particular something: standing still is not a way out of it.
             for instruction in [
@@ -1385,61 +1391,12 @@ mod tests {
                 critter.tick(true);
 
                 let spent = start - critter.energy();
-                let expected = start / 100 * UPKEEP_PERCENT;
+                let expected = UPKEEP;
                 assert!(
                     spent >= expected,
                     "{instruction:?} should cost at least {expected}, cost {spent}"
                 );
             }
-        }
-
-        #[test]
-        fn a_rich_critter_pays_more_to_act_than_a_poor_one() {
-            let mut poor = critter_doing(Instruction::DoNothing, 200);
-            let mut rich = critter_doing(Instruction::DoNothing, 20_000);
-
-            poor.tick(true);
-            rich.tick(true);
-
-            let poor_spent = 200 - poor.energy();
-            let rich_spent = 20_000 - rich.energy();
-            assert!(
-                rich_spent > poor_spent * 10,
-                "the rich critter should pay far more: {rich_spent} vs {poor_spent}"
-            );
-        }
-
-        #[test]
-        fn upkeep_is_the_same_share_at_any_size() {
-            let share = |energy: u32| {
-                let mut critter = critter_doing(Instruction::DoNothing, energy);
-                critter.tick(true);
-                (energy - critter.energy()) as f32 / energy as f32
-            };
-
-            let modest = share(10_000);
-            let vast = share(100_000);
-            let expected = UPKEEP_PERCENT as f32 / 100.0;
-
-            assert!(
-                (modest - expected).abs() < 0.005 && (vast - expected).abs() < 0.005,
-                "expected a {expected} share, got {modest} and {vast}"
-            );
-        }
-
-        #[test]
-        fn upkeep_never_falls_below_one() {
-            // A critter too poor for its share to round to anything still
-            // winds down, so nothing can idle indefinitely on a scrap.
-            for energy in 1..=20u32 {
-                assert!(
-                    Critter::upkeep_for(energy) >= 1,
-                    "upkeep at {energy} should be at least one"
-                );
-            }
-            // The floor holds right up to where the share overtakes it.
-            assert_eq!(Critter::upkeep_for(99), 1);
-            assert_eq!(Critter::upkeep_for(100), UPKEEP_PERCENT);
         }
 
         #[test]
