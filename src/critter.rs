@@ -43,13 +43,13 @@ pub const SKIP_DISTANCE: usize = 4;
 // to find its own food. Far enough to be a fair way across the world, and far
 // beyond what any feeler reaches, so a newborn cannot simply sense its way
 // back to where it came from.
-pub const MAX_BIRTH_DISTANCE: i32 = 400;
+pub const MAX_BIRTH_DISTANCE: i32 = 200;
 // What a turn costs a critter, whatever it does with the turn. A flat fee
 // rather than a share of what the critter is holding: it is rent on being
 // alive, and being alive costs the same whether a critter is rich or poor.
 // What scales with a critter -- its feelers, what poison takes, what a
 // predator can win from it -- scales for reasons of its own.
-pub const UPKEEP: u32 = 20;
+pub const UPKEEP: u32 = 15;
 // What a feeler costs its owner each turn, as a share of the area its disc
 // senses. A sense organ is something to keep running, not something to pay
 // for when it happens to touch something -- eyes cost an animal energy whether
