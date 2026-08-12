@@ -52,7 +52,7 @@ const ERUPTION_SITE_TURN: f32 = 0.08;
 // At a quarter share this puts break-even at a victim holding 160 -- well
 // above the energy a critter is seeded or born with, so attacking anything
 // but a conspicuously well-fed neighbor is a losing move.
-pub const PREDATION_ATTACK_COST: u32 = 100;
+pub const PREDATION_ATTACK_COST: u32 = 1_000;
 const PREDATION_BASE_DEATH_PERCENT: u32 = 5;
 const PREDATION_ENERGY_DEATH_PERCENT: u32 = 30;
 
@@ -91,7 +91,7 @@ const POISON_CHECK_INTERVAL_TICKS: u32 = 10;
 // How often a replenishment begins. At ~60 FPS this is ten seconds: a
 // world starts feeding on this cadence and keeps at it until its energy is
 pub const MIN_POPULATION: usize = 50;
-const INITIAL_ENERGY: u32 = 60;
+const INITIAL_ENERGY: u32 = 600;
 const TICKS_PER_INSTRUCTION: u32 = 5;
 const STEP_SIZE: i32 = 5;
 // How many critters to refresh per overlap-detection call. The detector cycles
@@ -1084,8 +1084,8 @@ mod tests {
         use super::*;
         use crate::{Critter, Genome, Instruction, Pellet, NORTH, PELLET_ENERGY};
 
-        const HUNGRY_INITIAL: u32 = 200;
-        const STARTING_ENERGY: u32 = 10;
+        const HUNGRY_INITIAL: u32 = 2_000;
+        const STARTING_ENERGY: u32 = 100;
         // Energy after a single Eat firing tick where no pellet was found —
         // just the base 1-energy tick cost is paid since Eat itself is free.
         const STARTING_AFTER_FAILED_EAT: u32 =
@@ -2505,10 +2505,10 @@ mod tests {
         use super::*;
         use crate::{Critter, Genome, Instruction, Pellet, MAX_CRITTER_ENERGY, NORTH};
 
-        const HUNGRY_INITIAL: u32 = 200;
+        const HUNGRY_INITIAL: u32 = 2_000;
         // Comfortably more than PREDATION_ATTACK_COST, so a predator in these
         // tests can afford to attack.
-        const SOLVENT_PREDATOR_ENERGY: u32 = 300;
+        const SOLVENT_PREDATOR_ENERGY: u32 = 3_000;
         // Energy after a single Eat firing tick where no transfer happened —
         // just the base 1-energy tick cost, since firing Eat is free and
         // nothing was attacked.
@@ -2627,7 +2627,7 @@ mod tests {
                     seed,
                     Genome::all(Instruction::Eat),
                 );
-                let victim = idle_critter_with_energy(105, 100, 80);
+                let victim = idle_critter_with_energy(105, 100, 800);
                 let mut world = World::with_critters_and_pellets(
                     TEST_WIDTH,
                     TEST_HEIGHT,
@@ -2635,7 +2635,7 @@ mod tests {
                     vec![],
                 );
                 world.tick(true);
-                if world.critters()[0].energy() == 0 && world.critters()[1].energy() < 80 {
+                if world.critters()[0].energy() == 0 && world.critters()[1].energy() < 800 {
                     bitten_despite_death = true;
                     break;
                 }
@@ -2675,8 +2675,8 @@ mod tests {
         fn attacking_a_critter_costs_the_predator_energy() {
             // A bite is work: the predator pays for the attempt out of its own
             // reserves, so a meal has to be worth more than the effort.
-            let eater = eating_critter_with_energy(100, 100, 300);
-            let victim = idle_critter_with_energy(105, 100, 80);
+            let eater = eating_critter_with_energy(100, 100, 3_000);
+            let victim = idle_critter_with_energy(105, 100, 800);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2686,10 +2686,10 @@ mod tests {
 
             world.tick(true);
 
-            let taken = 80 * PREDATION_SHARE_PERCENT / 100;
+            let taken = 800 * PREDATION_SHARE_PERCENT / 100;
             assert_eq!(
                 world.critters()[0].energy(),
-                300 - Critter::upkeep_for(300) - PREDATION_ATTACK_COST + taken
+                3_000 - Critter::upkeep_for(3_000) - PREDATION_ATTACK_COST + taken
             );
         }
 
@@ -2697,7 +2697,7 @@ mod tests {
         fn biting_spent_prey_leaves_the_predator_worse_off() {
             // The share taken from a depleted victim does not cover the cost
             // of attacking it, so preying on the weak is a losing move.
-            let eater = eating_critter_with_energy(100, 100, 300);
+            let eater = eating_critter_with_energy(100, 100, 3_000);
             let victim = idle_critter_with_energy(105, 100, 4);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -2709,7 +2709,7 @@ mod tests {
             world.tick(true);
 
             assert!(
-                world.critters()[0].energy() < 300 - Critter::upkeep_for(300),
+                world.critters()[0].energy() < 3_000 - Critter::upkeep_for(3_000),
                 "expected the predator to end up down on the exchange"
             );
         }
@@ -2718,7 +2718,7 @@ mod tests {
         fn eating_a_pellet_carries_no_attack_cost() {
             // The cost is on attacking a critter, not on firing Eat: foraging
             // stays free, so the charge falls on cannibalism alone.
-            let eater = eating_critter_with_energy(100, 100, 300);
+            let eater = eating_critter_with_energy(100, 100, 3_000);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2730,20 +2730,23 @@ mod tests {
 
             assert_eq!(
                 world.critters()[0].energy(),
-                300 - Critter::upkeep_for(300) + crate::PELLET_ENERGY
+                3_000 - Critter::upkeep_for(3_000) + crate::PELLET_ENERGY
             );
         }
 
         #[test]
         fn a_fruitless_eat_costs_nothing_beyond_the_tick() {
             // Nothing in range means no attack, so no attack cost.
-            let eater = eating_critter_with_energy(100, 100, 300);
+            let eater = eating_critter_with_energy(100, 100, 3_000);
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![eater], vec![]);
 
             world.tick(true);
 
-            assert_eq!(world.critters()[0].energy(), 300 - Critter::upkeep_for(300));
+            assert_eq!(
+                world.critters()[0].energy(),
+                3_000 - Critter::upkeep_for(3_000)
+            );
         }
 
         #[test]
@@ -2787,8 +2790,8 @@ mod tests {
         fn a_predator_takes_only_a_share_of_its_prey() {
             // Energy enough to cover the attack cost, so what is measured here
             // is the share taken rather than what the attempt cost.
-            let eater = eating_critter_with_energy(100, 100, 300);
-            let victim = idle_critter_with_energy(105, 100, 80);
+            let eater = eating_critter_with_energy(100, 100, 3_000);
+            let victim = idle_critter_with_energy(105, 100, 800);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2798,10 +2801,10 @@ mod tests {
 
             world.tick(true);
 
-            let taken = 80 * PREDATION_SHARE_PERCENT / 100;
+            let taken = 800 * PREDATION_SHARE_PERCENT / 100;
             assert_eq!(
                 world.critters()[0].energy(),
-                300 - Critter::upkeep_for(300) - PREDATION_ATTACK_COST + taken
+                3_000 - Critter::upkeep_for(3_000) - PREDATION_ATTACK_COST + taken
             );
         }
 
@@ -2809,8 +2812,9 @@ mod tests {
         fn prey_survives_a_bite_it_can_afford() {
             // Predation is a bite rather than an execution: what the predator
             // does not take, the prey keeps.
+            const VICTIM_ENERGY: u32 = 800;
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(105, 100, 80);
+            let victim = idle_critter_with_energy(105, 100, VICTIM_ENERGY);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2820,8 +2824,8 @@ mod tests {
 
             world.tick(true);
 
-            let taken = 80 * PREDATION_SHARE_PERCENT / 100;
-            assert_eq!(world.critters()[1].energy(), 80 - taken);
+            let taken = VICTIM_ENERGY * PREDATION_SHARE_PERCENT / 100;
+            assert_eq!(world.critters()[1].energy(), VICTIM_ENERGY - taken);
             assert!(world.critters()[1].energy() > 0);
         }
 
@@ -2892,7 +2896,7 @@ mod tests {
         #[test]
         fn an_eaten_victim_is_marked_as_being_eaten() {
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(105, 100, 80);
+            let victim = idle_critter_with_energy(105, 100, 800);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
                 TEST_HEIGHT,
@@ -2908,7 +2912,7 @@ mod tests {
         #[test]
         fn an_eater_prefers_a_pellet_over_a_touching_critter_when_both_are_in_range() {
             let eater = eating_critter(100, 100);
-            let victim = idle_critter_with_energy(105, 100, 80);
+            let victim = idle_critter_with_energy(105, 100, 800);
             let pellet = Pellet::at(100, 100);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -2921,7 +2925,7 @@ mod tests {
 
             assert_eq!(world.pellets().len(), 0);
             // Victim untouched because the pellet was eaten instead.
-            assert_eq!(world.critters()[1].energy(), 80);
+            assert_eq!(world.critters()[1].energy(), 800);
         }
 
         #[test]
@@ -2977,7 +2981,7 @@ mod tests {
             // threshold below this separation would mistakenly classify the
             // pair as out of range.
             let eater = eating_critter(100, 100);
-            let victim_probe = idle_critter_with_energy(0, 0, 80);
+            let victim_probe = idle_critter_with_energy(0, 0, 800);
             let gap = eater.radius() + victim_probe.radius() - 1;
             let victim = idle_critter_with_energy(100 + gap, 100, 80);
             let mut world = World::with_critters_and_pellets(
@@ -2989,7 +2993,7 @@ mod tests {
 
             world.tick(true);
 
-            assert!(world.critters()[1].energy() < 80);
+            assert!(world.critters()[1].energy() < 800);
         }
 
         #[test]
@@ -2998,7 +3002,7 @@ mod tests {
             // tangent, not overlapping. The strict `<` comparison must reject
             // this pair.
             let eater = eating_critter(100, 100);
-            let touching = eater.radius() + idle_critter_with_energy(0, 0, 80).radius();
+            let touching = eater.radius() + idle_critter_with_energy(0, 0, 800).radius();
             let victim = idle_critter_with_energy(100 + touching, 100, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -3019,7 +3023,7 @@ mod tests {
             // proves the squared-distance computation must square each
             // component independently rather than summing or subtracting them.
             let eater = eating_critter(100, 100);
-            let r = (eater.radius() + idle_critter_with_energy(0, 0, 80).radius()) / 2;
+            let r = (eater.radius() + idle_critter_with_energy(0, 0, 800).radius()) / 2;
             let victim = idle_critter_with_energy(100 + r, 100 + 2 * r - 1, 80);
             let mut world = World::with_critters_and_pellets(
                 TEST_WIDTH,
@@ -3046,7 +3050,7 @@ mod tests {
 
             world.tick(true);
 
-            assert!(world.critters()[1].energy() < 80);
+            assert!(world.critters()[1].energy() < 800);
         }
     }
 

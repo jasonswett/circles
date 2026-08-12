@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 // The energy a critter is reckoned against rather than a ceiling it cannot
 // pass. Nothing stops a critter banking more; this is the scale that senses
 // and size are measured on, so a critter beyond it simply reads as full.
-pub const MAX_CRITTER_ENERGY: u32 = 1000;
+pub const MAX_CRITTER_ENERGY: u32 = 10_000;
 // A critter's area is proportional to its energy, so its radius goes as the
 // square root: four times the energy makes a critter twice as wide, not four
 // times. Size is therefore a reading of how well fed a critter is, visible at
@@ -21,13 +21,13 @@ pub const CRITTER_RADIUS: i32 = 6;
 // The energy that doubles a critter's area, taking it from the free size to
 // about one and a half times as wide. Larger values make energy count for
 // less, flattening the range of sizes the world shows.
-pub const REFERENCE_ENERGY: u32 = 250;
+pub const REFERENCE_ENERGY: u32 = 2_500;
 // Energy charged when a critter actually fires Split, regardless of whether
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
 // reproduction attempt cost something the parent can't recover by eating
 // the child.
-pub const SPLIT_ATTEMPT_COST: u32 = 200;
+pub const SPLIT_ATTEMPT_COST: u32 = 2_000;
 // How long a division takes. A critter that fires Split is committed for this
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
@@ -49,7 +49,7 @@ pub const MAX_BIRTH_DISTANCE: i32 = 400;
 // alive, and being alive costs the same whether a critter is rich or poor.
 // What scales with a critter -- its feelers, what poison takes, what a
 // predator can win from it -- scales for reasons of its own.
-pub const UPKEEP: u32 = 2;
+pub const UPKEEP: u32 = 20;
 // What a feeler costs its owner each turn, as a share of the area its disc
 // senses. A sense organ is something to keep running, not something to pay
 // for when it happens to touch something -- eyes cost an animal energy whether
@@ -1556,7 +1556,7 @@ mod tests {
     mod energy {
         use super::*;
 
-        const INITIAL_ENERGY: u32 = 42;
+        const INITIAL_ENERGY: u32 = 420;
 
         #[test]
         fn a_new_critter_starts_with_the_given_initial_energy() {
@@ -2173,7 +2173,7 @@ mod tests {
         use super::*;
         use crate::Genome;
 
-        const INITIAL_ENERGY: u32 = 60;
+        const INITIAL_ENERGY: u32 = 600;
         // The split flow: pay SPLIT_ATTEMPT_COST and the firing turn's upkeep,
         // then upkeep again for each tick of the division, and finally halve
         // what remains between parent and child.

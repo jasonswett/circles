@@ -650,7 +650,7 @@ mod tests {
             // An ordinary energy rather than u32::MAX: size grows with
             // energy, and a critter that rich is thousands of pixels across,
             // so its feelers land nowhere near the test canvas.
-            const FED: u32 = 250;
+            const FED: u32 = 2_500;
 
             fn feeler_critter(length: f32, angle: f32, disc: f32) -> Critter {
                 let mut genome = Genome::all(Instruction::DoNothing);
@@ -1205,7 +1205,7 @@ mod tests {
         // Energy chosen so the critter's own radius comes out at RADIUS,
         // since that is what it is drawn at: size follows energy, so a test
         // critter cannot pick the two independently.
-        const ENERGY_FOR_TEST_RADIUS: u32 = 2528;
+        const ENERGY_FOR_TEST_RADIUS: u32 = 25_280;
 
         fn stationary_critter(x: i32, y: i32, heading: Heading) -> Critter {
             let critter = Critter::with_genome(

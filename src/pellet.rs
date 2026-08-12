@@ -75,7 +75,7 @@ pub const PELLET_COLOR: u32 = 0x00_FF_00;
 pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
 pub const PELLETS_PER_POISON: usize = 50;
-pub const PELLET_ENERGY: u32 = 200;
+pub const PELLET_ENERGY: u32 = 2_000;
 /// The share of a critter's energy that poison takes. Proportional rather
 /// than a fixed amount, so poison stays worth avoiding however much a critter
 /// has banked -- no reserve is deep enough to make it trivial, and a critter
