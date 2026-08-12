@@ -40,9 +40,10 @@ pub const SKIP_DISTANCE: usize = 4;
 // How far from its parent a child can be born, in pixels. Somewhere random
 // within this rather than at the parent's elbow: a child born where its parent
 // stands is born somewhere its parent has just eaten, and one thrown clear has
-// to find its own food. Further than any feeler reaches, so it cannot simply
-// sense its way back to where it came from.
-pub const MAX_BIRTH_DISTANCE: i32 = 100;
+// to find its own food. Far enough to be a fair way across the world, and far
+// beyond what any feeler reaches, so a newborn cannot simply sense its way
+// back to where it came from.
+pub const MAX_BIRTH_DISTANCE: i32 = 400;
 // What a step costs at each pace. Moving fast covers twice the ground of
 // moving slow, but the cost of covering it rises with the square of the
 // pace, the way drag does in any real medium: twice the speed, four times
