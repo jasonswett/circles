@@ -27,12 +27,12 @@ pub const REFERENCE_ENERGY: u32 = 250;
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
 // reproduction attempt cost something the parent can't recover by eating
 // the child.
-pub const SPLIT_ATTEMPT_COST: u32 = 60;
+pub const SPLIT_ATTEMPT_COST: u32 = 200;
 // How long a division takes. A critter that fires Split is committed for this
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
 // that starves partway through dies with nothing to show for it.
-pub const SPLIT_DURATION_TICKS: u32 = 4;
+pub const SPLIT_DURATION_TICKS: u32 = 8;
 // How many slots a skip moves the playhead. Fixed for now: evolution
 // controls whether a critter jumps, through the usual weights and sigmoid,
 // but not yet how far.
@@ -644,7 +644,10 @@ mod tests {
     // Fires Split and runs the division out, returning the child. Since
     // division takes time, a single tick no longer yields one.
     fn divide_fully(critter: &mut Critter) -> Critter {
-        for _ in 0..=SPLIT_DURATION_TICKS {
+        // A division takes a tick to fire and SPLIT_DURATION_TICKS to finish,
+        // and a critter only fires every so many ticks, so the budget allows
+        // for both rather than assuming the two are the same thing.
+        for _ in 0..(SPLIT_DURATION_TICKS + 2) * TICKS_PER_INSTRUCTION {
             if let Some(child) = critter.tick(true).child {
                 return child;
             }
@@ -2180,7 +2183,9 @@ mod tests {
         // what remains between parent and child. Upkeep is a share of what the
         // critter is holding at the time, so it is walked rather than
         // multiplied out.
-        const SPLITTER_ENERGY: u32 = 2 * INITIAL_ENERGY;
+        // Enough to cover the attempt and still have something left to halve,
+        // whatever splitting is set to cost.
+        const SPLITTER_ENERGY: u32 = SPLIT_ATTEMPT_COST + 2 * INITIAL_ENERGY;
 
         fn energy_at_division_end() -> u32 {
             let mut energy = SPLITTER_ENERGY - SPLIT_ATTEMPT_COST;
@@ -2477,7 +2482,8 @@ mod tests {
                 0,
                 Genome::from_instructions(&[Instruction::Split, Instruction::MoveSlow]),
             );
-            parent.gain_energy(INITIAL_ENERGY);
+            // Enough to cover the attempt and still have something to halve.
+            parent.gain_energy(SPLIT_ATTEMPT_COST + INITIAL_ENERGY);
 
             let mut child = divide_fully(&mut parent);
             let initial_child_x = child.x();
@@ -2562,10 +2568,10 @@ mod tests {
                 0,
                 Genome::from_instructions(&[Instruction::Split, Instruction::RepeatPreviousMove]),
             );
-            // Need enough energy for two splits: pre-split must be ≥ 2 × initial.
-            // After the first split, parent will have ~half — so we start with
-            // 4 × initial to leave enough for the second split.
-            parent.gain_energy(3 * INITIAL_ENERGY);
+            // Enough for two divisions. The parent keeps about half of what
+            // survives the first, so it starts with rather more than twice
+            // what one costs.
+            parent.gain_energy(6 * SPLIT_ATTEMPT_COST);
 
             divide_fully(&mut parent); // first split
             let second_child = divide_fully(&mut parent); // repeat → split again
