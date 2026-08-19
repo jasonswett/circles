@@ -85,16 +85,6 @@ const HISTORY_FACTOR_SCALE: f32 = 64.0;
 // encoded range is 1..=16 and no instruction can be excluded outright —
 // which also means the cumulative table is never empty.
 const WEIGHT_BITS_PER_INSTRUCTION: usize = 4;
-// A thumb on the scale for reproduction: Split claims this many times the
-// opcode space its weight field alone would give it. Applied to the decoded
-// weight rather than written into the genome, so the same bits still say how
-// much a lineage wants to divide and evolution can still turn it down --
-// doubling the smallest weight is still the smallest weight.
-//
-// Splitting is the one instruction whose payoff a critter never collects
-// itself, so nothing about a critter's own life selects for it. The world
-// leans on the scale to make reproduction likely enough to get started.
-const SPLIT_WEIGHT_MULTIPLIER: u32 = 2;
 
 #[cfg(test)]
 pub(crate) const MAX_WEIGHT_BITS: u32 = (1 << WEIGHT_BITS_PER_INSTRUCTION) - 1;
@@ -499,12 +489,8 @@ impl Genome {
     fn instruction_weight(&self, instruction: Instruction) -> u32 {
         let offset = WEIGHTS_OFFSET + instruction_index(instruction) * WEIGHT_BITS_PER_INSTRUCTION;
         let encoded = read_bits(&self.bytes, offset, WEIGHT_BITS_PER_INSTRUCTION) + 1;
-        let scaled = encoded * kind_of(instruction).share_per_variant();
-        if instruction == Instruction::Split {
-            scaled * SPLIT_WEIGHT_MULTIPLIER
-        } else {
-            scaled
-        }
+        let kind = kind_of(instruction);
+        encoded * kind.share_per_variant() * kind.thumb_on_the_scale()
     }
 
     /// Overwrites one instruction's weight field. Test-only: in a running
@@ -775,6 +761,26 @@ enum Kind {
 }
 
 impl Kind {
+    /// How much the world leans on this kind coming up, over and above what a
+    /// genome's weight fields ask for. A kind with nothing to declare comes
+    /// out at exactly what its fields say.
+    ///
+    /// Applied to the decoded weight rather than written into the genome, so
+    /// the same bits still say how much a lineage wants of something and
+    /// evolution can still turn it down: leaning on the smallest weight still
+    /// leaves it the smallest weight.
+    fn thumb_on_the_scale(self) -> u32 {
+        match self {
+            // Reproduction is the one thing whose payoff a critter never
+            // collects itself, so nothing about its own life selects for it.
+            Kind::Split => 2,
+            // A critter that cannot steer is at the mercy of wherever it
+            // happens to be pointing.
+            Kind::Turn => 2,
+            _ => 1,
+        }
+    }
+
     /// How many instructions spell this kind.
     fn variants(self) -> u32 {
         ALL_INSTRUCTIONS
@@ -2439,6 +2445,49 @@ mod tests {
         use super::*;
 
         #[test]
+        fn turning_claims_twice_the_opcode_space_its_fields_would_give_it() {
+            // Turning carries a thumb on the scale of its own. A critter that
+            // cannot steer is at the mercy of wherever it happens to be
+            // pointing, so the world leans on turning coming up often enough
+            // to matter.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for instruction in ALL_INSTRUCTIONS {
+                genome.set_instruction_weight_bits(instruction, 3);
+            }
+
+            let turning: u32 = ALL_INSTRUCTIONS
+                .iter()
+                .filter(|i| kind_of(**i) == Kind::Turn)
+                .map(|&i| genome.instruction_weight(i))
+                .sum();
+            let eating = genome.instruction_weight(Instruction::Eat);
+
+            // A literal, not the constant: asserting against the constant
+            // would hold whatever the constant said, including one.
+            assert_eq!(turning, eating * 2);
+        }
+
+        #[test]
+        fn a_kind_with_no_thumb_on_the_scale_claims_what_its_fields_say() {
+            // Only the kinds meant to be favoured are: the rest come out at
+            // exactly what their weight fields ask for, so the table is a
+            // place to lean on the scale rather than a place every kind needs
+            // an entry to be treated fairly.
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for instruction in ALL_INSTRUCTIONS {
+                genome.set_instruction_weight_bits(instruction, 3);
+            }
+
+            let moving: u32 = ALL_INSTRUCTIONS
+                .iter()
+                .filter(|i| kind_of(**i) == Kind::Move)
+                .map(|&i| genome.instruction_weight(i))
+                .sum();
+
+            assert_eq!(moving, genome.instruction_weight(Instruction::Eat));
+        }
+
+        #[test]
         fn splitting_claims_twice_the_opcode_space_its_field_would_give_it() {
             // A thumb on the scale, applied to the decoded weight rather than
             // to the genome: the same bits still say how much a lineage wants
@@ -2524,7 +2573,10 @@ mod tests {
                 .sum();
             let eating = genome.instruction_weight(Instruction::Eat);
 
-            assert_eq!(turning, eating);
+            // Allowing for the thumb turning carries, which is a decision made
+            // about turning rather than an accident of how many ways there are
+            // to spell it -- the thing this test is here to rule out.
+            assert_eq!(turning, eating * Kind::Turn.thumb_on_the_scale());
         }
 
         #[test]
@@ -2544,21 +2596,20 @@ mod tests {
             // that reproduction is likelier than the rest. Equal weighting is
             // about the count of variants not deciding anything, not about
             // refusing to lean on the scale on purpose.
-            for kind in [
-                Kind::Turn,
-                Kind::Eat,
-                Kind::Skip,
-                Kind::Nothing,
-                Kind::Repeat,
-            ] {
+            for kind in [Kind::Eat, Kind::Skip, Kind::Nothing, Kind::Repeat] {
                 assert_eq!(share(kind), moving, "{kind:?} should match Move");
             }
 
-            assert_eq!(
-                share(Kind::Split),
-                moving * SPLIT_WEIGHT_MULTIPLIER,
-                "splitting keeps its thumb on the scale"
-            );
+            // The kinds the world leans on come out at their share times the
+            // thumb, which is the only thing that should ever make one kind
+            // differ from another.
+            for kind in [Kind::Split, Kind::Turn] {
+                assert_eq!(
+                    share(kind),
+                    moving * kind.thumb_on_the_scale(),
+                    "{kind:?} should keep its thumb on the scale"
+                );
+            }
         }
 
         #[test]
@@ -2632,32 +2683,31 @@ mod tests {
             let counts = decoded_counts(&genome);
 
             // Weights are bits + 1, scaled so each kind claims the same space
-            // however many variants spell it, and doubled again for Split.
-            // Eat is a kind of one holding the largest field, so it takes 89
-            // of the 128 opcode values; Split, a kind of one with the
-            // multiplier, takes 11. The seven turns share one kind's worth
-            // between them, so each holds a band of about one value and the
-            // rounding decides which of them a value lands in. Naming each
-            // instruction's share is what pins the scaling: formulas that
-            // shift which instructions get a slot preserve the totals but not
-            // this breakdown.
+            // however many variants spell it, and doubled again for the two
+            // kinds the world leans on. Eat is a kind of one holding the
+            // largest field, so it takes 85 of the 128 opcode values; Split,
+            // a kind of one with a thumb, takes 11; the seven turns share two
+            // kinds' worth between them and come out with ten between them.
+            // Naming each instruction's share is what pins the scaling:
+            // formulas that shift which instructions get a slot preserve the
+            // totals but not this breakdown.
             let share = |instruction| *counts.get(&instruction).unwrap_or(&0);
 
-            assert_eq!(share(Instruction::Eat), 89);
+            assert_eq!(share(Instruction::Eat), 85);
             assert_eq!(share(Instruction::Split), 11);
-            assert_eq!(share(Instruction::RepeatPreviousMove), 6);
-            assert_eq!(share(Instruction::DoNothing), 5);
+            assert_eq!(share(Instruction::DoNothing), 6);
+            assert_eq!(share(Instruction::RepeatPreviousMove), 5);
             assert_eq!(share(Instruction::MoveSlow), 3);
             assert_eq!(share(Instruction::MoveFast), 3);
             assert_eq!(share(Instruction::SkipAhead), 3);
-            assert_eq!(share(Instruction::SkipBack), 3);
-            assert_eq!(share(Instruction::TurnLeft15), 1);
+            assert_eq!(share(Instruction::SkipBack), 2);
+            assert_eq!(share(Instruction::TurnLeft15), 2);
+            assert_eq!(share(Instruction::TurnLeft90), 2);
+            assert_eq!(share(Instruction::TurnRight90), 2);
             assert_eq!(share(Instruction::TurnRight15), 1);
-            assert_eq!(share(Instruction::TurnLeft90), 1);
+            assert_eq!(share(Instruction::TurnLeft45), 1);
             assert_eq!(share(Instruction::TurnRight45), 1);
-            assert_eq!(share(Instruction::TurnRight90), 1);
-            assert_eq!(share(Instruction::TurnLeft45), 0);
-            assert_eq!(share(Instruction::TurnAbout), 0);
+            assert_eq!(share(Instruction::TurnAbout), 1);
         }
 
         #[test]

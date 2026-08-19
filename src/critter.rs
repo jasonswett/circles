@@ -49,7 +49,7 @@ pub const MAX_BIRTH_DISTANCE: i32 = 200;
 // alive, and being alive costs the same whether a critter is rich or poor.
 // What scales with a critter -- its feelers, what poison takes, what a
 // predator can win from it -- scales for reasons of its own.
-pub const UPKEEP: u32 = 15;
+pub const UPKEEP: u32 = 18;
 // What a feeler costs its owner each turn, as a share of the area its disc
 // senses. A sense organ is something to keep running, not something to pay
 // for when it happens to touch something -- eyes cost an animal energy whether
