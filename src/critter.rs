@@ -249,8 +249,19 @@ impl Critter {
     /// how far out and how far apart they are held; both start at the body's
     /// edge, so a critter's reach grows with it rather than shrinking as it
     /// fattens.
+    ///
+    /// A critter with only one feeler holds it straight ahead. The angle is a
+    /// splay between a pair, and a lone feeler has nothing to be splayed away
+    /// from: held off to one side it would watch a patch of world its owner
+    /// never travels into, which makes the first feeler a lineage grows worth
+    /// having rather than worth losing.
     pub fn feeler_tips(&self) -> ((i32, i32), (i32, i32)) {
-        let angle = self.genome.feeler_angle();
+        let paired = self.has_left_feeler() && self.has_right_feeler();
+        let angle = if paired {
+            self.genome.feeler_angle()
+        } else {
+            0.0
+        };
         let out = self.radius() as f32 + self.genome.feeler_length();
         let tip = |heading: Heading| {
             let (dx, dy) = heading.unit();
@@ -1692,9 +1703,13 @@ mod tests {
         use super::*;
         use crate::{MAX_FEELER_ANGLE, MIN_FEELER_DISC};
 
+        // Both feelers grown: the angle is a splay between a pair, so a
+        // critter with one of them holds it straight ahead whatever the
+        // genome says and these tests would all measure zero.
         fn shaped(length: f32, angle: f32) -> Critter {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(length, angle, MIN_FEELER_DISC);
+            genome.set_feelers_present(true, true);
             Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome)
         }
 
@@ -1715,6 +1730,50 @@ mod tests {
         }
 
         #[test]
+        fn a_critter_with_only_a_left_feeler_holds_it_straight_ahead() {
+            // A lone feeler has nothing to be splayed away from. Held at the
+            // genome's angle it would sit off to one side, sensing a patch
+            // the critter never travels into.
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+            genome.set_feelers_present(true, false);
+            let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
+
+            let ((lx, ly), _) = critter.feeler_tips();
+
+            let expected = critter.radius() + critter.genome().feeler_length().round() as i32;
+            assert_eq!((lx, ly), (100, 100 - expected));
+        }
+
+        #[test]
+        fn a_critter_with_only_a_right_feeler_holds_it_straight_ahead() {
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+            genome.set_feelers_present(false, true);
+            let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
+
+            let (_, (rx, ry)) = critter.feeler_tips();
+
+            let expected = critter.radius() + critter.genome().feeler_length().round() as i32;
+            assert_eq!((rx, ry), (100, 100 - expected));
+        }
+
+        #[test]
+        fn a_critter_with_both_feelers_splays_them_at_the_genome_s_angle() {
+            // The pair keeps the angle: it is only a lone feeler that centres.
+            let mut genome = Genome::all(Instruction::DoNothing);
+            genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+            genome.set_feelers_present(true, true);
+            let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
+
+            let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+
+            let expected = critter.radius() + critter.genome().feeler_length().round() as i32;
+            assert_eq!((lx, ly), (100 - expected, 100));
+            assert_eq!((rx, ry), (100 + expected, 100));
+        }
+
+        #[test]
         fn feelers_held_at_a_right_angle_point_straight_out_to_the_sides() {
             let critter = shaped(30.0, MAX_FEELER_ANGLE);
 
@@ -1729,6 +1788,7 @@ mod tests {
         fn the_feelers_turn_with_the_critter() {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
+            genome.set_feelers_present(true, true);
             let critter = Critter::with_genome(100, 100, EAST, u32::MAX, 1, 60, 0, genome);
 
             let ((lx, ly), (rx, ry)) = critter.feeler_tips();

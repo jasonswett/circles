@@ -667,7 +667,15 @@ mod tests {
                 genome.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 6.0);
                 genome.set_feelers_present(true, false);
                 let critter = Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, genome);
-                let ((lx, ly), (rx, ry)) = critter.feeler_tips();
+                let ((lx, ly), _) = critter.feeler_tips();
+                // Where the missing feeler would have been had the critter
+                // grown it: a lone feeler points straight ahead, so the two
+                // tips coincide and only the splayed pair tells them apart.
+                let mut paired = Genome::all(Instruction::DoNothing);
+                paired.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 6.0);
+                paired.set_feelers_present(true, true);
+                let with_both = Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, paired);
+                let (_, (rx, ry)) = with_both.feeler_tips();
 
                 let buffer = render(&critter);
 
