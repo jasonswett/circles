@@ -68,9 +68,9 @@ impl Pellet {
 pub const PELLET_RADIUS: i32 = 2;
 /// Fastest a pellet may drift, in pixels per tick. Slow enough that food
 /// lingers near the emitter rather than crossing the world in moments.
-pub const PELLET_MAX_DRIFT: f32 = 0.7;
+pub const PELLET_MAX_DRIFT: f32 = 0.3;
 /// Slowest a pellet may drift. Nonzero so no pellet parks on the emitter.
-pub const PELLET_MIN_DRIFT: f32 = 0.1;
+pub const PELLET_MIN_DRIFT: f32 = 0.0;
 pub const PELLET_COLOR: u32 = 0x00_FF_00;
 pub const POISON_COLOR: u32 = 0xFF_00_00;
 /// One pellet in this many is poison rather than food.
@@ -87,4 +87,4 @@ pub const POISON_DAMAGE_PERCENT: u32 = 90;
 /// second this is 20 seconds. Uneaten food does not accumulate forever, so
 /// the larder reflects recent deliveries rather than the world's whole
 /// history of them.
-pub const PELLET_LIFESPAN_TICKS: u32 = 3600;
+pub const PELLET_LIFESPAN_TICKS: u32 = 2400;
