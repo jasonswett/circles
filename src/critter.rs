@@ -43,7 +43,7 @@ pub const SKIP_DISTANCE: usize = 4;
 // to find its own food. Far enough to be a fair way across the world, and far
 // beyond what any feeler reaches, so a newborn cannot simply sense its way
 // back to where it came from.
-pub const MAX_BIRTH_DISTANCE: i32 = 200;
+pub const MAX_BIRTH_DISTANCE: i32 = 50;
 // What a turn costs a critter, whatever it does with the turn. A flat fee
 // rather than a share of what the critter is holding: it is rent on being
 // alive, and being alive costs the same whether a critter is rich or poor.

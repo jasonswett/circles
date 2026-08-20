@@ -87,4 +87,4 @@ pub const POISON_DAMAGE_PERCENT: u32 = 90;
 /// second this is 20 seconds. Uneaten food does not accumulate forever, so
 /// the larder reflects recent deliveries rather than the world's whole
 /// history of them.
-pub const PELLET_LIFESPAN_TICKS: u32 = 1200;
+pub const PELLET_LIFESPAN_TICKS: u32 = 3600;
