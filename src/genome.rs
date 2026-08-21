@@ -6,10 +6,19 @@ const INSTRUCTION_COUNT: usize = 15;
 // child. Evolvable like everything else — it mutates along with the rest of
 // the genome, so a lineage's mutability drifts under selection.
 pub(crate) const MUTATION_RATE_BITS: usize = 8;
-// The highest per-bit flip rate a genome can encode. With 440 bits this caps
-// a split at roughly 0.2 changed bits, keeping the hottest possible lineage
-// below the error threshold while still leaving room to evolve mutability.
-const MAX_MUTATION_RATE: f32 = 0.0005;
+// The highest per-bit flip rate a genome can encode. With the genome at some
+// 870 bits this caps the hottest possible lineage at roughly one changed bit
+// every twelve births, and puts a typical one -- the field averages half its
+// range -- nearer one in twenty-three.
+//
+// Set against nature rather than against the error threshold. Almost nothing
+// here is junk: a flipped bit lands in a weight, a threshold or an opcode and
+// the critter behaves differently for it, where an animal carries most of its
+// mutations in regions that do nothing and most of the rest without visible
+// effect. A rate that looked modest per bit was producing behavioural change
+// every few births, which is faster than anything that has to stay recogniz-
+// able between parent and child.
+const MAX_MUTATION_RATE: f32 = 0.0001;
 // Per-instruction header window: factor mask + threshold + softness.
 // The factor mask is three bits (one per factor), read in the order:
 // bit 0 = energy, bit 1 = is-touching-another-critter, bit 2 = the touched

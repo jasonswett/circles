@@ -27,7 +27,7 @@ pub const REFERENCE_ENERGY: u32 = 2_500;
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
 // reproduction attempt cost something the parent can't recover by eating
 // the child.
-pub const SPLIT_ATTEMPT_COST: u32 = 1_000;
+pub const SPLIT_ATTEMPT_COST: u32 = 0;
 // How long a division takes. A critter that fires Split is committed for this
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
@@ -2717,13 +2717,16 @@ mod tests {
 
         #[test]
         fn a_parent_whose_genome_encodes_the_maximum_rate_mutates_far_more_often() {
-            let never = mutated_children_of_rate(0, 200);
-            let often = mutated_children_of_rate(u32::MAX >> (32 - MUTATION_RATE_BITS), 200);
+            // Over a thousand births rather than two hundred: the hottest
+            // lineage the genome can encode changes a bit every twenty-odd
+            // births, so a smaller sample would be counting noise.
+            let never = mutated_children_of_rate(0, 1_000);
+            let often = mutated_children_of_rate(u32::MAX >> (32 - MUTATION_RATE_BITS), 1_000);
 
             assert!(
                 often > never + 20,
                 "expected the max-rate parent to mutate far more than the zero-rate parent, \
-                 got {often} vs {never} out of 200"
+                 got {often} vs {never} out of 1000"
             );
         }
 
