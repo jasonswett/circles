@@ -422,7 +422,11 @@ impl World {
             }
             critter.wrap_position(self.width as i32, self.height as i32);
         }
-        self.critters.extend(children);
+        for child in children {
+            if self.has_room_for(&child) {
+                self.critters.push(child);
+            }
+        }
         let (width, height) = (self.width as f32, self.height as f32);
         for pellet in &mut self.pellets {
             pellet.drift(width, height);
@@ -512,6 +516,27 @@ impl World {
                 }
             }
         }
+    }
+
+    /// Whether a newborn has anywhere to be. A child landing on a critter
+    /// already standing there does not survive its birth, so room is a thing
+    /// a world can run out of: the crowded places around a food source cost a
+    /// parent the price of dividing and give it nothing, while an empty
+    /// stretch of world returns a whole critter for the same fee.
+    ///
+    /// The dead are not in the way. A corpse is swept up on the next reaping
+    /// and blocking births on one would make the recently departed a fence.
+    fn has_room_for(&self, child: &Critter) -> bool {
+        let (width, height) = (self.width as i32, self.height as i32);
+        !self.critters.iter().any(|occupant| {
+            if occupant.energy() == 0 {
+                return false;
+            }
+            let dx = toroidal_delta(child.x(), occupant.x(), width);
+            let dy = toroidal_delta(child.y(), occupant.y(), height);
+            let reach = child.radius() + occupant.radius();
+            dx * dx + dy * dy < reach * reach
+        })
     }
 
     pub fn detect_critter_overlaps(&mut self) {
@@ -1032,6 +1057,202 @@ mod tests {
             }
 
             assert_eq!(world.critters().len(), 2);
+        }
+
+        fn splitter_at(x: i32, y: i32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                NORTH,
+                1,
+                1,
+                crate::MAX_CRITTER_ENERGY,
+                0,
+                Genome::all(Instruction::Split),
+            )
+        }
+
+        // Enough neighbours to leave nowhere free: a birth lands within
+        // MAX_BIRTH_DISTANCE of the parent, and no single critter is wide
+        // enough to cover that, so the range is carpeted with a grid of them
+        // spaced closer than the width of the child that has to fit between.
+        fn crowd_around(x: i32, y: i32) -> Vec<Critter> {
+            let mut crowd = Vec::new();
+            let reach = crate::critter::MAX_BIRTH_DISTANCE;
+            let step = crate::CRITTER_RADIUS;
+            let mut dx = -reach;
+            while dx <= reach {
+                let mut dy = -reach;
+                while dy <= reach {
+                    crowd.push(Critter::with_genome(
+                        x + dx,
+                        y + dy,
+                        NORTH,
+                        1,
+                        1,
+                        crate::MAX_CRITTER_ENERGY,
+                        0,
+                        Genome::all(Instruction::DoNothing),
+                    ));
+                    dy += step;
+                }
+                dx += step;
+            }
+            crowd
+        }
+
+        #[test]
+        fn a_child_born_on_top_of_another_critter_does_not_survive() {
+            // Room is a thing a world runs out of. A critter that divides
+            // into a crowd has paid for the attempt and has nothing to show
+            // for it, which is what makes a crowded place worse to be than
+            // an empty one.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                {
+                    let mut all = vec![splitter_at(100, 100)];
+                    all.extend(crowd_around(100, 100));
+                    all
+                },
+                vec![],
+            );
+            let before = world.critters().len();
+
+            for _ in 0..=crate::SPLIT_DURATION_TICKS {
+                world.tick(true);
+            }
+
+            assert_eq!(world.critters().len(), before);
+        }
+
+        #[test]
+        fn a_child_born_in_clear_space_survives() {
+            // The same division with no neighbour at all: what decides the
+            // child's fate is the room, not the dividing.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![splitter_at(100, 100)],
+                vec![],
+            );
+
+            for _ in 0..=crate::SPLIT_DURATION_TICKS {
+                world.tick(true);
+            }
+
+            assert_eq!(world.critters().len(), 2);
+        }
+
+        #[test]
+        fn a_parent_still_pays_for_a_child_that_had_nowhere_to_go() {
+            // The cost is of the attempt, not of the outcome. Refunded, a
+            // critter could divide into a crowd for free and would have no
+            // reason not to keep doing it.
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                {
+                    let mut all = vec![splitter_at(100, 100)];
+                    all.extend(crowd_around(100, 100));
+                    all
+                },
+                vec![],
+            );
+            let before = world.critters()[0].energy();
+
+            for _ in 0..=crate::SPLIT_DURATION_TICKS {
+                world.tick(true);
+            }
+
+            assert!(
+                world.critters()[0].energy() <= before - crate::critter::SPLIT_ATTEMPT_COST,
+                "the attempt should have cost the parent whatever came of it"
+            );
+        }
+    }
+
+    mod has_room_for {
+        use super::*;
+        use crate::{Critter, Genome, Instruction, NORTH};
+
+        // Two critters of a known size, so the distance at which they touch
+        // is a number the test can name rather than one it has to trust.
+        fn body(x: i32, y: i32) -> Critter {
+            Critter::with_genome(
+                x,
+                y,
+                NORTH,
+                1,
+                1,
+                crate::MAX_CRITTER_ENERGY,
+                0,
+                Genome::all(Instruction::DoNothing),
+            )
+        }
+
+        fn world_with_one_at(x: i32, y: i32) -> World {
+            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![body(x, y)], vec![])
+        }
+
+        #[test]
+        fn a_child_just_inside_the_touching_distance_has_no_room() {
+            // Bodies overlap when their centres are closer than the two radii
+            // together, so a pixel inside that is a collision.
+            let world = world_with_one_at(100, 100);
+            let reach = body(0, 0).radius() * 2;
+            let child = body(100 + reach - 1, 100);
+
+            assert!(!world.has_room_for(&child));
+        }
+
+        #[test]
+        fn a_child_just_outside_the_touching_distance_has_room() {
+            // And a pixel beyond it is not. Pinned either side because a rule
+            // that blocked at any distance would satisfy the first test alone.
+            let world = world_with_one_at(100, 100);
+            let reach = body(0, 0).radius() * 2;
+            let child = body(100 + reach, 100);
+
+            assert!(world.has_room_for(&child));
+        }
+
+        #[test]
+        fn distance_is_measured_diagonally_rather_than_along_one_axis() {
+            // A child offset on both axes is further away than either offset
+            // alone: measured by adding the axes rather than squaring them,
+            // this one would read as a collision when the bodies are clear.
+            let world = world_with_one_at(100, 100);
+            let reach = body(0, 0).radius() * 2;
+            let offset = reach * 3 / 4;
+            let child = body(100 + offset, 100 + offset);
+
+            assert!(
+                world.has_room_for(&child),
+                "bodies {offset} apart on each axis are {:.0} apart",
+                ((offset * offset * 2) as f32).sqrt()
+            );
+        }
+
+        #[test]
+        fn a_child_across_the_seam_of_the_world_is_still_in_the_way() {
+            // The world wraps, so a body at one edge is a neighbour of the
+            // other: measured without wrapping these two are a world apart.
+            let world = world_with_one_at(1, 100);
+            let child = body(TEST_WIDTH as i32 - 1, 100);
+
+            assert!(!world.has_room_for(&child));
+        }
+
+        #[test]
+        fn the_dead_are_not_in_the_way() {
+            // A corpse is swept up on the next reaping. Blocking births on
+            // one would make the recently departed a fence.
+            let mut world = world_with_one_at(100, 100);
+            world.critters[0].lose_energy(crate::MAX_CRITTER_ENERGY);
+            let child = body(100, 100);
+
+            assert!(world.has_room_for(&child));
         }
     }
 
