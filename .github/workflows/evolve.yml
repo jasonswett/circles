@@ -1,0 +1,91 @@
+# Runs worlds for as long as a job is allowed to last, then commits whatever
+# genome did best back to the repository. The next run starts from that genome,
+# so the six-hour ceiling on a job becomes a place to save rather than a wall:
+# evolution carries on across runs, and its history is the history of this file.
+name: evolve
+
+on:
+  schedule:
+    # Every six hours. A run takes a little under five, so each one finishes
+    # well before the next begins.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "How long to run for"
+        required: false
+        default: "4.5"
+      fresh:
+        description: "Start over from random genomes"
+        type: boolean
+        required: false
+        default: false
+
+# One run at a time. Two runs would each start from the same genome and the
+# second to finish would overwrite the first, throwing away its work.
+concurrency:
+  group: evolve
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  evolve:
+    runs-on: ubuntu-latest
+    # GitHub stops a job at six hours regardless, so this is a deadline the
+    # run can meet rather than one imposed on it mid-world.
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # No minifb, no fontdue, no X11 to install: the headless binary shares
+      # the library with the windowed app and nothing else.
+      - name: Build
+        run: cargo build --release --no-default-features --bin headless
+
+      - name: Work out how long to run
+        id: budget
+        run: |
+          hours="${{ inputs.hours || '4.5' }}"
+          ticks=$(python3 -c "print(int(float('$hours') * 3600 * 60))")
+          echo "ticks=$ticks" >> "$GITHUB_OUTPUT"
+          echo "Running for $hours hours of simulated time ($ticks ticks)"
+
+      - name: Evolve
+        run: |
+          if [ -f genomes/champion.txt ] && [ "${{ inputs.fresh }}" != "true" ]; then
+            echo "Resuming from the current champion"
+            ./target/release/headless \
+              --genome "$(cat genomes/champion.txt)" \
+              --ticks "${{ steps.budget.outputs.ticks }}" \
+              --out genomes/champion.txt
+          else
+            echo "Starting fresh"
+            ./target/release/headless \
+              --ticks "${{ steps.budget.outputs.ticks }}" \
+              --out genomes/champion.txt
+          fi
+
+      # A run that found nothing better leaves the file untouched, and there is
+      # then nothing to commit -- which is why this asks git rather than
+      # assuming.
+      - name: Commit the champion
+        run: |
+          if git diff --quiet genomes/champion.txt 2>/dev/null; then
+            echo "No improvement this run; nothing to commit."
+            exit 0
+          fi
+          git config user.name "circles"
+          git config user.email "circles@users.noreply.github.com"
+          git add genomes/champion.txt
+          git commit -m "Evolve: a longer-lived world from run ${{ github.run_number }}."
+          # The branch may have moved while this ran, and this job's only claim
+          # on it is one file.
+          git pull --rebase --autostash
+          git push

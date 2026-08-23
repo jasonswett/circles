@@ -1,7 +1,7 @@
 use circles::{
     format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
-    PopulationGrowthDetector, Renderer, StagnationDetector, Startup, World, WorldRecord,
-    SEEDING_TICKS, TICKS_PER_SECOND,
+    PopulationGrowthDetector, Renderer, StagnationDetector, World, WorldRecord, SEEDING_TICKS,
+    TICKS_PER_SECOND,
 };
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rand::thread_rng;
@@ -98,9 +98,9 @@ fn main() {
     )));
 
     let mut rng = thread_rng();
-    let mut world = match startup {
-        Startup::Default => World::new(width, height, &mut rng),
-        Startup::SeedGenome(genome) => World::with_seed_genome(width, height, genome, &mut rng),
+    let mut world = match startup.seed {
+        None => World::new(width, height, &mut rng),
+        Some(genome) => World::with_seed_genome(width, height, genome, &mut rng),
     };
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
     let mut frame_counter: u32 = 0;

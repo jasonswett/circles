@@ -10,6 +10,8 @@ mod population_growth_detector;
 mod renderer;
 mod snapshot;
 mod stagnation_detector;
+// Drawing text needs a font, and a headless run draws nothing.
+#[cfg(feature = "window")]
 mod text;
 mod world;
 mod world_record;
@@ -36,6 +38,7 @@ pub use population_growth_detector::PopulationGrowthDetector;
 pub use renderer::Renderer;
 pub use snapshot::format_block as format_snapshot_block;
 pub use stagnation_detector::StagnationDetector;
+#[cfg(feature = "window")]
 pub use text::pixels as text_pixels;
 pub use world::{World, PELLET_BATCH_SIZE, SEEDING_TICKS, TICKS_PER_SECOND};
 pub use world_record::WorldRecord;

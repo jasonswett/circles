@@ -3,8 +3,23 @@ name = "circles"
 version = "0.1.0"
 edition = "2021"
 
+# The windowed app is the default. The headless runner shares the library and
+# nothing else: it draws nothing, so it needs no window and no X11 to build
+# against, which is what lets it build on a bare CI runner.
+[features]
+default = ["window"]
+window = ["dep:minifb", "dep:fontdue"]
+
+[[bin]]
+name = "circles"
+required-features = ["window"]
+
+[[bin]]
+name = "headless"
+required-features = []
+
 [dependencies]
-fontdue = "0.9"
-minifb = "0.25"
+fontdue = { version = "0.9", optional = true }
+minifb = { version = "0.25", optional = true }
 mutants = "0.0.4"
 rand = { version = "0.8", features = ["small_rng"] }
