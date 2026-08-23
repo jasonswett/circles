@@ -2,6 +2,9 @@
 name = "circles"
 version = "0.1.0"
 edition = "2021"
+# `cargo run` means the windowed app. There are two binaries now, and without
+# this cargo refuses to guess between them.
+default-run = "circles"
 
 # The windowed app is the default. The headless runner shares the library and
 # nothing else: it draws nothing, so it needs no window and no X11 to build
