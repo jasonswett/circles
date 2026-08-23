@@ -73,17 +73,18 @@ jobs:
           fi
 
       # A run that found nothing better leaves the file untouched, and there is
-      # then nothing to commit -- which is why this asks git rather than
-      # assuming.
+      # then nothing to commit. Staged first and asked afterwards: `git diff`
+      # alone says nothing about a file git has never seen, which on the very
+      # first run is every file this job writes.
       - name: Commit the champion
         run: |
-          if git diff --quiet genomes/champion.txt 2>/dev/null; then
-            echo "No improvement this run; nothing to commit."
-            exit 0
-          fi
           git config user.name "circles"
           git config user.email "circles@users.noreply.github.com"
           git add genomes/champion.txt
+          if git diff --cached --quiet; then
+            echo "No improvement this run; nothing to commit."
+            exit 0
+          fi
           git commit -m "Evolve: a longer-lived world from run ${{ github.run_number }}."
           # The branch may have moved while this ran, and this job's only claim
           # on it is one file.
