@@ -147,21 +147,28 @@ const FEELER_DISC_OFFSET: usize = FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS;
 // rather than a count, so a lineage can climb towards feelers a step at a
 // time: one is worth having on its own, and the second need not arrive with
 // the first.
-// How many bits spell each feeler. A feeler exists if any of them is set, so
-// mutation has several ways to find one and several would have to flip back
-// to lose it. One bit apiece made a feeler appear about once in four thousand
-// splits, which in a world where nothing lives long is never.
+// How many feelers a critter has is how many of these bits are set, capped at
+// the two it has room for. Not which bits: a single field counted rather than
+// two fields each read for whether anything in it is set, because under that
+// arrangement a critter with one feeler had it on whichever side mutation
+// happened to strike -- a fact about the layout and not about the critter --
+// and a pair of lucky flips could take a lineage from none to two at once.
 //
-// Duplication is how a trait becomes reachable and how it stops being lost:
-// what is spelled once is found rarely and undone by a single flip.
-const FEELER_PRESENT_BITS: usize = 5;
-const LEFT_FEELER_PRESENT_OFFSET: usize = FEELER_DISC_OFFSET + FEELER_FIELD_BITS;
-const RIGHT_FEELER_PRESENT_OFFSET: usize = LEFT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS;
+// Wider than the count it can express, so mutation has ten ways to find a
+// feeler and several would have to flip back to lose one. One bit apiece made
+// a feeler appear about once in four thousand splits, which in a world where
+// nothing lives long is never. Duplication is how a trait becomes reachable
+// and how it stops being lost: what is spelled once is found rarely and undone
+// by a single flip.
+const FEELER_PRESENT_BITS: usize = 10;
+const FEELER_PRESENT_OFFSET: usize = FEELER_DISC_OFFSET + FEELER_FIELD_BITS;
+/// The most feelers a critter has room for.
+const MAX_FEELERS: u32 = 2;
 // Measured from where the region starts to where its last field ends, rather
 // than counted up again by hand: a total that drifts from the offsets it is
 // meant to cover either drops a field out of the genome or pads it with bits
 // nothing reads.
-const FEELER_BITS: usize = RIGHT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - FEELER_LENGTH_OFFSET;
+const FEELER_BITS: usize = FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - FEELER_LENGTH_OFFSET;
 /// How far a feeler reaches beyond the body, in pixels.
 pub const MIN_FEELER_LENGTH: f32 = 8.0;
 pub const MAX_FEELER_LENGTH: f32 = 34.0;
@@ -224,18 +231,7 @@ impl Genome {
         // earn: everything else about a genome starts wherever chance put it,
         // but a feeler arrives only where mutation grows one, so a population
         // that has them has shown they pay for themselves.
-        write_bits(
-            &mut bytes,
-            LEFT_FEELER_PRESENT_OFFSET,
-            FEELER_PRESENT_BITS,
-            0,
-        );
-        write_bits(
-            &mut bytes,
-            RIGHT_FEELER_PRESENT_OFFSET,
-            FEELER_PRESENT_BITS,
-            0,
-        );
+        write_bits(&mut bytes, FEELER_PRESENT_OFFSET, FEELER_PRESENT_BITS, 0);
         #[allow(clippy::reversed_empty_ranges)]
         for bit in TOTAL_BITS..(TOTAL_BYTES * 8) {
             write_bits(&mut bytes, bit, 1, 0);
@@ -531,21 +527,17 @@ impl Genome {
         bits as f32 / max_value * MAX_MUTATION_RATE
     }
 
-    /// Grows or removes each feeler. Test-only: in a running world these
-    /// change only through mutation.
+    /// Grows this many feelers, up to the two a critter has room for.
+    /// Test-only: in a running world these change only through mutation.
     #[cfg(test)]
-    pub fn set_feelers_present(&mut self, left: bool, right: bool) {
+    pub fn set_feeler_count(&mut self, count: u32) {
+        // Spelled as that many set bits, which is what the reader counts.
+        let bits = (1u32 << count.min(FEELER_PRESENT_BITS as u32)) - 1;
         write_bits(
             &mut self.bytes,
-            LEFT_FEELER_PRESENT_OFFSET,
+            FEELER_PRESENT_OFFSET,
             FEELER_PRESENT_BITS,
-            u32::from(left),
-        );
-        write_bits(
-            &mut self.bytes,
-            RIGHT_FEELER_PRESENT_OFFSET,
-            FEELER_PRESENT_BITS,
-            u32::from(right),
+            bits,
         );
     }
 
@@ -577,18 +569,24 @@ impl Genome {
         );
     }
 
-    /// Whether this critter grew a feeler on each side. Any one of the bits
-    /// spelling a feeler is enough to have it.
+    /// How many feelers this critter grew: how many of the presence bits are
+    /// set, capped at the two it has room for. Which bits they are does not
+    /// come into it, so a lineage climbs from none to one to two by setting
+    /// any of them rather than the right ones.
+    pub fn feeler_count(&self) -> u32 {
+        let bits = read_bits(&self.bytes, FEELER_PRESENT_OFFSET, FEELER_PRESENT_BITS);
+        bits.count_ones().min(MAX_FEELERS)
+    }
+
+    /// Which sides those feelers are on. The first goes left and the second
+    /// right, the two being alike: a lone feeler is held straight ahead
+    /// whichever it is called, so nothing rests on the choice.
     pub fn has_left_feeler(&self) -> bool {
-        read_bits(&self.bytes, LEFT_FEELER_PRESENT_OFFSET, FEELER_PRESENT_BITS) != 0
+        self.feeler_count() >= 1
     }
 
     pub fn has_right_feeler(&self) -> bool {
-        read_bits(
-            &self.bytes,
-            RIGHT_FEELER_PRESENT_OFFSET,
-            FEELER_PRESENT_BITS,
-        ) != 0
+        self.feeler_count() >= 2
     }
 
     /// How far this critter's feelers reach beyond its body.
@@ -2767,6 +2765,88 @@ mod tests {
 
         const MAX_FIELD: u32 = (1 << FEELER_FIELD_BITS) - 1;
 
+        // Sets `count` of the presence bits, spread so no test depends on
+        // which ones they are.
+        fn genome_with_set_presence_bits(count: usize) -> Genome {
+            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            for bit in 0..count {
+                write_bits(
+                    &mut genome.bytes,
+                    FEELER_PRESENT_OFFSET + bit * 3 % FEELER_PRESENT_BITS,
+                    1,
+                    1,
+                );
+            }
+            genome
+        }
+
+        #[test]
+        fn a_genome_with_no_presence_bits_set_has_no_feelers() {
+            let genome = genome_with_set_presence_bits(0);
+
+            assert_eq!(genome.feeler_count(), 0);
+        }
+
+        #[test]
+        fn one_set_presence_bit_is_one_feeler() {
+            let genome = genome_with_set_presence_bits(1);
+
+            assert_eq!(genome.feeler_count(), 1);
+        }
+
+        #[test]
+        fn two_set_presence_bits_are_two_feelers() {
+            let genome = genome_with_set_presence_bits(2);
+
+            assert_eq!(genome.feeler_count(), 2);
+        }
+
+        #[test]
+        fn a_critter_cannot_grow_more_than_two_feelers_however_many_bits_it_sets() {
+            // Two is what a critter has room for. The field is wider than the
+            // count it can express, which is what lets mutation find a feeler
+            // from several directions rather than one.
+            let genome = genome_with_set_presence_bits(FEELER_PRESENT_BITS);
+
+            assert_eq!(genome.feeler_count(), 2);
+        }
+
+        #[test]
+        fn where_the_set_bits_fall_does_not_matter_only_how_many() {
+            // What the two-field layout could not say: a critter with one
+            // feeler had it on whichever side mutation happened to strike,
+            // which is a fact about the layout rather than about the critter.
+            let mut first = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            write_bits(&mut first.bytes, FEELER_PRESENT_OFFSET, 1, 1);
+            let mut last = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
+            write_bits(
+                &mut last.bytes,
+                FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - 1,
+                1,
+                1,
+            );
+
+            assert_eq!(first.feeler_count(), last.feeler_count());
+        }
+
+        #[test]
+        fn the_first_feeler_is_the_left_one() {
+            // Something has to be decided, and the sides are alike: a lone
+            // feeler is held straight ahead whichever it is called.
+            let genome = genome_with_set_presence_bits(1);
+
+            assert!(genome.has_left_feeler());
+            assert!(!genome.has_right_feeler());
+        }
+
+        #[test]
+        fn a_critter_with_two_feelers_has_one_on_each_side() {
+            let genome = genome_with_set_presence_bits(2);
+
+            assert!(genome.has_left_feeler());
+            assert!(genome.has_right_feeler());
+        }
+
         #[test]
         fn the_feeler_fields_sit_past_everything_else_in_the_genome() {
             // Where the fields begin, not merely how they are read. Tests that
@@ -2860,14 +2940,10 @@ mod tests {
             );
             assert_eq!(FEELER_DISC_OFFSET, FEELER_ANGLE_OFFSET + FEELER_FIELD_BITS);
             assert_eq!(
-                LEFT_FEELER_PRESENT_OFFSET,
+                FEELER_PRESENT_OFFSET,
                 FEELER_DISC_OFFSET + FEELER_FIELD_BITS
             );
-            assert_eq!(
-                RIGHT_FEELER_PRESENT_OFFSET,
-                LEFT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS
-            );
-            assert_eq!(FEELER_BITS, 3 * FEELER_FIELD_BITS + 2 * FEELER_PRESENT_BITS);
+            assert_eq!(FEELER_BITS, 3 * FEELER_FIELD_BITS + FEELER_PRESENT_BITS);
             // And the region ends exactly where the genome does.
             assert_eq!(FEELER_LENGTH_OFFSET + FEELER_BITS, TOTAL_BITS);
         }
@@ -2880,93 +2956,67 @@ mod tests {
             // never reaches it either, which for these bits would mean a
             // feeler that could never be grown.
             let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
-            genome.set_feelers_present(true, true);
+            genome.set_feeler_count(2);
 
             let round_tripped = Genome::from_bits(&genome.to_bits()).unwrap();
 
-            assert!(round_tripped.has_left_feeler());
-            assert!(round_tripped.has_right_feeler());
+            assert_eq!(round_tripped.feeler_count(), 2);
         }
 
         #[test]
-        fn any_one_of_a_feelers_bits_is_enough_to_grow_it() {
-            // A feeler is spelled several times over, so mutation has several
-            // ways to find it. Duplication is how a trait becomes reachable in
-            // the first place, and how it stops being lost again once found.
+        fn any_one_of_the_presence_bits_grows_a_feeler() {
+            // A feeler is spelled ten times over, so mutation has ten ways to
+            // find one. Duplication is how a trait becomes reachable in the
+            // first place, and how it stops being lost again once found.
             for bit in 0..FEELER_PRESENT_BITS {
                 let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
-                write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET + bit, 1, 1);
+                write_bits(&mut genome.bytes, FEELER_PRESENT_OFFSET + bit, 1, 1);
 
-                assert!(genome.has_left_feeler(), "bit {bit} should grow it");
-                assert!(!genome.has_right_feeler());
+                assert_eq!(genome.feeler_count(), 1, "bit {bit} should grow one");
             }
         }
 
         #[test]
-        fn a_feeler_is_lost_only_when_every_one_of_its_bits_goes() {
+        fn a_feeler_goes_only_when_the_count_of_set_bits_falls() {
             // The other half of the redundancy, and the half that matters
-            // more: a trait several bits wide is not undone by one of them
-            // flipping back.
+            // more: a lineage holding several set bits does not lose a feeler
+            // to one of them flipping back.
             let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
             for bit in 0..FEELER_PRESENT_BITS {
-                write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET + bit, 1, 1);
+                write_bits(&mut genome.bytes, FEELER_PRESENT_OFFSET + bit, 1, 1);
             }
 
-            for bit in 0..FEELER_PRESENT_BITS - 1 {
-                write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET + bit, 1, 0);
-                assert!(genome.has_left_feeler(), "still has one bit left");
+            // Clearing bits does nothing until only two are left.
+            for bit in 0..FEELER_PRESENT_BITS - 2 {
+                write_bits(&mut genome.bytes, FEELER_PRESENT_OFFSET + bit, 1, 0);
+                assert_eq!(genome.feeler_count(), 2, "still two bits or more set");
             }
             write_bits(
                 &mut genome.bytes,
-                LEFT_FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - 1,
+                FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - 2,
                 1,
                 0,
             );
+            assert_eq!(genome.feeler_count(), 1);
 
-            assert!(!genome.has_left_feeler());
+            write_bits(
+                &mut genome.bytes,
+                FEELER_PRESENT_OFFSET + FEELER_PRESENT_BITS - 1,
+                1,
+                0,
+            );
+            assert_eq!(genome.feeler_count(), 0);
         }
 
         #[test]
-        fn the_two_feelers_bits_do_not_overlap() {
-            // Each side has its own run of bits: growing one must not grow the
-            // other, or a critter could never have just the one.
-            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
-            for bit in 0..FEELER_PRESENT_BITS {
-                write_bits(&mut genome.bytes, RIGHT_FEELER_PRESENT_OFFSET + bit, 1, 1);
-            }
-
-            assert!(genome.has_right_feeler());
-            assert!(!genome.has_left_feeler());
-        }
-
-        #[test]
-        fn a_genome_with_neither_bit_set_has_no_feelers() {
-            // Whether a critter grows a feeler at all is one bit apiece, so a
-            // lineage can climb towards feelers rather than being handed them:
-            // one, then the other, each worth keeping on its own.
+        fn a_genome_with_no_presence_bits_set_grows_nothing() {
+            // Where a lineage starts: feelers are earned rather than handed
+            // out, so a fresh genome has none and climbs towards them.
             let genome = genome_with_feeler_bits(0, 0, 0);
 
+            assert_eq!(genome.feeler_count(), 0);
             assert!(!genome.has_left_feeler());
             assert!(!genome.has_right_feeler());
-        }
-
-        #[test]
-        fn each_feeler_is_grown_by_its_own_bit() {
-            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
-            write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET, 1, 1);
-
-            assert!(genome.has_left_feeler());
-            assert!(!genome.has_right_feeler());
-        }
-
-        #[test]
-        fn a_genome_with_both_bits_set_has_both_feelers() {
-            let mut genome = Genome::from_bits(&"0".repeat(TOTAL_BITS)).unwrap();
-            write_bits(&mut genome.bytes, LEFT_FEELER_PRESENT_OFFSET, 1, 1);
-            write_bits(&mut genome.bytes, RIGHT_FEELER_PRESENT_OFFSET, 1, 1);
-
-            assert!(genome.has_left_feeler());
-            assert!(genome.has_right_feeler());
         }
 
         #[test]

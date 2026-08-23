@@ -1281,10 +1281,10 @@ mod tests {
         use super::*;
         use crate::{MAX_FEELER_DISC, MIN_FEELER_DISC};
 
-        fn critter_with_feelers(left: bool, right: bool, disc: f32) -> Critter {
+        fn critter_with_feelers(count: u32, disc: f32) -> Critter {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(20.0, 45.0, disc);
-            genome.set_feelers_present(left, right);
+            genome.set_feeler_count(count);
             Critter::with_genome(0, 0, NORTH, 1, 1, 10_000, 0, genome)
         }
 
@@ -1296,8 +1296,8 @@ mod tests {
 
         #[test]
         fn a_critter_with_no_feelers_pays_nothing_for_them() {
-            let mut blind = critter_with_feelers(false, false, MAX_FEELER_DISC);
-            let mut one_eyed = critter_with_feelers(true, false, MAX_FEELER_DISC);
+            let mut blind = critter_with_feelers(0, MAX_FEELER_DISC);
+            let mut one_eyed = critter_with_feelers(1, MAX_FEELER_DISC);
 
             assert!(spent_in_a_turn(&mut one_eyed) > spent_in_a_turn(&mut blind));
         }
@@ -1305,9 +1305,9 @@ mod tests {
         #[test]
         fn two_feelers_cost_twice_what_one_does() {
             // Charged per feeler, since each is a thing to keep running.
-            let mut blind = critter_with_feelers(false, false, MAX_FEELER_DISC);
-            let mut one = critter_with_feelers(true, false, MAX_FEELER_DISC);
-            let mut two = critter_with_feelers(true, true, MAX_FEELER_DISC);
+            let mut blind = critter_with_feelers(0, MAX_FEELER_DISC);
+            let mut one = critter_with_feelers(1, MAX_FEELER_DISC);
+            let mut two = critter_with_feelers(2, MAX_FEELER_DISC);
 
             let base = spent_in_a_turn(&mut blind);
             let for_one = spent_in_a_turn(&mut one) - base;
@@ -1320,8 +1320,8 @@ mod tests {
         fn a_bigger_disc_costs_more_than_a_smaller_one() {
             // What a feeler costs follows what it senses, so a critter cannot
             // have a wide reach for the price of a narrow one.
-            let mut small = critter_with_feelers(true, true, MIN_FEELER_DISC);
-            let mut large = critter_with_feelers(true, true, MAX_FEELER_DISC);
+            let mut small = critter_with_feelers(2, MIN_FEELER_DISC);
+            let mut large = critter_with_feelers(2, MAX_FEELER_DISC);
 
             assert!(spent_in_a_turn(&mut large) > spent_in_a_turn(&mut small));
         }
@@ -1332,14 +1332,14 @@ mod tests {
             // four times as much. Priced by width instead, the widest discs
             // would be cheap for what they gather and every lineage would
             // grow them.
-            let mut blind = critter_with_feelers(false, false, MIN_FEELER_DISC);
+            let mut blind = critter_with_feelers(0, MIN_FEELER_DISC);
             let base = spent_in_a_turn(&mut blind);
 
             // Checked against the area each disc actually covers rather than
             // against another disc: the genome holds a disc's size in four
             // bits, so asking for half of one does not give exactly half.
             for asked in [4.0, 6.0, MAX_FEELER_DISC] {
-                let mut critter = critter_with_feelers(true, false, asked);
+                let mut critter = critter_with_feelers(1, asked);
                 let disc = critter.genome().feeler_disc();
                 let charged = spent_in_a_turn(&mut critter) - base;
 
@@ -1709,7 +1709,7 @@ mod tests {
         fn shaped(length: f32, angle: f32) -> Critter {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(length, angle, MIN_FEELER_DISC);
-            genome.set_feelers_present(true, true);
+            genome.set_feeler_count(2);
             Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome)
         }
 
@@ -1736,7 +1736,7 @@ mod tests {
             // the critter never travels into.
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
-            genome.set_feelers_present(true, false);
+            genome.set_feeler_count(1);
             let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
 
             let ((lx, ly), _) = critter.feeler_tips();
@@ -1749,7 +1749,7 @@ mod tests {
         fn a_critter_with_only_a_right_feeler_holds_it_straight_ahead() {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
-            genome.set_feelers_present(false, true);
+            genome.set_feeler_count(1);
             let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
 
             let (_, (rx, ry)) = critter.feeler_tips();
@@ -1763,7 +1763,7 @@ mod tests {
             // The pair keeps the angle: it is only a lone feeler that centres.
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
-            genome.set_feelers_present(true, true);
+            genome.set_feeler_count(2);
             let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
 
             let ((lx, ly), (rx, ry)) = critter.feeler_tips();
@@ -1788,7 +1788,7 @@ mod tests {
         fn the_feelers_turn_with_the_critter() {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
-            genome.set_feelers_present(true, true);
+            genome.set_feeler_count(2);
             let critter = Critter::with_genome(100, 100, EAST, u32::MAX, 1, 60, 0, genome);
 
             let ((lx, ly), (rx, ry)) = critter.feeler_tips();

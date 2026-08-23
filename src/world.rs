@@ -3289,7 +3289,7 @@ mod tests {
         fn feeler_critter(x: i32, y: i32, length: f32, angle: f32, disc: f32) -> Critter {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(length, angle, disc);
-            genome.set_feelers_present(true, true);
+            genome.set_feeler_count(2);
             Critter::with_genome(x, y, NORTH, u32::MAX, 1, 60, 0, genome)
         }
 
@@ -3507,7 +3507,7 @@ mod tests {
         fn a_critter_with_one_feeler_senses_only_through_that_one() {
             let mut genome = Genome::all(Instruction::DoNothing);
             genome.set_feeler_shape(30.0, 45.0, 4.0);
-            genome.set_feelers_present(true, false);
+            genome.set_feeler_count(1);
             let critter = Critter::with_genome(100, 100, NORTH, u32::MAX, 1, 60, 0, genome);
             let (lx, ly) = critter.feeler_tips().0;
             let (rx, ry) = critter.feeler_tips().1;

@@ -655,7 +655,7 @@ mod tests {
             fn feeler_critter(length: f32, angle: f32, disc: f32) -> Critter {
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(length, angle, disc);
-                genome.set_feelers_present(true, true);
+                genome.set_feeler_count(2);
                 Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, genome)
             }
 
@@ -665,7 +665,7 @@ mod tests {
                 // which feelers a lineage has climbed its way to.
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 6.0);
-                genome.set_feelers_present(true, false);
+                genome.set_feeler_count(1);
                 let critter = Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, genome);
                 let ((lx, ly), _) = critter.feeler_tips();
                 // Where the missing feeler would have been had the critter
@@ -673,7 +673,7 @@ mod tests {
                 // tips coincide and only the splayed pair tells them apart.
                 let mut paired = Genome::all(Instruction::DoNothing);
                 paired.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 6.0);
-                paired.set_feelers_present(true, true);
+                paired.set_feeler_count(2);
                 let with_both = Critter::with_genome(CENTER, CENTER, NORTH, 1, 1, FED, 0, paired);
                 let (_, (rx, ry)) = with_both.feeler_tips();
 
@@ -808,7 +808,7 @@ mod tests {
                 // line lands it exactly on the other and nothing can tell.
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(30.0, MAX_FEELER_ANGLE, MIN_FEELER_DISC);
-                genome.set_feelers_present(true, true);
+                genome.set_feeler_count(2);
                 let critter =
                     Critter::with_genome(CENTER, CENTER, NORTH_EAST, 1, 1, FED, 0, genome);
                 let ((lx, ly), (rx, ry)) = critter.feeler_tips();
@@ -886,7 +886,7 @@ mod tests {
             fn the_feelers_turn_with_the_critter() {
                 let mut genome = Genome::all(Instruction::DoNothing);
                 genome.set_feeler_shape(20.0, MAX_FEELER_ANGLE, 5.0);
-                genome.set_feelers_present(true, true);
+                genome.set_feeler_count(2);
                 let critter = Critter::with_genome(CENTER, CENTER, EAST, 1, 1, FED, 0, genome);
                 let ((lx, ly), (rx, ry)) = critter.feeler_tips();
 
