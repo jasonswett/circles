@@ -68,7 +68,7 @@ impl Pellet {
 pub const PELLET_RADIUS: i32 = 2;
 /// Fastest a pellet may drift, in pixels per tick. Slow enough that food
 /// lingers near the emitter rather than crossing the world in moments.
-pub const PELLET_MAX_DRIFT: f32 = 0.3;
+pub const PELLET_MAX_DRIFT: f32 = 0.2;
 /// Slowest a pellet may drift. Nonzero so no pellet parks on the emitter.
 pub const PELLET_MIN_DRIFT: f32 = 0.1;
 pub const PELLET_COLOR: u32 = 0x00_FF_00;

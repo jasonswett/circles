@@ -8,8 +8,8 @@ const INSTRUCTION_COUNT: usize = 15;
 pub(crate) const MUTATION_RATE_BITS: usize = 8;
 // The highest per-bit flip rate a genome can encode. With the genome at some
 // 870 bits this caps the hottest possible lineage at roughly one changed bit
-// every twelve births, and puts a typical one -- the field averages half its
-// range -- nearer one in twenty-three.
+// every twenty-three births, and puts a typical one -- the field averages half
+// its range -- nearer one in forty-five.
 //
 // Set against nature rather than against the error threshold. Almost nothing
 // here is junk: a flipped bit lands in a weight, a threshold or an opcode and
@@ -18,7 +18,7 @@ pub(crate) const MUTATION_RATE_BITS: usize = 8;
 // effect. A rate that looked modest per bit was producing behavioural change
 // every few births, which is faster than anything that has to stay recogniz-
 // able between parent and child.
-const MAX_MUTATION_RATE: f32 = 0.0001;
+const MAX_MUTATION_RATE: f32 = 0.00005;
 // Per-instruction header window: factor mask + threshold + softness.
 // The factor mask is three bits (one per factor), read in the order:
 // bit 0 = energy, bit 1 = is-touching-another-critter, bit 2 = the touched
