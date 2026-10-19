@@ -16,6 +16,9 @@ class EvolveJob
   # Wall-clock time. A backstop for a run the ticks would otherwise keep going
   # for longer than a few hours.
   DURATION = "5h"
+  # Much bigger than a screen. More room means more critters and more pellets
+  # per world, so there is more for selection to work on.
+  SIZE = "6000x4000"
   TIMED_OUT = 124
 
   def initialize(io: $stdout, env: ENV)
@@ -33,7 +36,7 @@ class EvolveJob
       @io.puts "No previous champion; starting fresh"
     end
 
-    command = ["timeout", DURATION, "./target/release/headless", "--ticks", TICKS]
+    command = ["timeout", DURATION, "./target/release/headless", "--ticks", TICKS, "--size", SIZE]
     command += ["--genome", genome] if genome
     system(*command)
 
