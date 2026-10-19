@@ -37,6 +37,9 @@ const SEED_WINDOW_TICKS: u64 = 60 * TICKS_PER_SECOND;
 // there, every mutation of it yields some other perfectly workable interval
 // and there is no test that could sensibly object to any of them.
 const REPORT_INTERVAL_TICKS: u64 = 18_000;
+// Wall-clock, unlike the rest: it bounds how much real time a crash can throw
+// away. Checked on each report, so it is a minute at the soonest.
+const CHAMPION_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The best a run has managed: the genome that ran the longest world, and how
 /// long that world lasted. Ties go to the incumbent, so a genome has to beat
@@ -66,6 +69,21 @@ impl Best {
         self.genome = Some(genome.clone());
         self.ticks = ticks;
         true
+    }
+
+    /// The genome the run would answer with if it were stopped now. A world
+    /// still going that has already outlived the record would take it the
+    /// moment it ended, so its dominant genome is the champion already --
+    /// which matters for a world that never ends before the run does.
+    fn champion<'a>(
+        &'a self,
+        world_genome: Option<&'a Genome>,
+        world_ticks: u64,
+    ) -> Option<&'a Genome> {
+        match world_genome {
+            Some(genome) if world_ticks > self.ticks => Some(genome),
+            _ => self.genome.as_ref(),
+        }
     }
 }
 
@@ -130,6 +148,7 @@ fn main() {
 
     let mut budget = Budget::new(startup.ticks);
     let started = Instant::now();
+    let mut last_champion_report = started;
     let mut world_number: u32 = 1;
 
     println!(
@@ -148,9 +167,18 @@ fn main() {
 
     while budget.has_room() {
         let remaining = budget.remaining();
-        let lifetime = run_one_world(&mut rng, best.genome.as_ref(), remaining, &mut |ticks| {
-            report(started, &budget, ticks, world_number)
-        });
+        let lifetime = run_one_world(
+            &mut rng,
+            best.genome.as_ref(),
+            remaining,
+            &mut |ticks, world_genome| {
+                report(started, &budget, ticks, world_number);
+                if last_champion_report.elapsed() >= CHAMPION_REPORT_INTERVAL {
+                    report_champion(best.champion(world_genome, ticks));
+                    last_champion_report = Instant::now();
+                }
+            },
+        );
         budget.spend(lifetime.ticks);
 
         if best.observe(lifetime.genome.as_ref(), lifetime.ticks) {
@@ -158,12 +186,7 @@ fn main() {
                 "world {world_number} lasted {} -- a new best",
                 format_elapsed(Duration::from_secs(lifetime.ticks / TICKS_PER_SECOND))
             );
-            // The log is the snapshot. A run that dies mid-way has still said
-            // what it found, and the next run resumes from the last of these.
-            println!(
-                "champion: {}",
-                best.genome.as_ref().expect("just recorded").to_bits()
-            );
+            report_champion(best.genome.as_ref());
             if let Some(path) = &startup.out {
                 write_genome(path, best.genome.as_ref().expect("just recorded"));
             }
@@ -236,7 +259,7 @@ fn run_one_world<R: Rng>(
     rng: &mut R,
     seed: Option<&Genome>,
     remaining: Option<u64>,
-    report: &mut dyn FnMut(u64),
+    report: &mut dyn FnMut(u64, Option<&Genome>),
 ) -> Lifetime {
     run_world_of_size(
         WIDTH,
@@ -260,7 +283,7 @@ fn run_world_of_size<R: Rng>(
     rng: &mut R,
     seed: Option<&Genome>,
     remaining: Option<u64>,
-    report: &mut dyn FnMut(u64),
+    report: &mut dyn FnMut(u64, Option<&Genome>),
 ) -> Lifetime {
     let mut world = match seed {
         Some(genome) => World::with_seed_genome(width, height, genome.clone(), rng),
@@ -297,7 +320,7 @@ fn run_world_of_size<R: Rng>(
             world.seed_more_critters(SEED_BATCH_SIZE, rng);
         }
         if ticks.is_multiple_of(report_every) {
-            report(ticks);
+            report(ticks, world.dominant_genome());
         }
     }
 
@@ -324,6 +347,18 @@ fn report(started: Instant, budget: &Budget, world_ticks: u64, world_number: u32
         format_elapsed(simulated),
     );
     let _ = std::io::stdout().flush();
+}
+
+// The log is the snapshot. A run that dies part-way has still said what it
+// found, and the next run resumes from the last of these lines -- so they come
+// whenever the record changes and once a minute besides, which bounds what a
+// crash in the middle of a long world can lose. Wording only, like `report`.
+#[mutants::skip]
+fn report_champion(genome: Option<&Genome>) {
+    if let Some(genome) = genome {
+        println!("champion: {}", genome.to_bits());
+        let _ = std::io::stdout().flush();
+    }
 }
 
 /// Writes a genome where it was asked for, making the directory if it is not
@@ -354,8 +389,8 @@ mod tests {
         Genome::random(&mut StdRng::seed_from_u64(seed))
     }
 
-    fn silent() -> impl FnMut(u64) {
-        |_| {}
+    fn silent() -> impl FnMut(u64, Option<&Genome>) {
+        |_, _| {}
     }
 
     // Small enough to simulate quickly, which a test suite needs and a real
@@ -363,7 +398,7 @@ mod tests {
     fn small_world<R: Rng>(
         rng: &mut R,
         remaining: Option<u64>,
-        report: &mut dyn FnMut(u64),
+        report: &mut dyn FnMut(u64, Option<&Genome>),
     ) -> Lifetime {
         run_world_of_size(200, 200, TEST_REPORT_INTERVAL, rng, None, remaining, report)
     }
@@ -417,7 +452,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(4);
         let mut reported_at = Vec::new();
 
-        small_world(&mut rng, Some(TEST_REPORT_INTERVAL * 2), &mut |ticks| {
+        small_world(&mut rng, Some(TEST_REPORT_INTERVAL * 2), &mut |ticks, _| {
             reported_at.push(ticks)
         });
 
@@ -610,5 +645,29 @@ mod tests {
         assert!(!best.observe(None, 10_000));
         assert_eq!(best.genome, None);
         assert_eq!(best.ticks, 0);
+    }
+
+    #[test]
+    fn a_world_still_going_that_has_outlived_the_record_is_the_champion() {
+        let mut best = Best::new();
+        best.observe(Some(&a_genome(1)), 100);
+
+        assert_eq!(best.champion(Some(&a_genome(2)), 101), Some(&a_genome(2)));
+    }
+
+    #[test]
+    fn a_world_still_going_that_has_not_outlived_the_record_is_not() {
+        let mut best = Best::new();
+        best.observe(Some(&a_genome(1)), 100);
+
+        assert_eq!(best.champion(Some(&a_genome(2)), 100), Some(&a_genome(1)));
+    }
+
+    #[test]
+    fn a_world_with_nobody_dominant_leaves_the_record_as_the_champion() {
+        let mut best = Best::new();
+        best.observe(Some(&a_genome(1)), 100);
+
+        assert_eq!(best.champion(None, 10_000), Some(&a_genome(1)));
     }
 }
