@@ -41,7 +41,7 @@ class EvolveJob
   end
 
   def self.last_champion(log)
-    log.to_s.scan(/^champion: ([01]+)$/).flatten.last
+    log.to_s.scan(/champion: ([01]+)/).flatten.last
   end
 
   private
