@@ -8,9 +8,14 @@ require "json"
 
 class EvolveJob
   REPOSITORY = "jasonswett/circles"
-  # Wall-clock time, not simulated time. `timeout` ends the run from outside,
-  # and every champion it found is already in the log by then.
-  DURATION = "4h"
+  # Simulated time, at roughly fourteen times real time on SaturnCI: about
+  # three hours. Running out of ticks is what makes the last world -- which
+  # may be the only world, if it never dies -- report its genome; a run killed
+  # from outside says nothing about the world it was in the middle of.
+  TICKS = "10000000"
+  # Wall-clock time. A backstop for a run the ticks would otherwise keep going
+  # for longer than a few hours.
+  DURATION = "5h"
   TIMED_OUT = 124
 
   def initialize(io: $stdout, env: ENV)
@@ -28,7 +33,7 @@ class EvolveJob
       @io.puts "No previous champion; starting fresh"
     end
 
-    command = ["timeout", DURATION, "./target/release/headless"]
+    command = ["timeout", DURATION, "./target/release/headless", "--ticks", TICKS]
     command += ["--genome", genome] if genome
     system(*command)
 
