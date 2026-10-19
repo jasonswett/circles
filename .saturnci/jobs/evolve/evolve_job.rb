@@ -1,8 +1,10 @@
 # Runs worlds for a few hours, starting from the champion the last evolve run
 # found. There is no snapshot file: the headless binary prints a `champion:`
 # line every time it finds a better genome, and the next run reads the last
-# one out of the previous run's log. A run that crashes has still said what it
-# found, so the next one carries on regardless of how this one ended.
+# one out of the previous run's log. The champion is reported once a minute as
+# well as when a world ends, so a run that crashes or is cut off has still
+# said what it found, and the next one carries on regardless of how this one
+# ended.
 
 require "json"
 
@@ -13,9 +15,10 @@ class EvolveJob
   # may be the only world, if it never dies -- report its genome; a run killed
   # from outside says nothing about the world it was in the middle of.
   TICKS = "1000000"
-  # Wall-clock time. A backstop for a run the ticks would otherwise keep going
-  # for longer than a few hours.
-  DURATION = "5h"
+  # Wall-clock time. Big worlds run far slower than the ticks assume, so this
+  # is what usually ends a run; the next one picks up from the last champion
+  # reported, losing at most a minute.
+  DURATION = "1h"
   # Much bigger than a screen. More room means more critters and more pellets
   # per world, so there is more for selection to work on.
   SIZE = "6000x4000"
