@@ -422,13 +422,15 @@ mod tests {
     }
 
     // Small enough to simulate quickly, which a test suite needs and a real
-    // run does not.
+    // run does not, but not so small that its share of food cannot keep a
+    // seed population alive: food is budgeted by area, and a world much
+    // smaller than this starves before it has lived long enough to test.
     fn small_world<R: Rng>(
         rng: &mut R,
         remaining: Option<u64>,
         report: &mut dyn FnMut(u64, &World),
     ) -> Lifetime {
-        run_world_of_size(200, 200, TEST_REPORT_INTERVAL, rng, None, remaining, report)
+        run_world_of_size(400, 400, TEST_REPORT_INTERVAL, rng, None, remaining, report)
     }
 
     // Small worlds do not live long enough to reach the interval a real run

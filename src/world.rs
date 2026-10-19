@@ -56,17 +56,22 @@ pub const PREDATION_ATTACK_COST: u32 = 1_000;
 const PREDATION_BASE_DEATH_PERCENT: u32 = 5;
 const PREDATION_ENERGY_DEATH_PERCENT: u32 = 30;
 
-// The population a world grows toward. It does not start there: spawning
-// thousands of critters at once stalls the first seconds of a run, so a world
-// begins at SEED_POPULATION and is topped up gradually while the frame rate
-// holds.
+// The screen the counts below were tuned on. A world of another size gets the
+// same density -- as many critters and pellets per pixel as that screen had --
+// so a bigger world is more of the same rather than the same spread thinner.
+const REFERENCE_WIDTH: usize = 1440;
+const REFERENCE_HEIGHT: usize = 900;
+// The population a world of the reference size grows toward. It does not
+// start there: spawning thousands of critters at once stalls the first seconds
+// of a run, so a world begins at SEED_POPULATION and is topped up gradually
+// while the frame rate holds.
 const NUM_CRITTERS: usize = 4000;
 // How many critters a world starts with. Above MIN_POPULATION so a freshly
 // seeded world is not immediately judged too small and reset. Small, because
 // the opening moments are the leanest: no food has been delivered yet, so
 // every critter alive is spending energy it has no way to replace.
 const SEED_POPULATION: usize = 100;
-// How much food a world's energy budget is sized for. Not a ceiling on
+// How much food a world of the reference size budgets for. Not a ceiling on
 // pellets: nothing caps the larder, which settles wherever consumption meets
 // the feed rate.
 const NUM_PELLETS: usize = 4000;
@@ -135,7 +140,8 @@ impl World {
         // Budget for what the world is growing toward, not what it starts
         // with: both the population and the larder fill up over time, and a
         // budget sized to the opening moment would never top either up.
-        let original_total_energy = full_population_energy() + full_larder_energy();
+        let original_total_energy =
+            full_population_energy(width, height) + full_larder_energy(width, height);
         Self {
             width,
             height,
@@ -164,7 +170,8 @@ impl World {
         let critters: Vec<Critter> = (0..SEED_POPULATION)
             .map(|_| spawn_critter_with_genome(width, height, seed_genome.clone(), rng))
             .collect();
-        let original_total_energy = full_population_energy() + full_larder_energy();
+        let original_total_energy =
+            full_population_energy(width, height) + full_larder_energy(width, height);
         Self {
             width,
             height,
@@ -589,7 +596,7 @@ impl World {
     /// the world's seed genome when it has one, so a `--genome` run stays a
     /// monoculture as it ramps rather than diluting with random newcomers.
     pub fn seed_more_critters<R: Rng>(&mut self, count: usize, rng: &mut R) {
-        let room = NUM_CRITTERS.saturating_sub(self.critters.len());
+        let room = self.target_population().saturating_sub(self.critters.len());
         for _ in 0..count.min(room) {
             let critter = match &self.seed_genome {
                 Some(genome) => {
@@ -603,7 +610,13 @@ impl World {
 
     /// Whether the world has finished ramping up to its target population.
     pub fn is_fully_seeded(&self) -> bool {
-        self.critters.len() >= NUM_CRITTERS
+        self.critters.len() >= self.target_population()
+    }
+
+    /// The population this world grows toward: the tuned count, scaled to
+    /// its area.
+    pub fn target_population(&self) -> usize {
+        target_population(self.width, self.height)
     }
 
     pub fn population_too_low(&self) -> bool {
@@ -654,12 +667,21 @@ fn toroidal_delta(a: i32, b: i32, size: i32) -> i32 {
 /// The energy a world's food stocks hold when full. Like the population
 /// budget, this is what the world is filling toward rather than what it
 /// holds, so a world that starts empty still knows to feed itself.
-fn full_larder_energy() -> u32 {
-    NUM_PELLETS as u32 * crate::PELLET_ENERGY
+/// A count tuned for the reference screen, sized for a world of this area.
+fn scaled_to_area(count: usize, width: usize, height: usize) -> usize {
+    count * width * height / (REFERENCE_WIDTH * REFERENCE_HEIGHT)
 }
 
-fn full_population_energy() -> u32 {
-    NUM_CRITTERS as u32 * INITIAL_ENERGY
+fn target_population(width: usize, height: usize) -> usize {
+    scaled_to_area(NUM_CRITTERS, width, height)
+}
+
+fn full_larder_energy(width: usize, height: usize) -> u32 {
+    scaled_to_area(NUM_PELLETS, width, height) as u32 * crate::PELLET_ENERGY
+}
+
+fn full_population_energy(width: usize, height: usize) -> u32 {
+    target_population(width, height) as u32 * INITIAL_ENERGY
 }
 
 fn spawn_critter<R: Rng>(width: usize, height: usize, rng: &mut R) -> Critter {
@@ -1771,6 +1793,22 @@ mod tests {
         }
 
         #[test]
+        fn a_world_with_twice_the_area_has_twice_the_energy_budget() {
+            // Food is budgeted per pixel, so a bigger world is not a sparser
+            // one: it is the same density of critters and food over more
+            // ground.
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let reference = World::new(REFERENCE_WIDTH, REFERENCE_HEIGHT, &mut rng);
+            let doubled = World::new(REFERENCE_WIDTH * 2, REFERENCE_HEIGHT, &mut rng);
+
+            assert_eq!(
+                doubled.original_total_energy(),
+                2 * reference.original_total_energy()
+            );
+        }
+
+        #[test]
         fn it_does_not_change_after_critters_lose_energy() {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
@@ -1789,13 +1827,15 @@ mod tests {
         use super::*;
         use crate::{Critter, Genome, Instruction, MAX_CRITTER_ENERGY, NORTH, PELLET_ENERGY};
 
-        // Empty of critters and food, but budgeted for a full world, so it
-        // is hungry. The test-only constructor sizes its budget from actual
-        // contents, which for an empty world would be zero.
+        // Empty of critters and food, but budgeted for a full world of the
+        // reference size, so it is hungry. The test-only constructor sizes
+        // its budget from actual contents, which for an empty world would be
+        // zero.
         fn empty_world() -> World {
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
-            world.original_total_energy = full_population_energy() + full_larder_energy();
+            world.original_total_energy = full_population_energy(REFERENCE_WIDTH, REFERENCE_HEIGHT)
+                + full_larder_energy(REFERENCE_WIDTH, REFERENCE_HEIGHT);
             world
         }
 
@@ -1847,7 +1887,8 @@ mod tests {
 
             assert_eq!(
                 world.original_total_energy(),
-                full_population_energy() + full_larder_energy()
+                full_population_energy(TEST_WIDTH, TEST_HEIGHT)
+                    + full_larder_energy(TEST_WIDTH, TEST_HEIGHT)
             );
         }
 
@@ -3653,7 +3694,8 @@ mod tests {
         fn a_fixed_share_of_emitted_pellets_is_poison() {
             let mut world =
                 World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, vec![], vec![]);
-            world.original_total_energy = full_population_energy() + full_larder_energy();
+            world.original_total_energy = full_population_energy(REFERENCE_WIDTH, REFERENCE_HEIGHT)
+                + full_larder_energy(REFERENCE_WIDTH, REFERENCE_HEIGHT);
             let mut rng = StdRng::seed_from_u64(0);
 
             world.replenish_pellets(PELLETS_PER_POISON * 3, &mut rng);
@@ -4141,6 +4183,24 @@ mod tests {
         use rand::SeedableRng;
 
         #[test]
+        fn a_world_the_size_of_the_screen_the_counts_were_tuned_on_targets_the_tuned_population() {
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(REFERENCE_WIDTH, REFERENCE_HEIGHT, &mut rng);
+
+            assert_eq!(world.target_population(), NUM_CRITTERS);
+        }
+
+        #[test]
+        fn a_world_with_twice_the_area_targets_twice_the_population() {
+            let mut rng = StdRng::seed_from_u64(0);
+
+            let world = World::new(REFERENCE_WIDTH * 2, REFERENCE_HEIGHT, &mut rng);
+
+            assert_eq!(world.target_population(), NUM_CRITTERS * 2);
+        }
+
+        #[test]
         fn a_new_world_starts_with_a_seed_population_rather_than_the_full_target() {
             let mut rng = StdRng::seed_from_u64(0);
 
@@ -4158,7 +4218,7 @@ mod tests {
 
             let world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
 
-            let full_population_energy = NUM_CRITTERS as u32 * INITIAL_ENERGY;
+            let full_population_energy = world.target_population() as u32 * INITIAL_ENERGY;
             assert!(world.original_total_energy >= full_population_energy);
         }
 
@@ -4178,9 +4238,9 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
 
-            world.seed_more_critters(NUM_CRITTERS * 2, &mut rng);
+            world.seed_more_critters(world.target_population() * 2, &mut rng);
 
-            assert_eq!(world.critters().len(), NUM_CRITTERS);
+            assert_eq!(world.critters().len(), world.target_population());
         }
 
         #[test]
@@ -4220,7 +4280,7 @@ mod tests {
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
             assert!(!world.is_fully_seeded());
 
-            world.seed_more_critters(NUM_CRITTERS, &mut rng);
+            world.seed_more_critters(world.target_population(), &mut rng);
 
             assert!(world.is_fully_seeded());
         }
