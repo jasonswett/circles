@@ -75,11 +75,11 @@ fn main() {
         }
     };
 
-    let (width, height) = unsafe {
+    let (width, height) = startup.size.unwrap_or_else(|| unsafe {
         let display = CGMainDisplayID();
         let bounds = CGDisplayBounds(display);
         (bounds.size.width as usize, bounds.size.height as usize)
-    };
+    });
 
     let mut window = Window::new(
         "Circles",

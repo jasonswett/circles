@@ -173,6 +173,7 @@ fn main() {
     while budget.has_room() {
         let remaining = budget.remaining();
         let lifetime = run_one_world(
+            startup.size,
             &mut rng,
             best.genome.as_ref(),
             remaining,
@@ -266,14 +267,16 @@ struct Lifetime {
 /// frame rate -- there is no frame rate here, so nothing throttles growth and
 /// a world is never starved for being drawn too slowly.
 fn run_one_world<R: Rng>(
+    size: Option<(usize, usize)>,
     rng: &mut R,
     seed: Option<&Genome>,
     remaining: Option<u64>,
     report: &mut dyn FnMut(u64, &World),
 ) -> Lifetime {
+    let (width, height) = size.unwrap_or((WIDTH, HEIGHT));
     run_world_of_size(
-        WIDTH,
-        HEIGHT,
+        width,
+        height,
         REPORT_INTERVAL_TICKS,
         rng,
         seed,
