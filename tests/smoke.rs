@@ -1,4 +1,4 @@
-use circles::{Renderer, World};
+use circles::{Camera, Renderer, World};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -11,15 +11,16 @@ fn the_simulation_can_run_for_many_frames_without_panicking() {
     let mut rng = StdRng::seed_from_u64(0);
     let mut world = World::new(WIDTH, HEIGHT, &mut rng);
     let mut frame_pixels = vec![0u32; WIDTH * HEIGHT];
+    let camera = Camera::new(WIDTH, HEIGHT);
 
     for _ in 0..FRAMES {
         world.tick(true);
         frame_pixels.fill(0);
         for pellet in world.pellets() {
-            Renderer::draw_pellet(pellet, &mut frame_pixels, WIDTH, HEIGHT);
+            Renderer::draw_pellet(pellet, &mut frame_pixels, WIDTH, HEIGHT, &camera);
         }
         for critter in world.critters() {
-            Renderer::draw(critter, &mut frame_pixels, WIDTH, HEIGHT);
+            Renderer::draw(critter, &mut frame_pixels, WIDTH, HEIGHT, &camera);
         }
     }
 

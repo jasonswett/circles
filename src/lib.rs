@@ -1,3 +1,4 @@
+mod camera;
 mod cli;
 mod critter;
 mod elapsed_format;
@@ -16,6 +17,7 @@ mod text;
 mod world;
 mod world_record;
 
+pub use camera::Camera;
 pub use cli::{parse as parse_cli, CliError, Startup};
 pub use critter::{
     Critter, CRITTER_RADIUS, MAX_CRITTER_ENERGY, REFERENCE_ENERGY, SPLIT_DURATION_TICKS,

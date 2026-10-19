@@ -1,4 +1,4 @@
-use crate::{Critter, Pellet, PELLET_RADIUS};
+use crate::{Camera, Critter, Pellet, PELLET_RADIUS};
 
 pub const ZERO_ENERGY_COLOR: u32 = 0x40_40_40;
 pub const EATEN_COLOR: u32 = 0xFF_00_00;
@@ -23,18 +23,25 @@ impl Ring {
     }
 }
 
+/// The screen, and where on the world it is looking. Shapes arrive in world
+/// coordinates and are moved into screen coordinates on the way in, so the
+/// filling code below only ever thinks about the screen.
 struct Canvas<'a> {
     buffer: &'a mut [u32],
     width: usize,
     height: usize,
+    camera: &'a Camera,
 }
 
 impl Canvas<'_> {
-    /// Lights one pixel, wrapping at the edges the way the world does.
+    /// Lights one pixel given in world coordinates, wrapping at the world's
+    /// edges the way the world does, if the camera can see it.
     fn set_with_wrap(&mut self, x: i32, y: i32, color: u32) {
-        let x = x.rem_euclid(self.width as i32) as usize;
-        let y = y.rem_euclid(self.height as i32) as usize;
-        self.buffer[y * self.width + x] = color;
+        let x = (x - self.camera.x()).rem_euclid(self.camera.world_width() as i32) as usize;
+        let y = (y - self.camera.y()).rem_euclid(self.camera.world_height() as i32) as usize;
+        if x < self.width && y < self.height {
+            self.buffer[y * self.width + x] = color;
+        }
     }
 }
 
@@ -45,7 +52,13 @@ impl Renderer {
     /// a parameter: feelers start at the body's edge and are placed from the
     /// critter's own radius, so a caller passing a different one would draw a
     /// body and feelers that disagreed about where the body ended.
-    pub fn draw(critter: &Critter, buffer: &mut [u32], width: usize, height: usize) {
+    pub fn draw(
+        critter: &Critter,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        camera: &Camera,
+    ) {
         let radius = critter.radius();
         let cx = critter.x();
         let cy = critter.y();
@@ -54,6 +67,7 @@ impl Renderer {
             buffer,
             width,
             height,
+            camera,
         };
         let color = if critter.is_being_eaten() {
             EATEN_COLOR
@@ -124,11 +138,18 @@ impl Renderer {
         }
     }
 
-    pub fn draw_pellet(pellet: &Pellet, buffer: &mut [u32], width: usize, height: usize) {
+    pub fn draw_pellet(
+        pellet: &Pellet,
+        buffer: &mut [u32],
+        width: usize,
+        height: usize,
+        camera: &Camera,
+    ) {
         let mut canvas = Canvas {
             buffer,
             width,
             height,
+            camera,
         };
         let disc = Ring {
             cx: pellet.x.round() as i32,
@@ -144,13 +165,16 @@ impl Renderer {
     // so any sign flip produces the same set of draws in a different order.
     #[mutants::skip]
     fn fill_ring_with_wrap(ring: &Ring, canvas: &mut Canvas, color: u32) {
-        let w = canvas.width as i32;
-        let h = canvas.height as i32;
+        let w = canvas.camera.world_width() as i32;
+        let h = canvas.camera.world_height() as i32;
+        // Into screen coordinates; the wrapped copies are a world apart.
+        let cx = ring.cx - canvas.camera.x();
+        let cy = ring.cy - canvas.camera.y();
         for dx in [-w, 0, w] {
             for dy in [-h, 0, h] {
                 let shifted = Ring {
-                    cx: ring.cx + dx,
-                    cy: ring.cy + dy,
+                    cx: cx + dx,
+                    cy: cy + dy,
                     radius: ring.radius,
                     inner_squared: ring.inner_squared,
                 };
@@ -246,7 +270,7 @@ fn lerp(from: u8, to: u8, ratio: f32) -> u8 {
 mod tests {
     use super::*;
     use crate::{
-        Critter, Genome, Heading, Instruction, EAST, MAX_FEELER_ANGLE, MAX_FEELER_DISC,
+        Camera, Critter, Genome, Heading, Instruction, EAST, MAX_FEELER_ANGLE, MAX_FEELER_DISC,
         MAX_FEELER_LENGTH, MIN_FEELER_DISC, MIN_FEELER_LENGTH, NORTH, NORTH_EAST, SOUTH,
         SOUTH_WEST, WEST,
     };
@@ -284,6 +308,51 @@ mod tests {
 
     mod draw {
         use super::*;
+
+        #[test]
+        fn a_critter_is_drawn_where_the_camera_sees_it() {
+            // The camera's corner is at world (30, 10), so a critter at world
+            // (CENTER + 30, CENTER + 10) lands at screen (CENTER, CENTER).
+            let critter = stationary_critter(CENTER + 30, CENTER + 10, NORTH);
+            let mut camera = Camera::new(CANVAS, CANVAS);
+            camera.pan(30, 10);
+
+            let buffer = render_through(&critter, &camera, CANVAS);
+
+            assert_eq!(
+                pixel_at(&buffer, CENTER + RADIUS - 1, CENTER),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn a_critter_just_past_the_worlds_edge_shows_up_across_the_seam() {
+            // A world twice the screen's size, with the camera parked ten
+            // pixels short of the world's right edge: a critter five pixels
+            // in from the left edge is fifteen pixels in from the screen's.
+            let world = CANVAS * 2;
+            let critter = stationary_critter(5, CENTER, NORTH);
+            let mut camera = Camera::new(world, world);
+            camera.pan(world as i32 - 10, 0);
+
+            let buffer = render_through(&critter, &camera, CANVAS);
+
+            assert_eq!(
+                pixel_at(&buffer, 15 + RADIUS - 1, CENTER),
+                critter.genome_color()
+            );
+        }
+
+        #[test]
+        fn a_critter_the_camera_cannot_see_leaves_the_screen_untouched() {
+            let world = CANVAS * 2;
+            let critter = stationary_critter(CANVAS as i32 + CENTER, CANVAS as i32 + CENTER, NORTH);
+            let camera = Camera::new(world, world);
+
+            let buffer = render_through(&critter, &camera, CANVAS);
+
+            assert!(buffer.iter().all(|&pixel| pixel == 0));
+        }
 
         #[test]
         fn the_center_of_the_critter_is_not_filled() {
@@ -929,10 +998,12 @@ mod tests {
 
             fn drawn_by_fill_ring(ring: &Ring, color: u32) -> Vec<u32> {
                 let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let camera = Camera::new(CANVAS, CANVAS);
                 let mut canvas = Canvas {
                     buffer: &mut buffer,
                     width: CANVAS,
                     height: CANVAS,
+                    camera: &camera,
                 };
                 Renderer::fill_ring(ring, &mut canvas, color);
                 buffer
@@ -1035,14 +1106,66 @@ mod tests {
             }
         }
 
+        mod set_with_wrap {
+            use super::*;
+
+            const WORLD: usize = CANVAS * 2;
+
+            #[test]
+            fn a_world_pixel_lands_on_the_screen_where_the_camera_puts_it() {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let mut camera = Camera::new(WORLD, WORLD);
+                camera.pan(30, 10);
+
+                canvas_of(&mut buffer, &camera).set_with_wrap(130, 60, 1);
+
+                assert_eq!(pixel_at(&buffer, 100, 50), 1);
+                assert_eq!(buffer.iter().filter(|&&p| p != 0).count(), 1);
+            }
+
+            #[test]
+            fn a_pixel_just_off_the_screens_right_edge_is_not_drawn() {
+                // Not even on the next row down, which is where writing it
+                // into a flat buffer would otherwise land it.
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let camera = Camera::new(WORLD, WORLD);
+
+                canvas_of(&mut buffer, &camera).set_with_wrap(CANVAS as i32, 50, 1);
+
+                assert!(buffer.iter().all(|&p| p == 0));
+            }
+
+            #[test]
+            fn a_pixel_just_off_the_screens_bottom_edge_is_not_drawn() {
+                let mut buffer = vec![0u32; CANVAS * CANVAS];
+                let camera = Camera::new(WORLD, WORLD);
+
+                canvas_of(&mut buffer, &camera).set_with_wrap(50, CANVAS as i32, 1);
+
+                assert!(buffer.iter().all(|&p| p == 0));
+            }
+
+            fn canvas_of<'a>(buffer: &'a mut Vec<u32>, camera: &'a Camera) -> Canvas<'a> {
+                Canvas {
+                    buffer,
+                    width: CANVAS,
+                    height: CANVAS,
+                    camera,
+                }
+            }
+        }
+
         mod offscreen_copies {
             use super::*;
+
+            const CAMERA: Camera = Camera::new(CANVAS, CANVAS);
 
             fn canvas_of(buffer: &mut Vec<u32>) -> Canvas<'_> {
                 Canvas {
                     buffer,
                     width: CANVAS,
                     height: CANVAS,
+                    camera: &CAMERA,
                 }
             }
 
@@ -1203,7 +1326,13 @@ mod tests {
 
             fn render_pellet(pellet: &Pellet) -> Vec<u32> {
                 let mut buffer = vec![0u32; CANVAS * CANVAS];
-                Renderer::draw_pellet(pellet, &mut buffer, CANVAS, CANVAS);
+                Renderer::draw_pellet(
+                    pellet,
+                    &mut buffer,
+                    CANVAS,
+                    CANVAS,
+                    &Camera::new(CANVAS, CANVAS),
+                );
                 buffer
             }
         }
@@ -1231,8 +1360,12 @@ mod tests {
         }
 
         fn render(critter: &Critter) -> Vec<u32> {
-            let mut buffer = vec![0u32; CANVAS * CANVAS];
-            Renderer::draw(critter, &mut buffer, CANVAS, CANVAS);
+            render_through(critter, &Camera::new(CANVAS, CANVAS), CANVAS)
+        }
+
+        fn render_through(critter: &Critter, camera: &Camera, screen: usize) -> Vec<u32> {
+            let mut buffer = vec![0u32; screen * screen];
+            Renderer::draw(critter, &mut buffer, screen, screen, camera);
             buffer
         }
 

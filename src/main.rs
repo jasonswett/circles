@@ -1,5 +1,5 @@
 use circles::{
-    format_elapsed, format_snapshot_block, parse_cli, text_pixels, FpsCounter,
+    format_elapsed, format_snapshot_block, parse_cli, text_pixels, Camera, FpsCounter,
     PopulationGrowthDetector, Renderer, StagnationDetector, World, WorldRecord, SEEDING_TICKS,
     TICKS_PER_SECOND,
 };
@@ -46,6 +46,8 @@ const SEED_WINDOW: Duration = Duration::from_secs((SEEDING_TICKS / TICKS_PER_SEC
 const MIN_FPS_FOR_GROWTH: u32 = 50;
 const FPS_REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(30);
+// How far the view moves per frame while an arrow key is held.
+const PAN_SPEED: i32 = 20;
 
 #[repr(C)]
 struct CGSize {
@@ -75,11 +77,15 @@ fn main() {
         }
     };
 
-    let (width, height) = startup.size.unwrap_or_else(|| unsafe {
+    // The window fills the screen; the world is as big as the command line
+    // says, or the screen's size if it says nothing. The camera below is
+    // what joins the two.
+    let (width, height) = unsafe {
         let display = CGMainDisplayID();
         let bounds = CGDisplayBounds(display);
         (bounds.size.width as usize, bounds.size.height as usize)
-    });
+    };
+    let (world_width, world_height) = startup.size.unwrap_or((width, height));
 
     let mut window = Window::new(
         "Circles",
@@ -99,9 +105,10 @@ fn main() {
 
     let mut rng = thread_rng();
     let mut world = match startup.seed {
-        None => World::new(width, height, &mut rng),
-        Some(genome) => World::with_seed_genome(width, height, genome, &mut rng),
+        None => World::new(world_width, world_height, &mut rng),
+        Some(genome) => World::with_seed_genome(world_width, world_height, genome, &mut rng),
     };
+    let mut camera = Camera::new(world_width, world_height);
     let mut frame_pixels = vec![BACKGROUND_COLOR; width * height];
     let mut frame_counter: u32 = 0;
     let mut displayed_total_energy = world.total_energy();
@@ -123,6 +130,14 @@ fn main() {
             population_growth.reset();
             world_started_at = Instant::now();
         }
+
+        camera.pan(
+            pan_direction(
+                window.is_key_down(Key::Right),
+                window.is_key_down(Key::Left),
+            ),
+            pan_direction(window.is_key_down(Key::Down), window.is_key_down(Key::Up)),
+        );
 
         let allow_growth = fps_counter.current_fps() >= MIN_FPS_FOR_GROWTH;
         world.tick(allow_growth);
@@ -186,10 +201,10 @@ fn main() {
 
         frame_pixels.fill(BACKGROUND_COLOR);
         for pellet in world.pellets() {
-            Renderer::draw_pellet(pellet, &mut frame_pixels, width, height);
+            Renderer::draw_pellet(pellet, &mut frame_pixels, width, height, &camera);
         }
         for critter in world.critters() {
-            Renderer::draw(critter, &mut frame_pixels, width, height);
+            Renderer::draw(critter, &mut frame_pixels, width, height, &camera);
         }
         let energy_text = format!("Energy: {displayed_total_energy}");
         let max_energy_text = format!("Max energy: {}", world.original_total_energy());
@@ -217,6 +232,10 @@ fn main() {
             .update_with_buffer(&frame_pixels, width, height)
             .expect("Unable to update window");
     }
+}
+
+fn pan_direction(forward: bool, back: bool) -> i32 {
+    PAN_SPEED * (forward as i32 - back as i32)
 }
 
 fn draw_text_top_right(
