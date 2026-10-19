@@ -11,10 +11,6 @@ pub struct Pellet {
     /// to eat it. Critters cannot see it coming: nothing in their sensorium
     /// distinguishes poison from food.
     pub poisonous: bool,
-    /// Ticks since the pellet was emitted. Food does not keep: a pellet that
-    /// is never eaten eventually rots away, so the world's food is what has
-    /// arrived recently rather than everything ever emitted.
-    pub age: u32,
 }
 
 impl Pellet {
@@ -28,7 +24,6 @@ impl Pellet {
             dx: 0.0,
             dy: 0.0,
             poisonous: false,
-            age: 0,
         }
     }
 
@@ -50,18 +45,10 @@ impl Pellet {
         }
     }
 
-    /// Advances the pellet along its heading, wrapping around the world, and
-    /// ages it by a tick.
+    /// Advances the pellet along its heading, wrapping around the world.
     pub fn drift(&mut self, width: f32, height: f32) {
         self.x = (self.x + self.dx).rem_euclid(width);
         self.y = (self.y + self.dy).rem_euclid(height);
-        self.age += 1;
-    }
-
-    /// Whether the pellet has reached the end of its life and should be
-    /// swept away.
-    pub fn is_expired(&self) -> bool {
-        self.age >= PELLET_LIFESPAN_TICKS
     }
 }
 
@@ -83,8 +70,3 @@ pub const PELLET_ENERGY: u32 = 2_000;
 /// behind, so poison is a setback a critter can recover from rather than the
 /// unavoidable death it used to be.
 pub const POISON_DAMAGE_PERCENT: u32 = 90;
-/// How long a pellet lasts before rotting away, in ticks. At 60 ticks per
-/// second this is 20 seconds. Uneaten food does not accumulate forever, so
-/// the larder reflects recent deliveries rather than the world's whole
-/// history of them.
-pub const PELLET_LIFESPAN_TICKS: u32 = 3600;
