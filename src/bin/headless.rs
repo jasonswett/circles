@@ -158,6 +158,12 @@ fn main() {
                 "world {world_number} lasted {} -- a new best",
                 format_elapsed(Duration::from_secs(lifetime.ticks / TICKS_PER_SECOND))
             );
+            // The log is the snapshot. A run that dies mid-way has still said
+            // what it found, and the next run resumes from the last of these.
+            println!(
+                "champion: {}",
+                best.genome.as_ref().expect("just recorded").to_bits()
+            );
             if let Some(path) = &startup.out {
                 write_genome(path, best.genome.as_ref().expect("just recorded"));
             }
