@@ -13,6 +13,7 @@
 //! worlds that each began from nothing.
 use circles::{
     format_elapsed, parse_cli, Genome, PopulationGrowthDetector, StagnationDetector, World,
+    WorldRecord,
 };
 use rand::{thread_rng, Rng};
 use std::io::Write;
@@ -31,14 +32,16 @@ const REAPER_INTERVAL_TICKS: u64 = 60;
 const SEED_BATCH_SIZE: usize = 20;
 const SEED_INTERVAL_TICKS: u64 = 30;
 const SEED_WINDOW_TICKS: u64 = 60 * TICKS_PER_SECOND;
-// How often to say something. A long run is otherwise silent for hours, and a
-// silent job is indistinguishable from a hung one. This is five minutes of
-// simulated time, stated outright: written as the multiplication that gets
-// there, every mutation of it yields some other perfectly workable interval
-// and there is no test that could sensibly object to any of them.
-const REPORT_INTERVAL_TICKS: u64 = 18_000;
-// Wall-clock, unlike the rest: it bounds how much real time a crash can throw
-// away. Checked on each report, so it is a minute at the soonest.
+// How often the world loop offers the run a look at the world: a simulated
+// second, stated outright. What gets printed, and how often, is decided by the
+// wall clock below; this only has to come round often enough for those to be
+// on time, and every mutation of it yields some other workable interval.
+const REPORT_INTERVAL_TICKS: u64 = 60;
+// Wall-clock, unlike the rest. A long run is otherwise silent for hours, and a
+// silent job is indistinguishable from a hung one; the status line is what the
+// windowed app shows in its corner, for a run nobody is watching.
+const STATUS_INTERVAL: Duration = Duration::from_secs(10);
+// Bounds how much real time a crash can throw away.
 const CHAMPION_REPORT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The best a run has managed: the genome that ran the longest world, and how
@@ -149,6 +152,8 @@ fn main() {
     let mut budget = Budget::new(startup.ticks);
     let started = Instant::now();
     let mut last_champion_report = started;
+    let mut last_status = started;
+    let mut record = WorldRecord::new();
     let mut world_number: u32 = 1;
 
     println!(
@@ -171,10 +176,15 @@ fn main() {
             &mut rng,
             best.genome.as_ref(),
             remaining,
-            &mut |ticks, world_genome| {
-                report(started, &budget, ticks, world_number);
+            &mut |ticks, world| {
+                if last_status.elapsed() >= STATUS_INTERVAL {
+                    let world_time = Duration::from_secs(ticks / TICKS_PER_SECOND);
+                    record.observe(world_number, world_time);
+                    report(started, &budget, ticks, world_number, world, &record);
+                    last_status = Instant::now();
+                }
                 if last_champion_report.elapsed() >= CHAMPION_REPORT_INTERVAL {
-                    report_champion(best.champion(world_genome, ticks));
+                    report_champion(best.champion(world.dominant_genome(), ticks));
                     last_champion_report = Instant::now();
                 }
             },
@@ -259,7 +269,7 @@ fn run_one_world<R: Rng>(
     rng: &mut R,
     seed: Option<&Genome>,
     remaining: Option<u64>,
-    report: &mut dyn FnMut(u64, Option<&Genome>),
+    report: &mut dyn FnMut(u64, &World),
 ) -> Lifetime {
     run_world_of_size(
         WIDTH,
@@ -283,7 +293,7 @@ fn run_world_of_size<R: Rng>(
     rng: &mut R,
     seed: Option<&Genome>,
     remaining: Option<u64>,
-    report: &mut dyn FnMut(u64, Option<&Genome>),
+    report: &mut dyn FnMut(u64, &World),
 ) -> Lifetime {
     let mut world = match seed {
         Some(genome) => World::with_seed_genome(width, height, genome.clone(), rng),
@@ -320,7 +330,7 @@ fn run_world_of_size<R: Rng>(
             world.seed_more_critters(SEED_BATCH_SIZE, rng);
         }
         if ticks.is_multiple_of(report_every) {
-            report(ticks, world.dominant_genome());
+            report(ticks, &world);
         }
     }
 
@@ -335,16 +345,31 @@ fn run_world_of_size<R: Rng>(
 // depends on: what is worth pinning is the cadence reports arrive on, which
 // `a_run_reports_its_progress_as_it_goes` does.
 #[mutants::skip]
-fn report(started: Instant, budget: &Budget, world_ticks: u64, world_number: u32) {
+fn report(
+    started: Instant,
+    budget: &Budget,
+    world_ticks: u64,
+    world_number: u32,
+    world: &World,
+    record: &WorldRecord,
+) {
     let simulated = Duration::from_secs((budget.spent + world_ticks) / TICKS_PER_SECOND);
     let progress = match budget.percent_done(world_ticks) {
         Some(percent) => format!(" ({percent}%)"),
         None => String::new(),
     };
     println!(
-        "[{}] world {world_number}, {} simulated{progress}",
+        "[{}] {} simulated{progress} | energy {} | max energy {} | population {} | \
+         pellets {} | world {world_number} | time {} | world record {} (world {})",
         format_elapsed(started.elapsed()),
         format_elapsed(simulated),
+        world.total_energy(),
+        world.original_total_energy(),
+        world.critters().len(),
+        world.pellets().len(),
+        format_elapsed(Duration::from_secs(world_ticks / TICKS_PER_SECOND)),
+        format_elapsed(record.best_elapsed()),
+        record.best_world(),
     );
     let _ = std::io::stdout().flush();
 }
@@ -389,7 +414,7 @@ mod tests {
         Genome::random(&mut StdRng::seed_from_u64(seed))
     }
 
-    fn silent() -> impl FnMut(u64, Option<&Genome>) {
+    fn silent() -> impl FnMut(u64, &World) {
         |_, _| {}
     }
 
@@ -398,7 +423,7 @@ mod tests {
     fn small_world<R: Rng>(
         rng: &mut R,
         remaining: Option<u64>,
-        report: &mut dyn FnMut(u64, Option<&Genome>),
+        report: &mut dyn FnMut(u64, &World),
     ) -> Lifetime {
         run_world_of_size(200, 200, TEST_REPORT_INTERVAL, rng, None, remaining, report)
     }
