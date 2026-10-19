@@ -8,11 +8,11 @@ require "json"
 
 class EvolveJob
   REPOSITORY = "jasonswett/circles"
-  # Simulated time, at roughly fourteen times real time on SaturnCI: about
-  # three hours. Running out of ticks is what makes the last world -- which
+  # Simulated time, at roughly fifteen times real time on SaturnCI: a quarter
+  # of an hour or so. Running out of ticks is what makes the last world -- which
   # may be the only world, if it never dies -- report its genome; a run killed
   # from outside says nothing about the world it was in the middle of.
-  TICKS = "10000000"
+  TICKS = "1000000"
   # Wall-clock time. A backstop for a run the ticks would otherwise keep going
   # for longer than a few hours.
   DURATION = "5h"
