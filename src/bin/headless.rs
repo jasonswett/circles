@@ -391,17 +391,17 @@ fn report(
         None => String::new(),
     };
     println!(
-        "[{}] {} simulated{progress} | energy {} | max energy {} | population {} | \
-         pellets {} | world {world_number} | time {} | world record {} (world {})",
+        "[{}] world record {} (world {}) | time {} | world {world_number} | pellets {} | \
+         population {} | max energy {} | energy {} | {} simulated{progress}",
         format_elapsed(started.elapsed()),
-        format_elapsed(simulated),
-        world.total_energy(),
-        world.original_total_energy(),
-        world.critters().len(),
-        world.pellets().len(),
-        format_elapsed(Duration::from_secs(world_ticks / TICKS_PER_SECOND)),
         format_elapsed(record.best_elapsed()),
         record.best_world(),
+        format_elapsed(Duration::from_secs(world_ticks / TICKS_PER_SECOND)),
+        world.pellets().len(),
+        world.critters().len(),
+        world.original_total_energy(),
+        world.total_energy(),
+        format_elapsed(simulated),
     );
     let _ = std::io::stdout().flush();
 }
