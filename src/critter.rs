@@ -61,11 +61,11 @@ pub const UPKEEP: u32 = 18;
 // they find and every lineage would grow them, and how big a disc to have
 // would stop being a question worth asking.
 //
-// At a tenth, the largest pair of discs costs twelve a turn, so their owner
-// has to find a pellet every sixteen turns to break even on them alone. The
-// smallest discs come out free, integer division being what it is: a critter
-// growing its first feeler is not charged for the privilege until the thing
-// is big enough to be worth something.
+// Rounded up, never down, so the smallest disc still costs one a turn: a
+// feeler has to pay for itself from the moment it is grown, not only once it
+// is big enough to be worth something. At a tenth, the largest pair of discs
+// costs fourteen a turn, so their owner has to find a pellet every hundred
+// and forty turns or so to break even on them alone.
 pub const FEELER_UPKEEP_PERCENT: u32 = 10;
 // How much further a fast step carries than a slow one.
 const FAST_STEP_MULTIPLIER: i32 = 2;
@@ -505,12 +505,12 @@ impl Critter {
     }
 
     /// What this critter's feelers cost it for the turn: a share of the area
-    /// each one senses, for each one it grew.
+    /// each one senses, rounded up, for each one it grew.
     fn feeler_upkeep(&self) -> u32 {
         let grown = u32::from(self.has_left_feeler()) + u32::from(self.has_right_feeler());
         let disc = self.genome.feeler_disc();
         let area = (disc * disc) as u32;
-        grown * area * FEELER_UPKEEP_PERCENT / 100
+        grown * (area * FEELER_UPKEEP_PERCENT).div_ceil(100)
     }
 
     /// Moves `multiplier` steps along the heading. Getting about is free: a
@@ -1304,6 +1304,15 @@ mod tests {
         }
 
         #[test]
+        fn the_smallest_feeler_still_costs_something() {
+            // A feeler has to pay for itself from the moment it is grown.
+            let mut blind = critter_with_feelers(0, MIN_FEELER_DISC);
+            let mut one_eyed = critter_with_feelers(1, MIN_FEELER_DISC);
+
+            assert!(spent_in_a_turn(&mut one_eyed) > spent_in_a_turn(&mut blind));
+        }
+
+        #[test]
         fn two_feelers_cost_twice_what_one_does() {
             // Charged per feeler, since each is a thing to keep running.
             let mut blind = critter_with_feelers(0, MAX_FEELER_DISC);
@@ -1344,7 +1353,7 @@ mod tests {
                 let disc = critter.genome().feeler_disc();
                 let charged = spent_in_a_turn(&mut critter) - base;
 
-                let by_area = (disc * disc) as u32 * FEELER_UPKEEP_PERCENT / 100;
+                let by_area = ((disc * disc) as u32 * FEELER_UPKEEP_PERCENT).div_ceil(100);
                 assert_eq!(charged, by_area, "a disc of {disc} should cost by its area");
             }
         }
