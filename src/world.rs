@@ -592,12 +592,12 @@ impl World {
     }
 
     /// Adds up to `count` more critters, stopping at the target population.
-    /// The caller decides when the world can afford to grow. Critters carry
-    /// the world's seed genome when it has one, so a `--genome` run stays a
-    /// monoculture as it ramps rather than diluting with random newcomers.
+    /// The caller decides when the world can afford to grow, and when it has
+    /// grown enough. Critters carry the world's seed genome when it has one,
+    /// so a `--genome` run stays a monoculture as it ramps rather than
+    /// diluting with random newcomers.
     pub fn seed_more_critters<R: Rng>(&mut self, count: usize, rng: &mut R) {
-        let room = self.target_population().saturating_sub(self.critters.len());
-        for _ in 0..count.min(room) {
+        for _ in 0..count {
             let critter = match &self.seed_genome {
                 Some(genome) => {
                     spawn_critter_with_genome(self.width, self.height, genome.clone(), rng)
@@ -4234,13 +4234,17 @@ mod tests {
         }
 
         #[test]
-        fn seeding_stops_at_the_target_population() {
+        fn seeding_is_not_capped_at_the_target_population() {
+            // The caller decides when to stop: the windowed app seeds for as
+            // long as the frame rate holds, however many critters that is.
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = World::new(TEST_WIDTH, TEST_HEIGHT, &mut rng);
+            let before = world.critters().len();
+            let more = world.target_population() * 2;
 
-            world.seed_more_critters(world.target_population() * 2, &mut rng);
+            world.seed_more_critters(more, &mut rng);
 
-            assert_eq!(world.critters().len(), world.target_population());
+            assert_eq!(world.critters().len(), before + more);
         }
 
         #[test]

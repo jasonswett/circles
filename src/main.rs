@@ -21,21 +21,16 @@ const STAGNATION_THRESHOLD_FRAMES: u32 = 300;
 // growing without having failed.
 const POPULATION_GROWTH_TIMEOUT_FRAMES: u32 = 3600;
 const REAPER_INTERVAL_FRAMES: u32 = 60;
-// A world ramps up to its target population instead of spawning it all at
-// once: this many critters are added every SEED_INTERVAL_FRAMES (~500ms at
-// 60 FPS), and only while the frame rate is holding, so a machine that
-// cannot keep up simply settles at a smaller population.
-//
-// The ramp is deliberately gentle. Seeding and feeding share the same frame
-// rate gate, so a population that arrives faster than the machine can draw
-// it stalls the very deliveries the new critters need: the world starves
-// itself at exactly the moment it is most crowded.
+// A world ramps up instead of spawning its population all at once: this many
+// critters are added every frame for as long as the frame rate is holding.
+// There is no target to stop at. The machine sets the population: seeding
+// pauses whenever the frame rate drops, and the critters that starve in the
+// meantime are the backing-off.
 const SEED_BATCH_SIZE: usize = 20;
-const SEED_INTERVAL_FRAMES: u32 = 30;
-// Seeding stops once a world is this old, whether or not it reached the
-// target. Long enough that critters keep arriving while the larder is still
-// filling: seeded critters that appear before there is food to find simply
-// starve, so the window outlasts the world's first stock of food.
+// Seeding stops once a world is this old. Long enough that critters keep
+// arriving while the larder is still filling: seeded critters that appear
+// before there is food to find simply starve, so the window outlasts the
+// world's first stock of food.
 //
 // Taken from the world's own constant rather than stated again here, since the
 // eruption site waits on the same period and the two must not drift apart.
@@ -175,12 +170,7 @@ fn main() {
         if allow_growth {
             world.feed(&mut rng);
         }
-        if frame_counter > 0
-            && frame_counter.is_multiple_of(SEED_INTERVAL_FRAMES)
-            && allow_growth
-            && !world.is_fully_seeded()
-            && world_started_at.elapsed() < SEED_WINDOW
-        {
+        if allow_growth && world_started_at.elapsed() < SEED_WINDOW {
             world.seed_more_critters(SEED_BATCH_SIZE, &mut rng);
         }
         if last_snapshot_at.elapsed() >= SNAPSHOT_INTERVAL {
