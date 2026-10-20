@@ -1511,6 +1511,11 @@ mod tests {
         }
 
         #[test]
+        fn a_pellet_keeps_for_four_minutes() {
+            assert_eq!(PELLET_LIFESPAN_TICKS, 4 * 60 * TICKS_PER_SECOND);
+        }
+
+        #[test]
         fn a_pellet_short_of_its_lifespan_remains() {
             let mut world = world_with_one_pellet(Pellet::at(50, 50));
 
