@@ -192,10 +192,15 @@ impl World {
     /// Ties are broken by first-seen order in `critters()`. Returns `None` if
     /// there are no critters.
     pub fn dominant_genome(&self) -> Option<&Genome> {
-        // Vec<(&Genome, usize)> preserves first-seen order naturally; we walk
-        // the critters once, incrementing the count for any matching entry or
-        // appending a new one. Linear in the number of unique genomes — fine
-        // for this scale.
+        self.dominant_genomes().first().map(|(genome, _)| *genome)
+    }
+
+    /// Every genome alive, with how many critters carry it, the most
+    /// populous first. Ties keep the order the genomes were first seen in.
+    pub fn dominant_genomes(&self) -> Vec<(&Genome, usize)> {
+        // Walk the critters once, incrementing the count for any matching
+        // entry or appending a new one. Linear in the number of unique
+        // genomes -- fine for this scale.
         let mut tally: Vec<(&Genome, usize)> = Vec::new();
         for critter in &self.critters {
             let genome = critter.genome();
@@ -205,17 +210,9 @@ impl World {
                 tally.push((genome, 1));
             }
         }
-        // Manual fold instead of `max_by_key`: the standard iterator method
-        // keeps the *last* maximum on ties, but we want the first-seen
-        // winner. Walk left-to-right, replacing only on a strict increase.
-        let mut best: Option<(&Genome, usize)> = None;
-        for (genome, count) in tally {
-            match best {
-                Some((_, best_count)) if count <= best_count => {}
-                _ => best = Some((genome, count)),
-            }
-        }
-        best.map(|(genome, _)| genome)
+        // A stable sort, so equal counts stay in first-seen order.
+        tally.sort_by(|a, b| b.1.cmp(&a.1));
+        tally
     }
 
     #[cfg(test)]
@@ -4454,6 +4451,49 @@ mod tests {
             let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
 
             assert_eq!(world.dominant_genome(), Some(&first));
+        }
+    }
+
+    mod dominant_genomes {
+        use super::*;
+        use crate::{Critter, Genome, Instruction, EAST};
+
+        fn critter_with(x: i32, genome: Genome) -> Critter {
+            Critter::with_genome(x, 0, EAST, 1, 1, 10, 0, genome)
+        }
+
+        #[test]
+        fn every_genome_is_listed_with_its_population_most_populous_first() {
+            let one = Genome::all(Instruction::TurnLeft15);
+            let two = Genome::all(Instruction::TurnRight15);
+            let three = Genome::all(Instruction::Split);
+            let critters = vec![
+                critter_with(0, one.clone()),
+                critter_with(1, two.clone()),
+                critter_with(2, three.clone()),
+                critter_with(3, two.clone()),
+                critter_with(4, three.clone()),
+                critter_with(5, three.clone()),
+            ];
+            let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
+
+            assert_eq!(
+                world.dominant_genomes(),
+                vec![(&three, 3), (&two, 2), (&one, 1)]
+            );
+        }
+
+        #[test]
+        fn ties_keep_first_seen_order() {
+            let first = Genome::all(Instruction::TurnLeft15);
+            let second = Genome::all(Instruction::TurnRight15);
+            let critters = vec![
+                critter_with(0, first.clone()),
+                critter_with(1, second.clone()),
+            ];
+            let world = World::with_critters_and_pellets(100, 100, critters, Vec::new());
+
+            assert_eq!(world.dominant_genomes(), vec![(&first, 1), (&second, 1)]);
         }
     }
 

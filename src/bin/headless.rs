@@ -194,19 +194,22 @@ fn main() {
                     last_status = Instant::now();
                 }
                 if last_champion_report.elapsed() >= CHAMPION_REPORT_INTERVAL {
-                    report_champion(best.champion(world.dominant_genome(), ticks));
+                    report_champion(
+                        best.champion(world.dominant_genome(), ticks),
+                        &leaders(world.dominant_genomes()),
+                    );
                     last_champion_report = Instant::now();
                 }
             },
         );
         budget.spend(lifetime.ticks);
 
-        if best.observe(lifetime.genome.as_ref(), lifetime.ticks) {
+        if best.observe(lifetime.genome(), lifetime.ticks) {
             println!(
                 "world {world_number} lasted {} -- a new best",
                 format_elapsed(Duration::from_secs(lifetime.ticks / TICKS_PER_SECOND))
             );
-            report_champion(best.genome.as_ref());
+            report_champion(best.genome.as_ref(), &lifetime.leaders);
             if let Some(path) = &startup.out {
                 write_genome(path, best.genome.as_ref().expect("just recorded"));
             }
@@ -268,7 +271,24 @@ fn should_seed(ticks: u64, fully_seeded: bool) -> bool {
 /// the end.
 struct Lifetime {
     ticks: u64,
-    genome: Option<Genome>,
+    leaders: Vec<(Genome, usize)>,
+}
+
+impl Lifetime {
+    /// The genome most of the world's last critters carried, if it had any.
+    fn genome(&self) -> Option<&Genome> {
+        self.leaders.first().map(|(genome, _)| genome)
+    }
+}
+
+/// The three most populous genomes of a tally, with their populations, as
+/// the report prints them.
+fn leaders(tally: Vec<(&Genome, usize)>) -> Vec<(Genome, usize)> {
+    tally
+        .into_iter()
+        .take(3)
+        .map(|(genome, count)| (genome.clone(), count))
+        .collect()
 }
 
 /// Runs a single world until it fails or the remaining budget runs out. The
@@ -347,7 +367,7 @@ fn run_world_of_size<R: Rng>(
     }
 
     Lifetime {
-        genome: world.dominant_genome().cloned(),
+        leaders: leaders(world.dominant_genomes()),
         ticks,
     }
 }
@@ -391,22 +411,26 @@ fn report(
 // whenever the record changes and once a minute besides, which bounds what a
 // crash in the middle of a long world can lose.
 #[mutants::skip]
-fn report_champion(genome: Option<&Genome>) {
+fn report_champion(genome: Option<&Genome>, leaders: &[(Genome, usize)]) {
     if let Some(genome) = genome {
-        println!("{}", champion_report(genome));
+        println!("{}", champion_report(genome, leaders));
         let _ = std::io::stdout().flush();
     }
 }
 
-/// The champion's bits, which the next run resumes from, and under them a
-/// checksum for a reader, who can tell at a glance whether the champion has
-/// changed. The checksum is the genome's digest, so it is also the colour the
-/// critter is drawn in.
-fn champion_report(genome: &Genome) -> String {
+/// The champion's bits, which the next run resumes from, and under them, for
+/// a reader, the world's three most populous genomes as checksums with their
+/// populations, the most populous first. A checksum is the genome's digest,
+/// so it is also the colour the critter is drawn in.
+fn champion_report(genome: &Genome, leaders: &[(Genome, usize)]) -> String {
+    let dominant: Vec<String> = leaders
+        .iter()
+        .map(|(genome, count)| format!("{:06x} ({count})", genome.digest_color()))
+        .collect();
     format!(
-        "champion: {}\nchecksum: {:06x}",
+        "champion: {}\ndominant: {}",
         genome.to_bits(),
-        genome.digest_color()
+        dominant.join(", ")
     )
 }
 
@@ -491,7 +515,7 @@ mod tests {
 
         let lifetime = small_world(&mut rng, Some(120), &mut silent());
 
-        assert!(lifetime.genome.is_some());
+        assert!(lifetime.genome().is_some());
     }
 
     #[test]
@@ -726,22 +750,40 @@ mod tests {
     }
 
     #[test]
-    fn a_champion_is_reported_as_its_bits_and_then_its_checksum() {
-        // The bits are what the next run resumes from; the checksum is for
-        // a reader, who can tell at a glance whether the champion changed.
-        // It is the genome's digest, so it is also the colour the critter
-        // is drawn in.
-        let genome = a_genome(1);
+    fn a_champion_is_reported_as_its_bits_and_then_the_three_leading_checksums() {
+        // The bits are what the next run resumes from. Under them, for a
+        // reader, the three most populous genomes in the world as checksums
+        // with their populations, the most populous first. A checksum is the
+        // genome's digest, so it is also the colour the critter is drawn in.
+        let champion = a_genome(1);
+        let leaders = vec![(a_genome(2), 30), (a_genome(3), 20), (a_genome(4), 10)];
 
-        let report = champion_report(&genome);
+        let report = champion_report(&champion, &leaders);
 
         assert_eq!(
             report,
             format!(
-                "champion: {}\nchecksum: {:06x}",
-                genome.to_bits(),
-                genome.digest_color()
+                "champion: {}\ndominant: {:06x} (30), {:06x} (20), {:06x} (10)",
+                champion.to_bits(),
+                a_genome(2).digest_color(),
+                a_genome(3).digest_color(),
+                a_genome(4).digest_color()
             )
+        );
+    }
+
+    #[test]
+    fn the_leaders_are_the_first_three_of_the_tally() {
+        let genomes: Vec<Genome> = (1..=4).map(a_genome).collect();
+        let tally: Vec<(&Genome, usize)> = genomes.iter().zip([40, 30, 20, 10]).collect();
+
+        assert_eq!(
+            leaders(tally),
+            vec![
+                (genomes[0].clone(), 40),
+                (genomes[1].clone(), 30),
+                (genomes[2].clone(), 20)
+            ]
         );
     }
 
