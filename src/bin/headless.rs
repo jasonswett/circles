@@ -94,6 +94,18 @@ impl Best {
         }
     }
 
+    /// Drops the champion if a world bred from it fell short of qualifying:
+    /// the champion has failed, and the run starts fresh rather than breeding
+    /// from it again. Says whether there was a champion to drop.
+    fn flush_if_failed(&mut self, ticks: u64) -> bool {
+        if self.genome.is_none() || ticks >= QUALIFYING_TICKS {
+            return false;
+        }
+        self.genome = None;
+        self.ticks = 0;
+        true
+    }
+
     fn beats_record(ticks: u64, record: u64) -> bool {
         ticks >= QUALIFYING_TICKS && ticks > record
     }
@@ -213,6 +225,16 @@ fn main() {
             if let Some(path) = &startup.out {
                 write_genome(path, best.genome.as_ref().expect("just recorded"));
             }
+        }
+        // A world the budget cut short has not failed, only stopped.
+        if budget.has_room() && best.flush_if_failed(lifetime.ticks) {
+            println!(
+                "world {world_number} lasted {} -- the champion has failed; starting fresh",
+                format_elapsed(Duration::from_secs(lifetime.ticks / TICKS_PER_SECOND))
+            );
+            // The next run in the chain reads the last champion line of this
+            // log, and must not pick up the one that just failed.
+            println!("champion: none");
         }
         world_number += 1;
     }
@@ -738,6 +760,35 @@ mod tests {
 
         assert!(!best.observe(Some(&a_genome(2)), QUALIFYING_TICKS + 100));
         assert_eq!(best.genome, Some(a_genome(1)));
+    }
+
+    #[test]
+    fn a_world_that_fails_short_of_qualifying_flushes_the_champion() {
+        // A champion whose world fell before the qualifying time has failed,
+        // and the run starts fresh rather than breeding from it again.
+        let mut best = Best::new();
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 1);
+
+        assert!(best.flush_if_failed(QUALIFYING_TICKS - 1));
+        assert_eq!(best.genome, None);
+        assert_eq!(best.ticks, 0);
+    }
+
+    #[test]
+    fn a_world_that_qualifies_leaves_the_champion_standing() {
+        let mut best = Best::new();
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 1);
+
+        assert!(!best.flush_if_failed(QUALIFYING_TICKS));
+        assert_eq!(best.genome, Some(a_genome(1)));
+        assert_eq!(best.ticks, QUALIFYING_TICKS + 1);
+    }
+
+    #[test]
+    fn with_no_champion_there_is_nothing_to_flush() {
+        let mut best = Best::new();
+
+        assert!(!best.flush_if_failed(1));
     }
 
     #[test]

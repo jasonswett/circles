@@ -47,19 +47,24 @@ class EvolveJob
     [0, TIMED_OUT].include?($?.exitstatus) ? 0 : 1
   end
 
+  # The last champion a log reported: a genome, or "none" where the run
+  # flushed a champion that failed and had found nothing better by the end.
   def self.last_champion(log)
-    log.to_s.scan(/champion: ([01]+)/).flatten.last
+    log.to_s.scan(/champion: ([01]+|none)/).flatten.last
   end
 
   private
 
   # The most recent earlier evolve run in this chain that left a champion
   # behind. One that died before finding anything is passed over for the one
-  # before it.
+  # before it; one that flushed a failed champion and found nothing better
+  # ends the search, so the chain starts fresh rather than going back to the
+  # champion that failed.
   def previous_champion
     previous_job_runs.each do |job_run|
       get("/api/v1/job_runs/#{job_run.fetch("id")}").dig("_links", "tasks").each do |task_link|
         genome = self.class.last_champion(get(task_link.fetch("href")).fetch("system_logs"))
+        return nil if genome == "none"
         return genome if genome
       end
     end
