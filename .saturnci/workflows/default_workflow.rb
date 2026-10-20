@@ -2,8 +2,9 @@
 # again whenever one of its jobs finishes, so starting another evolve run each
 # time the last one passes is what makes a chain of them. A run that fails ends
 # the chain rather than retrying in a tight loop -- a broken build would
-# otherwise restart forever. Rerunning the workflow picks the chain back up,
-# from the last champion in the log.
+# otherwise restart forever. Each workflow run is its own chain, starting from
+# scratch: the evolve job is told which workflow run it belongs to, and resumes
+# only from earlier runs in the same one.
 class DefaultWorkflow
   def initialize(env: ENV)
     @env = env
@@ -14,7 +15,11 @@ class DefaultWorkflow
     return unless evolve_job_runs.all?(&:passed?)
     return if SaturnCI::JobRun.list(client: saturnci_client, job_name: "evolve", status: "running").any?
 
-    evolve_job_run = workflow_run.job_runs.create(job_name: "evolve", task_adapter_name: "shell")
+    evolve_job_run = workflow_run.job_runs.create(
+      job_name: "evolve",
+      task_adapter_name: "shell",
+      chain_id: workflow_run.id
+    )
     evolve_job_run.start
 
     io.puts "Started evolve job run: id=#{evolve_job_run.id}"
