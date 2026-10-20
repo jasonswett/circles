@@ -26,8 +26,9 @@ pub const REFERENCE_ENERGY: u32 = 2_500;
 // the action succeeds (insufficient energy to halve, blocked by allow_split,
 // etc.). Stops the "split, eat baby, repeat" exploit by making each
 // reproduction attempt cost something the parent can't recover by eating
-// the child.
-pub const SPLIT_ATTEMPT_COST: u32 = 0;
+// the child. Most of a newborn's energy: one that splits before eating is left
+// with almost nothing.
+pub const SPLIT_ATTEMPT_COST: u32 = 500;
 // How long a division takes. A critter that fires Split is committed for this
 // many ticks: it cannot act, so it cannot feed, but it still burns energy.
 // Reproduction is therefore a gamble rather than a free action -- a critter
@@ -2466,6 +2467,17 @@ mod tests {
             let child = divide_fully(&mut parent);
 
             assert_eq!(child.energy(), energy_at_division_end() / 2);
+        }
+
+        #[test]
+        fn firing_split_costs_more_than_a_turn_spent_doing_anything_else() {
+            // Reproduction is not free: the attempt itself is charged, on top
+            // of the turn's ordinary upkeep.
+            let mut parent = splitter();
+
+            parent.tick(true);
+
+            assert!(parent.energy() < SPLITTER_ENERGY - Critter::upkeep_for(SPLITTER_ENERGY));
         }
 
         #[test]
