@@ -380,13 +380,25 @@ fn report(
 // The log is the snapshot. A run that dies part-way has still said what it
 // found, and the next run resumes from the last of these lines -- so they come
 // whenever the record changes and once a minute besides, which bounds what a
-// crash in the middle of a long world can lose. Wording only, like `report`.
+// crash in the middle of a long world can lose.
 #[mutants::skip]
 fn report_champion(genome: Option<&Genome>) {
     if let Some(genome) = genome {
-        println!("champion: {}", genome.to_bits());
+        println!("{}", champion_report(genome));
         let _ = std::io::stdout().flush();
     }
+}
+
+/// The champion's bits, which the next run resumes from, and under them a
+/// checksum for a reader, who can tell at a glance whether the champion has
+/// changed. The checksum is the genome's digest, so it is also the colour the
+/// critter is drawn in.
+fn champion_report(genome: &Genome) -> String {
+    format!(
+        "champion: {}\nchecksum: {:06x}",
+        genome.to_bits(),
+        genome.digest_color()
+    )
 }
 
 /// Writes a genome where it was asked for, making the directory if it is not
@@ -675,6 +687,26 @@ mod tests {
         assert!(!best.observe(None, 10_000));
         assert_eq!(best.genome, None);
         assert_eq!(best.ticks, 0);
+    }
+
+    #[test]
+    fn a_champion_is_reported_as_its_bits_and_then_its_checksum() {
+        // The bits are what the next run resumes from; the checksum is for
+        // a reader, who can tell at a glance whether the champion changed.
+        // It is the genome's digest, so it is also the colour the critter
+        // is drawn in.
+        let genome = a_genome(1);
+
+        let report = champion_report(&genome);
+
+        assert_eq!(
+            report,
+            format!(
+                "champion: {}\nchecksum: {:06x}",
+                genome.to_bits(),
+                genome.digest_color()
+            )
+        );
     }
 
     #[test]
