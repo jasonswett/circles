@@ -43,10 +43,15 @@ const REPORT_INTERVAL_TICKS: u64 = 60;
 const STATUS_INTERVAL: Duration = Duration::from_secs(10);
 // Bounds how much real time a crash can throw away.
 const CHAMPION_REPORT_INTERVAL: Duration = Duration::from_secs(60);
+// How long a world has to last before its genome can be the champion. Without
+// this a run's first world became the champion for lasting ten seconds, and
+// every world after it was seeded from a genome that had proved nothing.
+const QUALIFYING_TICKS: u64 = 10 * 60 * TICKS_PER_SECOND;
 
 /// The best a run has managed: the genome that ran the longest world, and how
 /// long that world lasted. Ties go to the incumbent, so a genome has to beat
-/// the record rather than match it.
+/// the record rather than match it, and nothing counts until a world has
+/// lasted QUALIFYING_TICKS.
 struct Best {
     genome: Option<Genome>,
     ticks: u64,
@@ -66,7 +71,7 @@ impl Best {
         let Some(genome) = genome else {
             return false;
         };
-        if ticks <= self.ticks {
+        if !Self::beats_record(ticks, self.ticks) {
             return false;
         }
         self.genome = Some(genome.clone());
@@ -84,9 +89,13 @@ impl Best {
         world_ticks: u64,
     ) -> Option<&'a Genome> {
         match world_genome {
-            Some(genome) if world_ticks > self.ticks => Some(genome),
+            Some(genome) if Self::beats_record(world_ticks, self.ticks) => Some(genome),
             _ => self.genome.as_ref(),
         }
+    }
+
+    fn beats_record(ticks: u64, record: u64) -> bool {
+        ticks >= QUALIFYING_TICKS && ticks > record
     }
 }
 
@@ -646,25 +655,52 @@ mod tests {
     fn the_first_world_to_leave_a_genome_sets_the_record() {
         let mut best = Best::new();
 
-        assert!(best.observe(Some(&a_genome(1)), 100));
-        assert_eq!(best.ticks, 100);
+        assert!(best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100));
+        assert_eq!(best.ticks, QUALIFYING_TICKS + 100);
     }
 
     #[test]
     fn a_longer_world_takes_the_record() {
         let mut best = Best::new();
-        best.observe(Some(&a_genome(1)), 100);
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100);
 
-        assert!(best.observe(Some(&a_genome(2)), 101));
+        assert!(best.observe(Some(&a_genome(2)), QUALIFYING_TICKS + 101));
         assert_eq!(best.genome, Some(a_genome(2)));
+    }
+
+    #[test]
+    fn a_world_qualifies_after_ten_minutes_of_simulated_time() {
+        let qualifying = Duration::from_secs(QUALIFYING_TICKS / TICKS_PER_SECOND);
+
+        assert_eq!(qualifying, Duration::from_secs(10 * 60));
+    }
+
+    #[test]
+    fn a_world_that_fell_short_of_qualifying_sets_no_record_however_good() {
+        // A run's first world used to become the champion for lasting ten
+        // seconds, and every world after it was seeded from a genome that
+        // had proved nothing. A champion has to have kept a world going for
+        // a while before anything is bred from it.
+        let mut best = Best::new();
+
+        assert!(!best.observe(Some(&a_genome(1)), QUALIFYING_TICKS - 1));
+        assert_eq!(best.genome, None);
+    }
+
+    #[test]
+    fn a_world_that_just_qualifies_sets_the_record() {
+        let mut best = Best::new();
+
+        assert!(best.observe(Some(&a_genome(1)), QUALIFYING_TICKS));
+        assert_eq!(best.genome, Some(a_genome(1)));
     }
 
     #[test]
     fn a_shorter_world_does_not() {
         let mut best = Best::new();
-        best.observe(Some(&a_genome(1)), 100);
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100);
 
-        assert!(!best.observe(Some(&a_genome(2)), 99));
+        assert!(!best.observe(Some(&a_genome(2)), QUALIFYING_TICKS + 99));
         assert_eq!(best.genome, Some(a_genome(1)));
     }
 
@@ -674,9 +710,9 @@ mod tests {
         // would keep rewriting its answer with genomes no better than the one
         // it had.
         let mut best = Best::new();
-        best.observe(Some(&a_genome(1)), 100);
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100);
 
-        assert!(!best.observe(Some(&a_genome(2)), 100));
+        assert!(!best.observe(Some(&a_genome(2)), QUALIFYING_TICKS + 100));
         assert_eq!(best.genome, Some(a_genome(1)));
     }
 
@@ -684,7 +720,7 @@ mod tests {
     fn a_world_that_ended_empty_leaves_no_genome_and_sets_no_record() {
         let mut best = Best::new();
 
-        assert!(!best.observe(None, 10_000));
+        assert!(!best.observe(None, QUALIFYING_TICKS + 1));
         assert_eq!(best.genome, None);
         assert_eq!(best.ticks, 0);
     }
@@ -712,24 +748,45 @@ mod tests {
     #[test]
     fn a_world_still_going_that_has_outlived_the_record_is_the_champion() {
         let mut best = Best::new();
-        best.observe(Some(&a_genome(1)), 100);
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100);
 
-        assert_eq!(best.champion(Some(&a_genome(2)), 101), Some(&a_genome(2)));
+        assert_eq!(
+            best.champion(Some(&a_genome(2)), QUALIFYING_TICKS + 101),
+            Some(&a_genome(2))
+        );
     }
 
     #[test]
     fn a_world_still_going_that_has_not_outlived_the_record_is_not() {
         let mut best = Best::new();
-        best.observe(Some(&a_genome(1)), 100);
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100);
 
-        assert_eq!(best.champion(Some(&a_genome(2)), 100), Some(&a_genome(1)));
+        assert_eq!(
+            best.champion(Some(&a_genome(2)), QUALIFYING_TICKS + 100),
+            Some(&a_genome(1))
+        );
+    }
+
+    #[test]
+    fn a_world_still_going_that_has_not_yet_qualified_is_not_the_champion() {
+        // Even with no record to beat: a run cut off here answers with
+        // nothing, and the next run starts fresh rather than from this.
+        let best = Best::new();
+
+        assert_eq!(
+            best.champion(Some(&a_genome(2)), QUALIFYING_TICKS - 1),
+            None
+        );
     }
 
     #[test]
     fn a_world_with_nobody_dominant_leaves_the_record_as_the_champion() {
         let mut best = Best::new();
-        best.observe(Some(&a_genome(1)), 100);
+        best.observe(Some(&a_genome(1)), QUALIFYING_TICKS + 100);
 
-        assert_eq!(best.champion(None, 10_000), Some(&a_genome(1)));
+        assert_eq!(
+            best.champion(None, QUALIFYING_TICKS + 10_000),
+            Some(&a_genome(1))
+        );
     }
 }
