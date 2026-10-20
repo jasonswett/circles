@@ -438,6 +438,7 @@ impl World {
         for pellet in &mut self.pellets {
             pellet.drift(width, height);
         }
+        self.pellets.retain(|pellet| !pellet.is_expired());
         if self.ticks.is_multiple_of(POISON_CHECK_INTERVAL_TICKS) {
             self.resolve_poison();
         }
@@ -829,6 +830,7 @@ fn spawn_pellet_of_kind<R: Rng>(site: (f32, f32), poisonous: bool, rng: &mut R) 
         dx: angle.cos() * speed,
         dy: angle.sin() * speed,
         poisonous,
+        age: 0,
     }
 }
 
@@ -1500,25 +1502,63 @@ mod tests {
         }
     }
 
-    mod pellet_longevity {
+    mod pellet_expiry {
         use super::*;
+        use crate::PELLET_LIFESPAN_TICKS;
+
+        fn world_with_one_pellet(pellet: Pellet) -> World {
+            World::with_critters_and_pellets(TEST_WIDTH, TEST_HEIGHT, Vec::new(), vec![pellet])
+        }
 
         #[test]
-        fn a_pellet_that_is_never_eaten_is_still_there_a_long_time_later() {
-            // Food keeps. What limits the larder is the energy budget and
-            // what the critters eat, not the calendar.
-            let mut world = World::with_critters_and_pellets(
-                TEST_WIDTH,
-                TEST_HEIGHT,
-                Vec::new(),
-                vec![Pellet::at(50, 50)],
-            );
+        fn a_pellet_short_of_its_lifespan_remains() {
+            let mut world = world_with_one_pellet(Pellet::at(50, 50));
 
-            for _ in 0..10_000 {
+            for _ in 0..PELLET_LIFESPAN_TICKS - 1 {
                 world.tick(true);
             }
 
             assert_eq!(world.pellets().len(), 1);
+        }
+
+        #[test]
+        fn a_pellet_that_reaches_its_lifespan_is_gone() {
+            let mut world = world_with_one_pellet(Pellet::at(50, 50));
+
+            for _ in 0..PELLET_LIFESPAN_TICKS {
+                world.tick(true);
+            }
+
+            assert!(world.pellets().is_empty());
+        }
+
+        #[test]
+        fn poison_expires_on_the_same_schedule_as_food() {
+            // Poison is food that kills; nothing about it makes it keep.
+            let mut world = world_with_one_pellet(Pellet::poison_at(50, 50));
+
+            for _ in 0..PELLET_LIFESPAN_TICKS {
+                world.tick(true);
+            }
+
+            assert!(world.pellets().is_empty());
+        }
+
+        #[test]
+        fn a_younger_pellet_outlives_an_older_one() {
+            // Pellets age individually rather than being cleared in batches.
+            let mut world = world_with_one_pellet(Pellet::at(50, 50));
+            for _ in 0..PELLET_LIFESPAN_TICKS / 2 {
+                world.tick(true);
+            }
+            world.add_pellet(Pellet::at(80, 80));
+
+            for _ in 0..PELLET_LIFESPAN_TICKS / 2 {
+                world.tick(true);
+            }
+
+            assert_eq!(world.pellets().len(), 1);
+            assert_eq!(world.pellets()[0].x, 80.0);
         }
     }
 
@@ -4127,6 +4167,7 @@ mod tests {
                 dx: 1.0,
                 dy: 0.0,
                 poisonous: false,
+                age: 0,
             };
 
             world.tick(true);
