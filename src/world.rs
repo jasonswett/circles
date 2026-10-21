@@ -1680,8 +1680,8 @@ mod tests {
         }
 
         #[test]
-        fn a_pellet_keeps_for_four_minutes() {
-            assert_eq!(PELLET_LIFESPAN_TICKS, 4 * 60 * TICKS_PER_SECOND);
+        fn a_pellet_keeps_for_half_a_minute() {
+            assert_eq!(PELLET_LIFESPAN_TICKS, 30 * TICKS_PER_SECOND);
         }
 
         #[test]
