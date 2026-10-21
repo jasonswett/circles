@@ -1,3 +1,8 @@
 # NEVER add files to this list without explicit user permission.
 # Do not lazily exclude files just to avoid writing tests.
 exclude_globs = ["src/main.rs"]
+
+# The sweep runs eight suites at once, and under that load a mutant whose tests
+# take four seconds alone has overrun the automatic timeout of about twenty.
+# A floor well above that: a mutant that hangs still fails, only later.
+minimum_test_timeout = 60

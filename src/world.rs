@@ -87,10 +87,13 @@ pub const PELLET_BATCH_SIZE: usize = 10;
 // can do, and what a feeler touched a few ticks ago is close enough when a
 // critter moves a few pixels a tick.
 const FEELER_INTERVAL_TICKS: u32 = 10;
-// How wide a cell of the pellet index is. Only has to cover a feeler's disc,
+// How wide a cell of the world's position grids is. A query reaches as many
+// cells out as it needs, so this only sets the grain: fine enough that a cell
+// holds a handful of things, coarse enough that a small reach is a few cells.
+// Sized to a feeler's disc,
 // not its length: a tip's position is worked out before the index is asked, so
 // what is looked up is a small patch and not the whole reach.
-const FEELER_CELL_SIZE: i32 = 24;
+const GRID_CELL_SIZE: i32 = 24;
 // Scanning every pellet for every critter is the most expensive thing the
 // world does, so poison is checked periodically rather than every tick. A
 // critter can cross poison between checks and survive; poison is a hazard,
@@ -342,19 +345,21 @@ impl World {
         // Bucketed by row band first. Asking every pellet about every critter
         // is tens of millions of distance checks a tick at a full world, which
         // costs more than everything else the world does put together.
-        let grid = PelletGrid::build(&self.pellets, width, height);
+        let grid = Grid::of_pellets(&self.pellets, width, height);
 
         for critter in &mut self.critters {
             let (left, right) = critter.feeler_tips();
             let disc = critter.feeler_disc();
             let disc_squared = (disc * disc) as i32;
             let under = |(tx, ty): (i32, i32)| {
-                grid.near(tx, ty, &self.pellets, width, height, |pellet| {
-                    let dx = toroidal_delta(tx, pellet.x.round() as i32, width);
-                    let dy = toroidal_delta(ty, pellet.y.round() as i32, height);
-                    dx * dx + dy * dy <= disc_squared
-                })
-                .map_or(0, |pellet| pellet.color())
+                grid.near(tx, ty, disc.ceil() as i32, width, height)
+                    .map(|index| &self.pellets[index])
+                    .find(|pellet| {
+                        let dx = toroidal_delta(tx, pellet.x.round() as i32, width);
+                        let dy = toroidal_delta(ty, pellet.y.round() as i32, height);
+                        dx * dx + dy * dy <= disc_squared
+                    })
+                    .map_or(0, |pellet| pellet.color())
             };
             // A feeler a critter never grew senses nothing, whatever is where
             // its tip would have been.
@@ -377,7 +382,8 @@ impl World {
     /// nothing in its sensorium warns it.
     fn resolve_poison(&mut self) {
         let (width, height) = (self.width as i32, self.height as i32);
-        let mut spent: Vec<usize> = Vec::new();
+        let grid = Grid::of_pellets(&self.pellets, width, height);
+        let mut spent = vec![false; self.pellets.len()];
 
         for critter in &mut self.critters {
             if critter.energy() == 0 {
@@ -385,27 +391,25 @@ impl World {
             }
             let reach = critter.radius() + PELLET_RADIUS;
             let touch_distance_squared = reach * reach;
-            let touched = self.pellets.iter().position(|pellet| {
-                if !pellet.poisonous {
-                    return false;
-                }
-                let dx = toroidal_delta(critter.x(), pellet.x.round() as i32, width);
-                let dy = toroidal_delta(critter.y(), pellet.y.round() as i32, height);
-                dx * dx + dy * dy < touch_distance_squared
-            });
+            let touched = grid
+                .near(critter.x(), critter.y(), reach, width, height)
+                .find(|&index| {
+                    let pellet = &self.pellets[index];
+                    if !pellet.poisonous {
+                        return false;
+                    }
+                    let dx = toroidal_delta(critter.x(), pellet.x.round() as i32, width);
+                    let dy = toroidal_delta(critter.y(), pellet.y.round() as i32, height);
+                    dx * dx + dy * dy < touch_distance_squared
+                });
             if let Some(index) = touched {
                 let toll = critter.energy() * POISON_DAMAGE_PERCENT / 100;
                 critter.lose_energy(toll.max(1));
-                if !spent.contains(&index) {
-                    spent.push(index);
-                }
+                spent[index] = true;
             }
         }
 
-        spent.sort_unstable_by(|a, b| b.cmp(a));
-        for index in spent {
-            self.pellets.swap_remove(index);
-        }
+        remove_marked(&mut self.pellets, &spent);
     }
 
     pub fn critters(&self) -> &[Critter] {
@@ -463,6 +467,16 @@ impl World {
         let count = self.critters.len();
         let width = self.width as i32;
         let height = self.height as i32;
+        // Asking every eater about every pellet and every critter is tens of
+        // billions of distance checks a tick at a big world. The grids answer
+        // with the few nearby; true distance still decides.
+        let pellets = Grid::of_pellets(&self.pellets, width, height);
+        let critters = Grid::of_critters(&self.critters, width, height);
+        // How far any victim's edge can be from its centre, so a predator's
+        // search reaches every critter it could touch. Kept up to date as
+        // meals make critters bigger.
+        let mut widest = self.critters.iter().map(Critter::radius).max().unwrap_or(0);
+        let mut eaten = vec![false; self.pellets.len()];
 
         for &eater_index in eater_indices {
             if eater_index >= count {
@@ -480,14 +494,21 @@ impl World {
             let pellet_eat_distance_squared = pellet_reach * pellet_reach;
 
             // Look for an overlapping pellet first; eat it if found.
-            let pellet_position = self.pellets.iter().position(|pellet| {
-                let dx = toroidal_delta(eater_x, pellet.x.round() as i32, width);
-                let dy = toroidal_delta(eater_y, pellet.y.round() as i32, height);
-                dx * dx + dy * dy < pellet_eat_distance_squared
-            });
+            let pellet_position = pellets
+                .near(eater_x, eater_y, pellet_reach, width, height)
+                .find(|&index| {
+                    if eaten[index] {
+                        return false;
+                    }
+                    let pellet = &self.pellets[index];
+                    let dx = toroidal_delta(eater_x, pellet.x.round() as i32, width);
+                    let dy = toroidal_delta(eater_y, pellet.y.round() as i32, height);
+                    dx * dx + dy * dy < pellet_eat_distance_squared
+                });
             if let Some(position) = pellet_position {
-                self.pellets.swap_remove(position);
+                eaten[position] = true;
                 self.critters[eater_index].gain_energy(crate::PELLET_ENERGY);
+                widest = widest.max(self.critters[eater_index].radius());
                 continue;
             }
 
@@ -495,20 +516,28 @@ impl World {
             // critter, if any. Predation is partial: the predator takes a
             // share and the prey keeps the rest, so a well-fed critter
             // survives being bitten and a depleted one does not.
-            let victim_index = (0..count).find(|&victim_index| {
-                if victim_index == eater_index {
-                    return false;
-                }
-                if self.critters[victim_index].energy() == 0 {
-                    return false;
-                }
-                let dx = toroidal_delta(eater_x, self.critters[victim_index].x(), width);
-                let dy = toroidal_delta(eater_y, self.critters[victim_index].y(), height);
-                // Both bring their own radius to the contact, so a fat victim
-                // is easier to catch as well as more worth catching.
-                let reach = eater_radius + self.critters[victim_index].radius();
-                dx * dx + dy * dy < reach * reach
-            });
+            let victim_index = critters
+                .near(
+                    eater_x,
+                    eater_y,
+                    search_reach(eater_radius, widest),
+                    width,
+                    height,
+                )
+                .find(|&victim_index| {
+                    if victim_index == eater_index {
+                        return false;
+                    }
+                    if self.critters[victim_index].energy() == 0 {
+                        return false;
+                    }
+                    let dx = toroidal_delta(eater_x, self.critters[victim_index].x(), width);
+                    let dy = toroidal_delta(eater_y, self.critters[victim_index].y(), height);
+                    // Both bring their own radius to the contact, so a fat victim
+                    // is easier to catch as well as more worth catching.
+                    let reach = eater_radius + self.critters[victim_index].radius();
+                    dx * dx + dy * dy < reach * reach
+                });
             if let Some(victim_index) = victim_index {
                 // Paid up front, out of what the predator actually has. A
                 // critter that cannot cover the attack spends everything
@@ -523,6 +552,7 @@ impl World {
                 let bite = victim_energy * PREDATION_SHARE_PERCENT / 100;
                 self.critters[eater_index].lose_energy(PREDATION_ATTACK_COST);
                 self.critters[eater_index].gain_energy(bite);
+                widest = widest.max(self.critters[eater_index].radius());
                 self.critters[victim_index].lose_energy(bite.max(1));
                 self.critters[victim_index].mark_being_eaten_for(EATEN_INDICATOR_LINGER_TICKS);
                 // The bite lands either way; the predator may not survive it.
@@ -532,6 +562,8 @@ impl World {
                 }
             }
         }
+
+        remove_marked(&mut self.pellets, &eaten);
     }
 
     /// Whether a newborn has anywhere to be. A child landing on a critter
@@ -750,50 +782,45 @@ fn predation_death_percent(victim_energy: u32) -> u32 {
     PREDATION_BASE_DEATH_PERCENT + scaled
 }
 
-/// Pellets bucketed into a grid of cells, so a feeler looks only at what its
-/// disc could possibly touch. Bands by row alone left a critter checking every
-/// pellet across the whole width of its three rows -- some hundreds of them --
-/// to find the two or three within a disc's reach. Purely a filter: what it
-/// offers is still checked by true distance, so a cell too generous costs time
-/// and never correctness.
-struct PelletGrid {
+/// Positions bucketed into a grid of cells, so a critter looking for what is
+/// within its reach looks only at what could possibly be: asking every pellet
+/// about every critter is tens of billions of distance checks a tick at a big
+/// world, which costs more than everything else the world does put together.
+/// Purely a filter: what it offers is still checked by true distance, so a
+/// query too generous costs time and never correctness.
+struct Grid {
     cells: Vec<Vec<u32>>,
     columns: i32,
     rows: i32,
 }
 
-impl PelletGrid {
+impl Grid {
     // The `/` is an equivalent mutant in both of these: multiplying instead
     // over-allocates cells rather than under-allocating them, and cell_of
     // indexes within either, so the filter still answers correctly and only
     // wastes room.
     #[mutants::skip]
     fn columns(width: i32) -> i32 {
-        (width / FEELER_CELL_SIZE).max(1) + 1
+        (width / GRID_CELL_SIZE).max(1) + 1
     }
 
     #[mutants::skip]
     fn rows(height: i32) -> i32 {
-        (height / FEELER_CELL_SIZE).max(1) + 1
+        (height / GRID_CELL_SIZE).max(1) + 1
     }
 
     fn cell_of(x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
         (
-            x.rem_euclid(width) / FEELER_CELL_SIZE,
-            y.rem_euclid(height) / FEELER_CELL_SIZE,
+            x.rem_euclid(width) / GRID_CELL_SIZE,
+            y.rem_euclid(height) / GRID_CELL_SIZE,
         )
     }
 
-    fn build(pellets: &[Pellet], width: i32, height: i32) -> Self {
+    fn build(positions: impl Iterator<Item = (i32, i32)>, width: i32, height: i32) -> Self {
         let (columns, rows) = (Self::columns(width), Self::rows(height));
         let mut cells = vec![Vec::new(); (columns * rows) as usize];
-        for (index, pellet) in pellets.iter().enumerate() {
-            let (column, row) = Self::cell_of(
-                pellet.x.round() as i32,
-                pellet.y.round() as i32,
-                width,
-                height,
-            );
+        for (index, (x, y)) in positions.enumerate() {
+            let (column, row) = Self::cell_of(x, y, width, height);
             cells[(row * columns + column) as usize].push(index as u32);
         }
         Self {
@@ -803,36 +830,75 @@ impl PelletGrid {
         }
     }
 
-    /// The first pellet in the cells around (x, y) that `wanted` accepts.
-    //
-    // The `+` on the offsets is an equivalent mutant: they run symmetrically
-    // about zero, so subtracting them visits the same nine cells in another
-    // order.
-    #[mutants::skip]
-    fn near<'a, F>(
+    fn of_pellets(pellets: &[Pellet], width: i32, height: i32) -> Self {
+        Self::build(
+            pellets
+                .iter()
+                .map(|pellet| (pellet.x.round() as i32, pellet.y.round() as i32)),
+            width,
+            height,
+        )
+    }
+
+    fn of_critters(critters: &[Critter], width: i32, height: i32) -> Self {
+        Self::build(
+            critters.iter().map(|critter| (critter.x(), critter.y())),
+            width,
+            height,
+        )
+    }
+
+    /// The indices of everything in the cells within `reach` of (x, y):
+    /// everything that could be that close, and some things that are not.
+    fn near(
         &self,
         x: i32,
         y: i32,
-        pellets: &'a [Pellet],
+        reach: i32,
         width: i32,
         height: i32,
-        wanted: F,
-    ) -> Option<&'a Pellet>
-    where
-        F: Fn(&Pellet) -> bool,
-    {
+    ) -> impl Iterator<Item = usize> + '_ {
         let (column, row) = Self::cell_of(x, y, width, height);
-        (-1..=1)
-            .flat_map(move |row_offset| {
-                (-1..=1).map(move |column_offset| (row_offset, column_offset))
-            })
-            .flat_map(|(row_offset, column_offset)| {
-                let r = (row + row_offset).rem_euclid(self.rows);
-                let c = (column + column_offset).rem_euclid(self.columns);
-                self.cells[(r * self.columns + c) as usize].iter()
-            })
-            .map(|&index| &pellets[index as usize])
-            .find(|pellet| wanted(pellet))
+        // Anything within `reach` is at most this many cells over, whichever
+        // way the cell boundaries fall.
+        let span = reach / GRID_CELL_SIZE + 1;
+        let rows = Self::cells_around(row, span, self.rows);
+        let columns = Self::cells_around(column, span, self.columns);
+        rows.into_iter()
+            .flat_map(move |r| columns.clone().into_iter().map(move |c| (r, c)))
+            .flat_map(move |(r, c)| self.cells[(r * self.columns + c) as usize].iter())
+            .map(|&index| index as usize)
+    }
+
+    /// The cells within `span` of `cell` along an axis of `count` cells that
+    /// wraps around: each cell once, however far round the span reaches.
+    fn cells_around(cell: i32, span: i32, count: i32) -> Vec<i32> {
+        if 2 * span + 1 >= count {
+            return (0..count).collect();
+        }
+        (-span..=span)
+            .map(|offset| (cell + offset).rem_euclid(count))
+            .collect()
+    }
+}
+
+/// How far from a predator's centre any critter it could touch can be: its own
+/// radius and the widest radius in the world.
+//
+// Multiplying is an equivalent mutant: the grid is a filter, and a reach too
+// generous only costs time, so no test can tell the sum from the product.
+#[mutants::skip]
+fn search_reach(eater_radius: i32, widest: i32) -> i32 {
+    eater_radius + widest
+}
+
+/// Removes every item whose mark is set, keeping the order of the rest no
+/// better than swap_remove does.
+fn remove_marked<T>(items: &mut Vec<T>, marked: &[bool]) {
+    for index in (0..marked.len()).rev() {
+        if marked[index] {
+            items.swap_remove(index);
+        }
     }
 }
 
@@ -1454,6 +1520,32 @@ mod tests {
         #[test]
         fn a_critter_executing_eat_while_overlapping_a_pellet_consumes_it() {
             let mut world = world_with(eating_critter(100, 100), Pellet::at(100, 100));
+
+            world.tick(true);
+
+            assert_eq!(world.pellets().len(), 0);
+        }
+
+        #[test]
+        fn a_fat_critter_reaches_a_pellet_more_than_a_grid_cell_away() {
+            // Reach grows with energy, and a critter fat enough reaches past
+            // the neighbouring cells of the grid the world finds food with.
+            // The pellet is two cells over and inside the reach even so.
+            let fat = Critter::with_genome(
+                96,
+                100,
+                NORTH,
+                1,
+                1,
+                50_000,
+                0,
+                Genome::all(Instruction::Eat),
+            );
+            assert!(
+                fat.radius() > GRID_CELL_SIZE,
+                "the test needs a reach past a cell"
+            );
+            let mut world = world_with(fat, Pellet::at(68, 100));
 
             world.tick(true);
 
@@ -2887,6 +2979,29 @@ mod tests {
         }
 
         #[test]
+        fn a_fat_predator_reaches_a_victim_more_than_a_grid_cell_away() {
+            let fat = eating_critter_with_energy(96, 100, 50_000);
+            assert!(
+                fat.radius() > GRID_CELL_SIZE,
+                "the test needs a reach past a cell"
+            );
+            let victim = idle_critter_with_energy(68, 100, 2_000);
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![fat, victim],
+                vec![],
+            );
+
+            world.tick(true);
+
+            assert!(
+                world.critters()[1].energy() < 2_000,
+                "the victim was not bitten"
+            );
+        }
+
+        #[test]
         fn predation_sometimes_kills_the_predator() {
             // Attacking carries a risk: some share of the time the predator
             // does not survive the meal.
@@ -3475,6 +3590,29 @@ mod tests {
         }
 
         #[test]
+        fn the_cells_around_a_cell_run_from_one_side_of_it_to_the_other() {
+            assert_eq!(Grid::cells_around(2, 1, 10), vec![1, 2, 3]);
+        }
+
+        #[test]
+        fn the_cells_around_a_cell_at_the_edge_wrap_round() {
+            assert_eq!(Grid::cells_around(0, 1, 10), vec![9, 0, 1]);
+        }
+
+        #[test]
+        fn a_span_that_covers_the_axis_gives_every_cell_once() {
+            // Three either side of a cell on an axis of seven is the whole
+            // axis, listed once rather than wrapping round onto itself.
+            assert_eq!(Grid::cells_around(0, 3, 7), (0..7).collect::<Vec<_>>());
+            assert_eq!(Grid::cells_around(0, 2, 5), (0..5).collect::<Vec<_>>());
+        }
+
+        #[test]
+        fn a_span_just_short_of_the_axis_still_wraps() {
+            assert_eq!(Grid::cells_around(0, 2, 6), vec![4, 5, 0, 1, 2]);
+        }
+
+        #[test]
         fn the_grid_narrows_the_search_to_what_is_nearby() {
             // The filter's whole purpose, and the only thing about it a test
             // can see: a pellet far away vertically is never offered for a
@@ -3484,18 +3622,13 @@ mod tests {
             let (width, height) = (TEST_WIDTH as i32, TEST_HEIGHT as i32);
             let pellets: Vec<Pellet> = (0..height / 4).map(|r| Pellet::at(100, r * 4)).collect();
             let total = pellets.len();
-            let grid = PelletGrid::build(&pellets, width, height);
+            let grid = Grid::of_pellets(&pellets, width, height);
 
-            let offered = std::cell::Cell::new(0usize);
-            grid.near(100, 0, &pellets, width, height, |_| {
-                offered.set(offered.get() + 1);
-                false
-            });
+            let offered = grid.near(100, 0, 4, width, height).count();
 
             assert!(
-                offered.get() * 2 < total,
-                "should have looked at a small share of {total}, looked at {}",
-                offered.get()
+                offered * 2 < total,
+                "should have looked at a small share of {total}, looked at {offered}"
             );
         }
 
@@ -3508,7 +3641,7 @@ mod tests {
                 .map(|r| Pellet::at(width - 3, r * 8))
                 .collect();
 
-            let grid = PelletGrid::build(&pellets, width, height);
+            let grid = Grid::of_pellets(&pellets, width, height);
 
             let filed: usize = grid.cells.iter().map(|cell| cell.len()).sum();
             assert_eq!(filed, pellets.len());
@@ -3785,6 +3918,28 @@ mod tests {
 
             let poison = world.pellets().iter().filter(|p| p.poisonous).count();
             assert_eq!(poison, 3);
+        }
+
+        #[test]
+        fn a_fat_critter_touches_poison_more_than_a_grid_cell_away() {
+            let fat = critter_with_energy(96, 100, 50_000);
+            assert!(
+                fat.radius() > GRID_CELL_SIZE,
+                "the test needs a reach past a cell"
+            );
+            let mut world = World::with_critters_and_pellets(
+                TEST_WIDTH,
+                TEST_HEIGHT,
+                vec![fat],
+                vec![Pellet::poison_at(68, 100)],
+            );
+
+            world.tick(true);
+
+            assert!(
+                world.critters()[0].energy() < 50_000,
+                "the poison did not touch it"
+            );
         }
 
         #[test]
