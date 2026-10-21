@@ -413,17 +413,17 @@ fn report(
         None => String::new(),
     };
     println!(
-        "[{}] world record {} (world {}) | time {} | world {world_number} | pellets {} | \
-         population {} | max energy {} | energy {} | {} simulated{progress}",
+        "[{}] time {} | world {world_number} | pellets {} | population {} | max energy {} | \
+         energy {} | {} simulated{progress} | world record {} (world {})",
         format_elapsed(started.elapsed()),
-        format_elapsed(record.best_elapsed()),
-        record.best_world(),
         format_elapsed(Duration::from_secs(world_ticks / TICKS_PER_SECOND)),
         world.pellets().len(),
         world.critters().len(),
         world.original_total_energy(),
         world.total_energy(),
         format_elapsed(simulated),
+        format_elapsed(record.best_elapsed()),
+        record.best_world(),
     );
     let _ = std::io::stdout().flush();
 }
