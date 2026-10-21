@@ -78,10 +78,11 @@ const SEED_POPULATION: usize = 100;
 // pellets: nothing caps the larder, which settles wherever consumption meets
 // the feed rate.
 const NUM_PELLETS: usize = 4000;
-// How many pellets a single replenishment call may add. Small, because the
-// call happens often: food seeps into the world a few at a time rather than
-// a whole deficit's worth arriving at once.
-pub const PELLET_BATCH_SIZE: usize = 10;
+// How many pellets a single replenishment call may add at each source. Small,
+// because the call happens every tick: food seeps into the world a few at a
+// time rather than a whole deficit's worth arriving at once, and sparingly
+// enough that a critter has to be where the food is rather than anywhere.
+pub const PELLET_BATCH_SIZE: usize = 3;
 // Feelers are read on the same schedule as poison, and for the same reason:
 // asking every pellet about every critter is the costliest thing the world
 // can do, and what a feeler touched a few ticks ago is close enough when a
@@ -1680,8 +1681,8 @@ mod tests {
         }
 
         #[test]
-        fn a_pellet_keeps_for_half_a_minute() {
-            assert_eq!(PELLET_LIFESPAN_TICKS, 30 * TICKS_PER_SECOND);
+        fn a_pellet_keeps_for_a_minute() {
+            assert_eq!(PELLET_LIFESPAN_TICKS, 60 * TICKS_PER_SECOND);
         }
 
         #[test]
@@ -2343,6 +2344,15 @@ mod tests {
             world.replenish_pellets(PELLET_BATCH_SIZE, &mut rng);
 
             assert_eq!(world.pellets().len(), PELLET_BATCH_SIZE);
+        }
+
+        #[test]
+        fn a_batch_is_three_pellets() {
+            // Stated outright: every other test reads the constant, so any
+            // value would satisfy them, and how fast food arrives is the
+            // point of it. Three a tick from each source is a living to be
+            // earned rather than a floor to be covered.
+            assert_eq!(PELLET_BATCH_SIZE, 3);
         }
 
         #[test]

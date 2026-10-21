@@ -84,7 +84,7 @@ pub const PELLET_ENERGY: u32 = 2_000;
 /// unavoidable death it used to be.
 pub const POISON_DAMAGE_PERCENT: u32 = 90;
 /// How long a pellet lasts before rotting away, in ticks. At 60 ticks per
-/// second this is half a minute. Uneaten food does not accumulate, so the
-/// larder is what has arrived lately rather than the world's whole history of
+/// second this is a minute. Uneaten food does not accumulate, so the larder is
+/// what has arrived lately rather than the world's whole history of
 /// deliveries, and a critter has to be where the food is to find any.
-pub const PELLET_LIFESPAN_TICKS: u32 = 1_800;
+pub const PELLET_LIFESPAN_TICKS: u32 = 3_600;
