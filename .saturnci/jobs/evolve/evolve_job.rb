@@ -22,7 +22,7 @@ class EvolveJob
   DURATION = "1h"
   # Much bigger than a screen. More room means more critters and more pellets
   # per world, so there is more for selection to work on.
-  SIZE = "6000x4000"
+  SIZE = "10000x10000"
   TIMED_OUT = 124
 
   def initialize(io: $stdout, env: ENV)
