@@ -96,7 +96,14 @@ const POISON_CHECK_INTERVAL_TICKS: u32 = 10;
 // How often a replenishment begins. At ~60 FPS this is ten seconds: a
 // world starts feeding on this cadence and keeps at it until its energy is
 pub const MIN_POPULATION: usize = 50;
-const INITIAL_ENERGY: u32 = 600;
+// What a critter starts with: enough to live half a minute without finding
+// food, at UPKEEP a turn and a turn every TICKS_PER_INSTRUCTION ticks. Food
+// erupts from a few places and drifts slowly, so a critter set down at random
+// has a way to go before it meets any. At 600 it was dead in under three
+// seconds, before the first pellet could reach it, and a world's population
+// was never more than whatever seeding had delivered in the last three
+// seconds.
+const INITIAL_ENERGY: u32 = 6_480;
 const TICKS_PER_INSTRUCTION: u32 = 5;
 const STEP_SIZE: i32 = 5;
 // How many critters to refresh per overlap-detection call. The detector cycles
@@ -4180,9 +4187,20 @@ mod tests {
 
     mod seeding {
         use super::*;
-        use crate::Instruction;
+        use crate::{Instruction, UPKEEP};
         use rand::rngs::StdRng;
         use rand::SeedableRng;
+
+        #[test]
+        fn a_seed_critter_can_live_half_a_minute_without_food() {
+            // Food erupts from a few places and drifts slowly, so a critter
+            // set down at random has a way to go before it meets any. It has
+            // to be able to wait that long: at UPKEEP a turn, a turn every
+            // TICKS_PER_INSTRUCTION ticks, for thirty seconds.
+            let turns_in_half_a_minute = 30 * TICKS_PER_SECOND / TICKS_PER_INSTRUCTION;
+
+            assert_eq!(INITIAL_ENERGY, UPKEEP * turns_in_half_a_minute);
+        }
 
         #[test]
         fn a_world_the_size_of_the_screen_the_counts_were_tuned_on_targets_the_tuned_population() {
