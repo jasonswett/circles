@@ -22,6 +22,9 @@ const DRIFT_POPULATION_FLOOR: usize = 100;
 /// rather than beside the loop that does the seeding so the two views of it --
 /// this and the frame loop's own Duration -- cannot drift apart.
 pub const SEEDING_TICKS: u32 = 60 * TICKS_PER_SECOND;
+/// How often a world being seeded takes on another batch of critters, in
+/// ticks.
+pub const SEED_INTERVAL_TICKS: u32 = 30;
 /// Frames a second, which is what the frame loop is paced to.
 pub const TICKS_PER_SECOND: u32 = 60;
 // How sharply the site's heading can turn each frame, in radians. Low enough
@@ -132,8 +135,7 @@ pub struct World {
     /// Frames until the next replenishment, or zero while feeding.
     /// Where food is currently erupting from, and the heading it is
     /// wandering along. Both drift every frame, so the source travels.
-    eruption_site: (f32, f32),
-    eruption_heading: f32,
+    eruption_sites: Vec<EruptionSite>,
     /// The genome new critters are seeded with, if this world was started
     /// from one. None means each newcomer gets a fresh random genome.
     seed_genome: Option<Genome>,
@@ -159,8 +161,7 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             ticks: 0,
-            eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
-            eruption_heading: rng.gen_range(0.0..std::f32::consts::TAU),
+            eruption_sites: eruption_sites(width, height, rng),
             seed_genome: None,
         }
     }
@@ -189,8 +190,7 @@ impl World {
             overlap_detection_cursor: 0,
             pellets_emitted: 0,
             ticks: 0,
-            eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
-            eruption_heading: rng.gen_range(0.0..std::f32::consts::TAU),
+            eruption_sites: eruption_sites(width, height, rng),
             seed_genome: Some(seed_genome),
         }
     }
@@ -241,8 +241,11 @@ impl World {
             pellets_emitted: 0,
             ticks: 0,
             // Test-only constructor: a fixed site, since it has no rng.
-            eruption_site: (width as f32 / 2.0, height as f32 / 2.0),
-            eruption_heading: 0.0,
+            eruption_sites: eruption_sites(
+                width,
+                height,
+                &mut <rand::rngs::StdRng as rand::SeedableRng>::seed_from_u64(0),
+            ),
             seed_genome: None,
         }
     }
@@ -255,34 +258,33 @@ impl World {
     /// feeding: replenish_pellets stops as soon as energy is restored, so
     /// deliveries track consumption directly rather than arriving in rounds.
     pub fn feed<R: Rng>(&mut self, rng: &mut R) {
-        self.drift_eruption_site(rng);
+        self.drift_eruption_sites(rng);
         self.replenish_pellets(PELLET_BATCH_SIZE, rng);
     }
 
-    /// Where food is currently erupting from.
-    pub fn eruption_site(&self) -> (f32, f32) {
-        self.eruption_site
+    /// Where food is erupting from: one source for every screen's worth of
+    /// world, so food is spread as the critters are.
+    pub fn eruption_sites(&self) -> &[EruptionSite] {
+        &self.eruption_sites
     }
 
-    /// Nudges the eruption site along its heading, turning it slightly, so
-    /// the source wanders continuously instead of sitting still.
-    //
-    // The `+=` on the heading is an equivalent mutant: the turn is drawn
-    // symmetrically about zero, so subtracting it yields the same
-    // distribution of headings as adding it.
-    #[mutants::skip]
-    fn drift_eruption_site<R: Rng>(&mut self, rng: &mut R) {
+    /// Where the first source is. The tests about how a source wanders watch
+    /// this one.
+    #[cfg(test)]
+    fn eruption_site(&self) -> (f32, f32) {
+        self.eruption_sites[0].position
+    }
+
+    /// Nudges every eruption site along its heading, so the sources wander
+    /// continuously instead of sitting still.
+    fn drift_eruption_sites<R: Rng>(&mut self, rng: &mut R) {
         if self.critters.len() < DRIFT_POPULATION_FLOOR {
             return;
         }
-        self.eruption_heading += rng.gen_range(-ERUPTION_SITE_TURN..=ERUPTION_SITE_TURN);
         let (width, height) = (self.width as f32, self.height as f32);
-        self.eruption_site = (
-            (self.eruption_site.0 + self.eruption_heading.cos() * ERUPTION_SITE_DRIFT)
-                .rem_euclid(width),
-            (self.eruption_site.1 + self.eruption_heading.sin() * ERUPTION_SITE_DRIFT)
-                .rem_euclid(height),
-        );
+        for site in &mut self.eruption_sites {
+            site.drift(width, height, rng);
+        }
     }
 
     /// Whether the world holds less energy than its budget allows. Counts
@@ -293,18 +295,21 @@ impl World {
         self.total_energy() < self.original_total_energy
     }
 
-    /// Adds up to `count` pellets, stopping once the world's energy budget is
-    /// met. What limits food is the budget, the length of a feeding run, and
-    /// what the critters eat.
+    /// Adds up to `count` pellets at every eruption site, stopping once the
+    /// world's energy budget is met. What limits food is the budget, the
+    /// length of a feeding run, and what the critters eat.
     pub fn replenish_pellets<R: Rng>(&mut self, count: usize, rng: &mut R) {
         for _ in 0..count {
-            if !self.needs_more_food() {
-                return;
+            for index in 0..self.eruption_sites.len() {
+                if !self.needs_more_food() {
+                    return;
+                }
+                self.pellets_emitted += 1;
+                let poisonous = self.pellets_emitted.is_multiple_of(PELLETS_PER_POISON);
+                let site = self.eruption_sites[index].position;
+                self.pellets
+                    .push(spawn_pellet_of_kind(site, poisonous, rng));
             }
-            self.pellets_emitted += 1;
-            let poisonous = self.pellets_emitted.is_multiple_of(PELLETS_PER_POISON);
-            self.pellets
-                .push(spawn_pellet_of_kind(self.eruption_site, poisonous, rng));
         }
     }
 
@@ -623,6 +628,14 @@ impl World {
         target_population(self.width, self.height)
     }
 
+    /// How many critters each seeding batch holds: enough that a world taking
+    /// on a batch every SEED_INTERVAL_TICKS for SEEDING_TICKS reaches its
+    /// target population, however big it is.
+    pub fn seed_batch_size(&self) -> usize {
+        let batches = (SEEDING_TICKS / SEED_INTERVAL_TICKS) as usize;
+        self.target_population().div_ceil(batches)
+    }
+
     pub fn population_too_low(&self) -> bool {
         self.critters.len() < MIN_POPULATION
     }
@@ -636,11 +649,9 @@ impl World {
             .map(|_| spawn_critter(self.width, self.height, rng))
             .collect();
         self.pellets.clear();
-        // A reset is a new world: its food starts in the middle and holds
-        // still there, rather than carrying on from wherever the last one had
-        // wandered to at whatever speed it had worked up.
-        self.eruption_site = (self.width as f32 / 2.0, self.height as f32 / 2.0);
-        self.eruption_heading = rng.gen_range(0.0..std::f32::consts::TAU);
+        // A reset is a new world: its food starts where a new world's does,
+        // rather than carrying on from wherever the last one's had wandered to.
+        self.eruption_sites = eruption_sites(self.width, self.height, rng);
         self.ticks = 0;
         self.generation += 1;
     }
@@ -823,6 +834,68 @@ impl PelletGrid {
             .map(|&index| &pellets[index as usize])
             .find(|pellet| wanted(pellet))
     }
+}
+
+/// A source of food: somewhere pellets erupt from, wandering across the world.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EruptionSite {
+    pub position: (f32, f32),
+    heading: f32,
+}
+
+impl EruptionSite {
+    /// Nudges the site along its heading, turning it slightly, wrapping
+    /// around the world.
+    //
+    // The `+=` on the heading is an equivalent mutant: the turn is drawn
+    // symmetrically about zero, so subtracting it yields the same
+    // distribution of headings as adding it.
+    #[mutants::skip]
+    fn drift<R: Rng>(&mut self, width: f32, height: f32, rng: &mut R) {
+        self.heading += rng.gen_range(-ERUPTION_SITE_TURN..=ERUPTION_SITE_TURN);
+        self.position = (
+            (self.position.0 + self.heading.cos() * ERUPTION_SITE_DRIFT).rem_euclid(width),
+            (self.position.1 + self.heading.sin() * ERUPTION_SITE_DRIFT).rem_euclid(height),
+        );
+    }
+}
+
+/// How many reference screens a length of world is nearest to, and at least
+/// one: a world smaller than a screen is still one cell.
+//
+// Mutated to multiply instead of divide, a hundred-pixel test world has
+// billions of sites, and every test that builds a world hangs rather than
+// fails -- a timeout is what the sweep reports and it cannot tell that from a
+// hung machine. What the function decides is pinned directly by the tests in
+// `eruption_sites`: one screen is one cell, 2.4 screens are two, 2.6 are
+// three, a tenth of a screen is one.
+#[mutants::skip]
+fn screens_along(length: usize, reference: usize) -> usize {
+    (length as f32 / reference as f32).round().max(1.0) as usize
+}
+
+/// Lays out a world's eruption sites: one at the centre of each cell of a grid
+/// whose cells are as near the reference screen's size as the world divides
+/// into, so a world of several screens has a source of food for each. A world
+/// smaller than a screen is one cell, and erupts from its middle.
+fn eruption_sites<R: Rng>(width: usize, height: usize, rng: &mut R) -> Vec<EruptionSite> {
+    let columns = screens_along(width, REFERENCE_WIDTH);
+    let rows = screens_along(height, REFERENCE_HEIGHT);
+    let cell_width = width as f32 / columns as f32;
+    let cell_height = height as f32 / rows as f32;
+    let mut sites = Vec::with_capacity(columns * rows);
+    for row in 0..rows {
+        for column in 0..columns {
+            sites.push(EruptionSite {
+                position: (
+                    (column as f32 + 0.5) * cell_width,
+                    (row as f32 + 0.5) * cell_height,
+                ),
+                heading: rng.gen_range(0.0..std::f32::consts::TAU),
+            });
+        }
+    }
+    sites
 }
 
 fn spawn_pellet_of_kind<R: Rng>(site: (f32, f32), poisonous: bool, rng: &mut R) -> Pellet {
@@ -1922,7 +1995,7 @@ mod tests {
             // and on a world old enough to be up to full pace.
             let mut world = drifting_world();
             let mut rng = StdRng::seed_from_u64(0);
-            world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+            world.eruption_sites[0].position = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
 
             for _ in 0..50 {
                 let before = world.eruption_site();
@@ -1935,7 +2008,8 @@ mod tests {
                     (step - ERUPTION_SITE_DRIFT).abs() < 0.001,
                     "step was {step}, expected {ERUPTION_SITE_DRIFT}"
                 );
-                world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+                world.eruption_sites[0].position =
+                    (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
             }
         }
 
@@ -1945,8 +2019,8 @@ mod tests {
             // heading points, which a step-size check alone cannot tell.
             let mut world = drifting_world();
             let mut rng = StdRng::seed_from_u64(0);
-            world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
-            world.eruption_heading = 0.0; // due east
+            world.eruption_sites[0].position = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+            world.eruption_sites[0].heading = 0.0; // due east
 
             let before = world.eruption_site();
             world.feed(&mut rng);
@@ -1966,8 +2040,8 @@ mod tests {
         fn the_site_travels_north_on_a_northward_heading() {
             let mut world = drifting_world();
             let mut rng = StdRng::seed_from_u64(0);
-            world.eruption_site = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
-            world.eruption_heading = std::f32::consts::FRAC_PI_2; // due south in screen terms
+            world.eruption_sites[0].position = (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0);
+            world.eruption_sites[0].heading = std::f32::consts::FRAC_PI_2; // due south in screen terms
 
             let before = world.eruption_site();
             world.feed(&mut rng);
@@ -1985,12 +2059,12 @@ mod tests {
             let (mut left, mut right) = (false, false);
 
             for _ in 0..200 {
-                let before = world.eruption_heading;
+                let before = world.eruption_sites[0].heading;
                 world.feed(&mut rng);
-                if world.eruption_heading < before {
+                if world.eruption_sites[0].heading < before {
                     left = true;
                 }
-                if world.eruption_heading > before {
+                if world.eruption_sites[0].heading > before {
                     right = true;
                 }
             }
@@ -2004,9 +2078,9 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0);
 
             for _ in 0..200 {
-                let before = world.eruption_heading;
+                let before = world.eruption_sites[0].heading;
                 world.feed(&mut rng);
-                let turn = (world.eruption_heading - before).abs();
+                let turn = (world.eruption_sites[0].heading - before).abs();
 
                 assert!(turn <= ERUPTION_SITE_TURN + 0.001, "heading turned {turn}");
             }
@@ -4022,7 +4096,7 @@ mod tests {
             let before = world.eruption_site();
 
             for _ in 0..600 {
-                world.drift_eruption_site(&mut rng);
+                world.drift_eruption_sites(&mut rng);
             }
 
             assert_eq!(world.eruption_site(), before);
@@ -4034,7 +4108,7 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0);
             let before = world.eruption_site();
 
-            world.drift_eruption_site(&mut rng);
+            world.drift_eruption_sites(&mut rng);
 
             assert_ne!(world.eruption_site(), before);
         }
@@ -4079,7 +4153,7 @@ mod tests {
             let mut rng = StdRng::seed_from_u64(0);
             let mut world = world_of(DRIFT_POPULATION_FLOOR);
             for _ in 0..600 {
-                world.drift_eruption_site(&mut rng);
+                world.drift_eruption_sites(&mut rng);
             }
             assert_ne!(
                 world.eruption_site(),
@@ -4092,6 +4166,116 @@ mod tests {
                 world.eruption_site(),
                 (TEST_WIDTH as f32 / 2.0, TEST_HEIGHT as f32 / 2.0)
             );
+        }
+    }
+
+    mod eruption_sites {
+        use super::*;
+        use rand::rngs::StdRng;
+        use rand::SeedableRng;
+
+        fn world_of_screens(across: f32, down: f32) -> World {
+            let mut rng = StdRng::seed_from_u64(0);
+            World::new(
+                (REFERENCE_WIDTH as f32 * across) as usize,
+                (REFERENCE_HEIGHT as f32 * down) as usize,
+                &mut rng,
+            )
+        }
+
+        fn positions(world: &World) -> Vec<(f32, f32)> {
+            world
+                .eruption_sites()
+                .iter()
+                .map(|site| site.position)
+                .collect()
+        }
+
+        #[test]
+        fn a_world_the_size_of_the_reference_screen_erupts_from_one_place() {
+            let world = world_of_screens(1.0, 1.0);
+
+            assert_eq!(world.eruption_sites().len(), 1);
+        }
+
+        #[test]
+        fn a_world_of_several_screens_has_a_site_for_each() {
+            // Two screens across and three down is six screens' worth of
+            // world, and each gets its own source of food.
+            let world = world_of_screens(2.0, 3.0);
+
+            assert_eq!(world.eruption_sites().len(), 6);
+        }
+
+        #[test]
+        fn the_sites_sit_at_the_centres_of_screen_sized_cells() {
+            let world = world_of_screens(2.0, 1.0);
+
+            let w = REFERENCE_WIDTH as f32;
+            let h = REFERENCE_HEIGHT as f32;
+            assert_eq!(
+                positions(&world),
+                vec![(w / 2.0, h / 2.0), (w * 1.5, h / 2.0)]
+            );
+        }
+
+        #[test]
+        fn the_sites_are_laid_out_down_the_world_as_well_as_across_it() {
+            let world = world_of_screens(1.0, 2.0);
+
+            let w = REFERENCE_WIDTH as f32;
+            let h = REFERENCE_HEIGHT as f32;
+            assert_eq!(
+                positions(&world),
+                vec![(w / 2.0, h / 2.0), (w / 2.0, h * 1.5)]
+            );
+        }
+
+        #[test]
+        fn the_cells_are_as_near_a_screen_as_the_world_divides_into() {
+            // Rounded to the nearest, so a world two and a bit screens wide
+            // has two sources, each feeding a little more than a screen, and
+            // one nearly three screens wide has three.
+            assert_eq!(world_of_screens(2.4, 1.0).eruption_sites().len(), 2);
+            assert_eq!(world_of_screens(2.6, 1.0).eruption_sites().len(), 3);
+        }
+
+        #[test]
+        fn a_world_smaller_than_a_screen_still_has_one_site() {
+            let world = world_of_screens(0.1, 0.1);
+
+            assert_eq!(world.eruption_sites().len(), 1);
+        }
+
+        #[test]
+        fn every_site_feeds() {
+            // A feeding run puts a pellet at each source, not a batch at the
+            // first: the food is spread as the critters are.
+            let mut world = world_of_screens(2.0, 1.0);
+            world.critters.clear();
+            let mut rng = StdRng::seed_from_u64(0);
+
+            world.replenish_pellets(1, &mut rng);
+
+            let mut fed_from: Vec<(f32, f32)> =
+                world.pellets().iter().map(|p| (p.x, p.y)).collect();
+            fed_from.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            assert_eq!(fed_from, positions(&world));
+        }
+
+        #[test]
+        fn a_reset_world_has_its_sites_laid_out_afresh() {
+            let mut world = world_of_screens(2.0, 1.0);
+            let mut rng = StdRng::seed_from_u64(0);
+            let fresh = positions(&world);
+            for _ in 0..600 {
+                world.drift_eruption_sites(&mut rng);
+            }
+            assert_ne!(positions(&world), fresh);
+
+            world.reset(&mut rng);
+
+            assert_eq!(positions(&world), fresh);
         }
     }
 
@@ -4296,6 +4480,32 @@ mod tests {
                 .critters()
                 .iter()
                 .any(|critter| *critter.genome() != first));
+        }
+
+        #[test]
+        fn a_seed_batch_is_the_target_shared_across_the_seeding_period() {
+            // Seeding a batch every SEED_INTERVAL_TICKS for SEEDING_TICKS has
+            // to reach the target, whatever the world's size.
+            let mut rng = StdRng::seed_from_u64(0);
+            let world = World::new(REFERENCE_WIDTH * 3, REFERENCE_HEIGHT * 2, &mut rng);
+
+            let batches = (SEEDING_TICKS / SEED_INTERVAL_TICKS) as usize;
+            assert_eq!(
+                world.seed_batch_size(),
+                world.target_population().div_ceil(batches)
+            );
+        }
+
+        #[test]
+        fn seeding_on_schedule_for_the_whole_period_reaches_the_target() {
+            let mut rng = StdRng::seed_from_u64(0);
+            let mut world = World::new(REFERENCE_WIDTH, REFERENCE_HEIGHT, &mut rng);
+
+            for _ in 0..(SEEDING_TICKS / SEED_INTERVAL_TICKS) {
+                world.seed_more_critters(world.seed_batch_size(), &mut rng);
+            }
+
+            assert!(world.is_fully_seeded());
         }
 
         #[test]

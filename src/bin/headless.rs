@@ -29,8 +29,7 @@ const TICKS_PER_SECOND: u64 = 60;
 const STAGNATION_THRESHOLD_TICKS: u32 = 300;
 const POPULATION_GROWTH_TIMEOUT_TICKS: u32 = 3600;
 const REAPER_INTERVAL_TICKS: u64 = 60;
-const SEED_BATCH_SIZE: usize = 20;
-const SEED_INTERVAL_TICKS: u64 = 30;
+const SEED_INTERVAL_TICKS: u64 = circles::SEED_INTERVAL_TICKS as u64;
 const SEED_WINDOW_TICKS: u64 = 60 * TICKS_PER_SECOND;
 // How often the world loop offers the run a look at the world: a simulated
 // second, stated outright. What gets printed, and how often, is decided by the
@@ -381,7 +380,7 @@ fn run_world_of_size<R: Rng>(
         }
         world.feed(rng);
         if should_seed(ticks, world.is_fully_seeded()) {
-            world.seed_more_critters(SEED_BATCH_SIZE, rng);
+            world.seed_more_critters(world.seed_batch_size(), rng);
         }
         if ticks.is_multiple_of(report_every) {
             report(ticks, &world);
@@ -489,15 +488,26 @@ mod tests {
     }
 
     // Small enough to simulate quickly, which a test suite needs and a real
-    // run does not, but not so small that its share of food cannot keep a
-    // seed population alive: food is budgeted by area, and a world much
-    // smaller than this starves before it has lived long enough to test.
+    // run does not, but not so small that its share of food and of seeding
+    // cannot keep a population alive: both are budgeted by area, and a world
+    // much smaller than this starves before it has lived long enough to test.
     fn small_world<R: Rng>(
         rng: &mut R,
         remaining: Option<u64>,
         report: &mut dyn FnMut(u64, &World),
     ) -> Lifetime {
         run_world_of_size(400, 400, TEST_REPORT_INTERVAL, rng, None, remaining, report)
+    }
+
+    // A world that cannot live: far too small for its share of food, which
+    // is budgeted by area, to feed the critters it starts with. They starve
+    // once their starting energy is spent, a minute or so in.
+    fn starving_world<R: Rng>(
+        rng: &mut R,
+        remaining: Option<u64>,
+        report: &mut dyn FnMut(u64, &World),
+    ) -> Lifetime {
+        run_world_of_size(40, 40, TEST_REPORT_INTERVAL, rng, None, remaining, report)
     }
 
     // Small worlds do not live long enough to reach the interval a real run
@@ -523,7 +533,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(2);
         let budget = 100_000;
 
-        let lifetime = small_world(&mut rng, Some(budget), &mut silent());
+        let lifetime = starving_world(&mut rng, Some(budget), &mut silent());
 
         assert!(
             lifetime.ticks < budget,
